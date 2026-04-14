@@ -28,22 +28,23 @@
 # =============================================================================
 
 networks:
-  # All media stack containers communicate on this network by container name.
-  # e.g. radarr connects to sabnzbd at http://sabnzbd:8080/sabnzbd
+  # Single bridge network — services reach each other by container name.
+  # e.g. radarr connects to sabnzbd at http://sabnzbd:8080/sabnzbd.
+  # A previous revision split traffic into `medianet` + `cloudflared`, but the
+  # tunnel container has to be on both (so it can route to every service it
+  # fronts), which meant the split enforced nothing. Now: one network.
   medianet:
     name: medianet
-    driver: bridge
-
-  # Only cloudflared, plex, and overseerr attach to this network.
-  # Keeps the tunnel's blast radius small.
-  cloudflared:
-    name: cloudflared
     driver: bridge
 
 services:
 
   # ---------------------------------------------------------------------------
   # CLOUDFLARE TUNNEL — fully configured by TUNNEL_TOKEN env var
+  #
+  # No healthcheck: cloudflared's image is distroless (no shell, no curl, no
+  # wget). The container's own exit semantics + Docker restart policy are the
+  # liveness signal here.
   # ---------------------------------------------------------------------------
   cloudflared:
     # cloudflared doesn't publish a float-tag channel; bump manually on updates.
@@ -54,9 +55,12 @@ services:
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
-      - cloudflared
       - medianet
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   # ---------------------------------------------------------------------------
   # SABNZBD
@@ -81,6 +85,16 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/sabnzbd/api?mode=version' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   # ---------------------------------------------------------------------------
   # PROWLARR — config.xml pre-generated, indexers wired by bootstrap.py
@@ -101,6 +115,16 @@ services:
     ports:
       - "9696:9696"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9696/prowlarr/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # RADARR — config.xml pre-generated, root folder + download client via bootstrap.py
@@ -122,9 +146,22 @@ services:
     ports:
       - "7878:7878"
     restart: unless-stopped
+    # service_healthy gates startup on the downstream's /ping actually responding,
+    # not just the container process existing. bootstrap.py's retry loop was
+    # papering over this race before.
     depends_on:
-      - sabnzbd
-      - prowlarr
+      sabnzbd:  { condition: service_healthy }
+      prowlarr: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/radarr/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   # ---------------------------------------------------------------------------
   # SONARR
@@ -147,8 +184,18 @@ services:
       - "8989:8989"
     restart: unless-stopped
     depends_on:
-      - sabnzbd
-      - prowlarr
+      sabnzbd:  { condition: service_healthy }
+      prowlarr: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/sonarr/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   # ---------------------------------------------------------------------------
   # LIDARR
@@ -171,8 +218,18 @@ services:
       - "8686:8686"
     restart: unless-stopped
     depends_on:
-      - sabnzbd
-      - prowlarr
+      sabnzbd:  { condition: service_healthy }
+      prowlarr: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8686/lidarr/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   # ---------------------------------------------------------------------------
   # PLEX — RTX 3050 NVENC transcoding
@@ -188,7 +245,6 @@ services:
     runtime: nvidia
     networks:
       - medianet
-      - cloudflared
     environment:
       - TZ=${TZ}
       - PLEX_UID=${PUID}
@@ -226,17 +282,32 @@ services:
       - "32413:32413/udp"
       - "32414:32414/udp"
     restart: unless-stopped
+    healthcheck:
+      # /identity is unauthenticated and returns quickly even during library scans.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:32400/identity || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Plex can take a while to start after DB migrations or a crash recovery.
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
 
   # ---------------------------------------------------------------------------
   # OVERSEERR — family-facing request portal
   # settings.json pre-generated, Plex + arr connections via bootstrap.py
+  #
+  # No `depends_on` block here: Overseerr connects to Radarr/Sonarr/Plex lazily
+  # via HTTP at request time, not at container start, so ordering is only a
+  # bootstrap.py concern (it waits for each service before wiring connections).
   # ---------------------------------------------------------------------------
   overseerr:
     image: ghcr.io/hotio/overseerr:release
     container_name: overseerr
     networks:
       - medianet
-      - cloudflared
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -248,14 +319,21 @@ services:
     ports:
       - "5055:5055"
     restart: unless-stopped
-    depends_on:
-      - radarr
-      - sonarr
-      - plex
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5055/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # BAZARR — subtitle automation
-  # config.ini pre-generated with Sonarr + Radarr connections
+  # config.ini pre-generated with Sonarr + Radarr connections.
+  # Same lazy-HTTP rationale as Overseerr: no runtime `depends_on` needed.
   # ---------------------------------------------------------------------------
   bazarr:
     image: ghcr.io/hotio/bazarr:release
@@ -274,6 +352,13 @@ services:
     ports:
       - "6767:6767"
     restart: unless-stopped
-    depends_on:
-      - sonarr
-      - radarr
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6767/bazarr/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
