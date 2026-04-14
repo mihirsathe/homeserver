@@ -202,6 +202,7 @@ def prompt_for_missing(env: dict) -> dict:
     if "TZ" in missing:
         print("--- System ---")
         get_or_ask("TZ", "Timezone",
+                   default="America/Los_Angeles",
                    hint="e.g. America/New_York, America/Los_Angeles, Europe/London",
                    validator=validate_tz)
 
