@@ -32,8 +32,7 @@ No PDU (UPS has enough outlets), no patch panel (only 3–4 runs — a panel mak
 
 | Connection | Cable | Speed |
 |------------|-------|-------|
-| R640 I350 → Home router | Cat6A | 1 Gbps |
-| R640 iDRAC → Home router | Cat6A | 1 Gbps (out-of-band management) |
+| R640 → Home router | Cat6A | 1 Gbps · shared LOM (LAN + iDRAC on one cable) |
 | R640 → MD1400 | SFF-8644 SAS | 12 Gbps |
 | UPS → R640 (×2 PSU) | IEC C13/C14 | — |
 | UPS → MD1400 (×2 PSU) | IEC C13/C14 | — |
