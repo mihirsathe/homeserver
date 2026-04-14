@@ -17,7 +17,9 @@ Or if you've already cloned the repo:
 bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-unraid.sh
 ```
 
-The script handles plugins, Docker settings, share settings, folder structure, and creates the fan control and monthly update User Scripts. It prompts for iDRAC credentials when creating the fan control script. When it finishes it prints the remaining manual steps.
+The script handles plugins, Docker settings, share settings, folder structure, and creates the `media_stack_update` + `media_stack_backup` User Scripts. When it finishes it prints the remaining manual steps.
+
+Fan control is **not** provisioned by default — non-Dell GPUs sometimes make iDRAC over-spin the chassis fans, but whether that's actually an issue depends on your exact hardware. If the fans are loud after the GPU is installed, run `setup-fan-control.sh` separately. See [operations.md](operations.md#fan-noise-with-third-party-gpu).
 
 ---
 
@@ -34,8 +36,9 @@ The script handles plugins, Docker settings, share settings, folder structure, a
    ```
    If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle)
 5. **Set User Script schedules** — Settings → User Scripts:
-   - `fan_control` → At Startup of Array
    - `media_stack_update` → Monthly (1st, 3am)
+   - `media_stack_backup` → Weekly (Sunday, 4am, after CA Appdata Backup)
+   - `fan_control` → At Startup of Array *(only if you ran `setup-fan-control.sh`)*
 
 ---
 
@@ -72,7 +75,11 @@ Wait ~60 seconds for all containers to initialise.
 python3 scripts/bootstrap.py
 ```
 
-Waits for all services, wires the stack together via API, and creates Plex libraries. Prompts for a Plex token from Plex Web → Settings → General → Show. Hardware transcoding is pre-configured via environment variables in docker-compose.yml and activates automatically with an active Plex Pass.
+Waits for all services, wires the stack together via API, and creates Plex libraries. Prompts for a Plex token from Plex Web → Settings → General → Show.
+
+**Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
+
+Finally, open Tautulli at `http://<server-ip>:8181` and complete its one-time wizard — point it at the Plex server (same LAN IP, port 32400) and paste the token from the previous step.
 
 ---
 

@@ -128,7 +128,7 @@ Use iDRAC's storage view or the PERC's own interface to check internal SSD healt
 
 **Total usable array: 32 TB** (single parity, 4×8 TB)
 
-**Expansion headroom:** 7 more drives in the MD1400. Parity disk must always be the largest disk — adding a drive larger than 16 TB without first upgrading parity leaves the new drive unprotected.
+**Expansion headroom:** 7 more drives in the MD1400. Parity disk must always be the largest disk — adding a drive larger than 16 TB without first upgrading parity leaves the new drive unprotected. Full upgrade path (dual parity, daisy-chained second MD1400, etc.) lives in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
 ---
 
