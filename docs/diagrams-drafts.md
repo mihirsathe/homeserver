@@ -14,11 +14,20 @@ Source: [assets/rack.svg](assets/rack.svg)
 
 ---
 
-## 2–4. Pending re-do
+## 2. Storage pool layout — SVG (candidate: `hardware.md` storage section)
 
-Holding on these until #1 aesthetic is signed off. Plan once approved:
+Physical drives → Unraid pools → shares. Same hand-SVG aesthetic as the rack: dark chassis with color-coded bay grids (parity amber, data purple, cache blue, empty slate), pool boxes with accent stripe, share pills with monospaced mount paths. Dashed amber connector for the "parity protects" relationship since parity isn't stored content.
 
-- **#2 storage pool** — same SVG style as the rack (mini drive-bay grid + array/pool boxes), or mingrammer if real Unraid icons help. Lives in `hardware.md` storage section.
+![Storage diagram](assets/storage.svg)
+
+Source: [assets/storage.svg](assets/storage.svg)
+
+---
+
+## 3–4. Pending
+
+Queued after #2 aesthetic sign-off:
+
 - **#3 docker stack + request flow** — mingrammer/diagrams with real product logos (Plex, Docker, *arr lineup, SABnzbd, Cloudflare). Lives in `software.md`.
 - **#4 home-network boundary** — mingrammer/diagrams. Inbound (Cloudflare tunnel → Plex/Overseerr) **and** outbound (SAB→Usenet NNTP, Prowlarr→indexers HTTPS). Lives in `software.md` external-access section.
 

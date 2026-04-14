@@ -72,25 +72,25 @@
     <!-- U15: future managed switch (1U, dashed border) -->
     <g transform="translate(20, 10)">
       <rect width="260" height="30" fill="url(#vent)" stroke="#94a3b8" stroke-width="1.25" stroke-dasharray="5 3"/>
-      <text x="130" y="19" font-size="9" fill="#475569" text-anchor="middle" font-style="italic">reserved &#xb7; future managed switch</text>
+      <text x="130" y="19" font-size="9" fill="#475569" text-anchor="middle" font-style="italic">Reserved &#xb7; Future Managed Switch</text>
     </g>
 
     <!-- U14: thermal break (greyed solid panel) -->
     <g transform="translate(20, 40)">
       <rect width="260" height="30" fill="#cbd5e1" stroke="#94a3b8" stroke-width="0.75"/>
-      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">thermal break</text>
+      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">Thermal Break</text>
     </g>
 
     <!-- U12-U13: future GPU server (2U, dashed border) -->
     <g transform="translate(20, 70)">
       <rect width="260" height="60" fill="url(#vent)" stroke="#94a3b8" stroke-width="1.25" stroke-dasharray="5 3"/>
-      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">reserved &#xb7; future GPU server</text>
+      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">Reserved &#xb7; Future GPU Server</text>
     </g>
 
     <!-- U11: thermal break (greyed solid panel) -->
     <g transform="translate(20, 130)">
       <rect width="260" height="30" fill="#cbd5e1" stroke="#94a3b8" stroke-width="0.75"/>
-      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">thermal break</text>
+      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">Thermal Break</text>
     </g>
 
     <!-- U10: R640 -->
@@ -108,13 +108,18 @@
         <circle cx="11" cy="19" r="1" fill="#22c55e"/>
         <circle cx="27" cy="19" r="1" fill="#22c55e"/>
       </g>
+      <!-- BOSS-S1 card (internal, shown as pair of small grey M.2 blocks) -->
+      <g transform="translate(146, 4)">
+        <rect x="0"  y="0" width="10" height="22" fill="#475569" stroke="#64748b" stroke-width="0.5" rx="1"/>
+        <rect x="12" y="0" width="10" height="22" fill="#475569" stroke="#64748b" stroke-width="0.5" rx="1"/>
+      </g>
       <text x="250" y="19" fill="#f1f5f9" font-size="11" font-weight="600" text-anchor="end">Dell R640</text>
     </g>
 
     <!-- U9: thermal break (greyed solid panel) -->
     <g transform="translate(20, 190)">
       <rect width="260" height="30" fill="#cbd5e1" stroke="#94a3b8" stroke-width="0.75"/>
-      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">thermal break</text>
+      <text x="130" y="19" font-size="8" fill="#475569" text-anchor="middle">Thermal Break</text>
     </g>
 
     <!-- U7-U8: MD1400 -->
@@ -149,7 +154,7 @@
     <!-- U5-U6: future upgrade (dashed border) -->
     <g transform="translate(20, 280)">
       <rect width="260" height="60" fill="url(#vent)" stroke="#94a3b8" stroke-width="1.25" stroke-dasharray="5 3"/>
-      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">reserved &#xb7; second MD1400 (daisy-chain)</text>
+      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">Reserved &#xb7; Second MD1400 (Daisy-Chain)</text>
     </g>
 
     <!-- U3-U4: UPS -->
@@ -167,7 +172,7 @@
     <!-- U1-U2: future upgrade (dashed border) -->
     <g transform="translate(20, 400)">
       <rect width="260" height="60" fill="url(#vent)" stroke="#94a3b8" stroke-width="1.25" stroke-dasharray="5 3"/>
-      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">reserved &#xb7; UPS battery expansion</text>
+      <text x="130" y="34" font-size="10" fill="#475569" text-anchor="middle" font-style="italic">Reserved &#xb7; UPS Battery Expansion</text>
     </g>
   </g>
 
@@ -192,7 +197,7 @@
   <!-- ============ HOME ROUTER ============ -->
   <g transform="translate(560, 130)">
     <rect width="160" height="58" fill="#ffffff" stroke="#0f172a" stroke-width="1.5" rx="4"/>
-    <text x="80" y="26" fill="#0f172a" font-size="12" font-weight="600" text-anchor="middle">Home router</text>
+    <text x="80" y="26" fill="#0f172a" font-size="12" font-weight="600" text-anchor="middle">Home Router</text>
     <g transform="translate(72, 36)" fill="none" stroke="#94a3b8" stroke-width="1" stroke-linecap="round">
       <path d="M 0 8 Q 8 -2 16 8"/>
       <path d="M 3 8 Q 8 2 13 8"/>
@@ -208,7 +213,7 @@
     <circle cx="420" cy="255" r="3" fill="#3b82f6"/>
     <circle cx="560" cy="159" r="3" fill="#3b82f6"/>
     <text x="478" y="120" fill="#1e40af" font-size="9" font-weight="600">Cat6A &#xb7; 1 GbE</text>
-    <text x="478" y="132" fill="#1e40af" font-size="8">LAN + iDRAC (shared LOM)</text>
+    <text x="478" y="132" fill="#1e40af" font-size="8">LAN + iDRAC</text>
   </g>
 
   <!-- SAS: R640 <-> MD1400 -->
@@ -230,12 +235,14 @@
     <line x1="190" y1="-3" x2="224" y2="-3" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 4"/>
     <text x="230" y="0" font-size="10" fill="#334155">Power</text>
     <rect x="290" y="-7" width="14" height="8" fill="#b45309"/>
-    <text x="308" y="0" font-size="10" fill="#334155">parity</text>
+    <text x="308" y="0" font-size="10" fill="#334155">Parity</text>
     <rect x="354" y="-7" width="14" height="8" fill="#6d28d9"/>
-    <text x="372" y="0" font-size="10" fill="#334155">data</text>
+    <text x="372" y="0" font-size="10" fill="#334155">Data</text>
     <rect x="412" y="-7" width="14" height="8" fill="#1d4ed8"/>
-    <text x="430" y="0" font-size="10" fill="#334155">cache</text>
-    <rect x="478" y="-7" width="14" height="8" fill="url(#vent)" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2 1.5"/>
-    <text x="496" y="0" font-size="10" fill="#334155">reserved (future)</text>
+    <text x="430" y="0" font-size="10" fill="#334155">Cache</text>
+    <rect x="472" y="-7" width="14" height="8" fill="#475569"/>
+    <text x="490" y="0" font-size="10" fill="#334155">Boot M.2</text>
+    <rect x="548" y="-7" width="14" height="8" fill="url(#vent)" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2 1.5"/>
+    <text x="566" y="0" font-size="10" fill="#334155">Reserved (Future)</text>
   </g>
 </svg>
