@@ -25,7 +25,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Overseerr for family 
 | Component | Detail |
 |-----------|--------|
 | Compute | Dell PowerEdge R640 · 2× Xeon Gold 6146 · 32 GB ECC RAM |
-| GPU | MSI RTX 3050 LP 6G · 8 concurrent NVENC sessions |
+| GPU | Yeston RTX 3050 LP 6G · 12 concurrent NVENC sessions |
 | Storage | Dell MD1400 DAS · 32 TB usable (4×8 TB + 16 TB parity) |
 | OS | Unraid Pro (lifetime) · BOSS card boot |
 | Stack | 9 Docker containers · defined in one Compose file |

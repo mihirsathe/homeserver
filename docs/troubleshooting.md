@@ -67,7 +67,7 @@ Cause is always one of two things:
    ```
    During an active transcode, `Volatile GPU-Util` should be 20–80% and the Plex process appears in the GPU process list. If not, Plex is software transcoding — confirm by checking Plex Web → Status → Now Playing and looking for "(hw)" on the transcode line.
 
-5. **Hit the session cap?** See [hardware.md](hardware.md#gpu--rtx-3050-lp-6g-ampere-ga107) — the 3050 is capped at 1 concurrent NVENC session. A second simultaneous transcode *falls back to CPU*, which behaves as "not using HW" even though the first stream is.
+5. **Hit the session cap?** Only relevant in theory — the 3050 allows **12** concurrent NVENC sessions ([NVIDIA matrix](https://docs.nvidia.com/video-technologies/video-codec-sdk/nvenc-application-note/index.html)). If this is ever the answer you have a scaling problem, not a config problem.
 
 ---
 

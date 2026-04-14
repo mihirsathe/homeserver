@@ -44,7 +44,7 @@ Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software
 - Enterprise hardware with massive headroom (RAM, drives, PCIe slots)
 - Infrastructure-as-code — entire stack reproducible from a single Compose file
 - Cloudflare Tunnel — secure remote access, home IP never exposed
-- GPU transcoding — RTX 3050 supports 8 concurrent NVENC sessions
+- GPU transcoding — RTX 3050 supports 12 concurrent NVENC sessions
 - MD1400 — 12 hot-swap bays, room for 7 more drives and a second DAS via daisy-chain
 
 ### Current gaps

@@ -13,7 +13,11 @@
       "WebSearch",
       "WebFetch(domain:forums.unraid.net)",
       "WebFetch(domain:medium.com)",
-      "WebFetch(domain:serverlabs.com.au)"
+      "WebFetch(domain:serverlabs.com.au)",
+      "Bash(grep -n \"\\\\${\" /c/Users/Mihir/Documents/Projects/homeserver-repo/homeserver/docker-compose.yml)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

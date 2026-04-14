@@ -61,7 +61,7 @@ No PDU (UPS has enough outlets), no patch panel (only 3–4 devices — a panel 
 |-----------|------|-------|
 | CPU | 2× Intel Xeon Gold 6146 | 12c/24t each · 3.2–4.2 GHz · no iGPU |
 | RAM | 32 GB DDR4 ECC RDIMM | 6-channel · expandable to 768 GB across 24 DIMM slots |
-| GPU | MSI RTX 3050 LP 6G | Ampere GA107 · Riser 2 (CPU2 slot) |
+| GPU | Yeston RTX 3050 LP 6G | Ampere GA107 · Riser 2 (CPU2 slot) |
 | Storage controller | PERC H730P Mini | HBA/passthrough mode — individual drives visible to OS |
 | Network | X710 10GbE SFP+ + I350 1GbE | Daughter card, rear panel |
 | Remote management | iDRAC 9 | Dedicated management port, own IP on LAN |
@@ -142,18 +142,11 @@ Use iDRAC's storage view or the PERC's own interface to check internal SSD healt
 | AV1 | ✗ | ✓ |
 | VP9 | ✗ | ✓ |
 
-- Concurrent NVENC encode sessions: **1** on the stock NVIDIA driver. The 2023 cap lift applies to **Ada (RTX 40xx)** — GA107 (Ampere) is still limited.
-- NVDEC decode is **unlimited** — multi-stream hardware decode works as expected.
+- Concurrent NVENC encode sessions: **12** on the stock NVIDIA driver, per [NVIDIA's published NVENC compatibility matrix](https://docs.nvidia.com/video-technologies/video-codec-sdk/nvenc-application-note/index.html). 7th-generation NVENC.
+- NVDEC decode is **unlimited** — multi-stream hardware decode works as expected, including AV1 8/10-bit.
 - AV1 encode requires RTX 4000 series (Ada Lovelace) or newer.
 
-**Practical impact:** only one concurrent Plex stream can hardware-encode. A second simultaneous transcode falls back to CPU software encode on the 2× Xeon Gold 6146 — comfortable for 1080p, warm for 4K. Direct Play and Direct Stream (remux only, no re-encode) are uncapped and cover most traffic if clients are well-chosen (Shield, Apple TV 4K, recent Fire TV).
-
-**If you hit the limit** (three paths, pick one):
-1. Tune clients toward Direct Play so transcoding is rare.
-2. Apply [`keylase/nvidia-patch`](https://github.com/keylase/nvidia-patch) — a kernel-module patch widely used in the Plex community that removes the session cap on consumer GeForce drivers.
-3. Swap to RTX A2000 (6 GB, LP, native multi-session) or RTX 4060 LP.
-
-For Plex transcoding the AV1 *encode* limitation doesn't matter in practice — Plex always encodes output to H.264 or HEVC.
+**Practical impact:** the session cap is effectively a non-issue for this household — hitting 12 concurrent hardware-encoded streams implies 13+ simultaneous transcoding viewers on one Plex server, which we will never see. Direct Play and Direct Stream (remux only, no re-encode) are uncapped regardless. For Plex transcoding the AV1 *encode* limitation doesn't matter — Plex always encodes output to H.264 or HEVC.
 
 ---
 
