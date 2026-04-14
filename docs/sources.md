@@ -6,21 +6,21 @@ Every package, image, plugin, and driver used in this stack — where it comes f
 
 ## Docker Images
 
-All pulled at deploy time via `docker compose pull`. Pinned to `latest` and updated monthly by `update-stack.sh`.
+All pulled at deploy time via `docker compose pull` and refreshed monthly by `update-stack.sh`. Each maintainer's stable rolling tag is used — hotio publishes `:release`, Plex publishes `:public`, the rest track `:latest`.
 
-| Container | Image | Registry | Maintainer |
-|-----------|-------|----------|------------|
-| gluetun | `qmcgaw/gluetun` | Docker Hub | qdm12 (community, widely used) |
-| sabnzbd | `ghcr.io/hotio/sabnzbd` | GitHub Container Registry | hotio |
-| prowlarr | `ghcr.io/hotio/prowlarr` | GitHub Container Registry | hotio |
-| radarr | `ghcr.io/hotio/radarr` | GitHub Container Registry | hotio |
-| sonarr | `ghcr.io/hotio/sonarr` | GitHub Container Registry | hotio |
-| lidarr | `ghcr.io/hotio/lidarr` | GitHub Container Registry | hotio |
-| plex | `plexinc/pms-docker` | Docker Hub | Plex Inc. (official) |
-| seerr | `ghcr.io/seerr-team/seerr` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
-| bazarr | `ghcr.io/hotio/bazarr` | GitHub Container Registry | hotio |
-| tautulli | `ghcr.io/hotio/tautulli` | GitHub Container Registry | hotio |
-| recyclarr | `ghcr.io/recyclarr/recyclarr` | GitHub Container Registry | Recyclarr team (official) |
+| Container | Image | Tag | Registry | Maintainer |
+|-----------|-------|-----|----------|------------|
+| gluetun | `qmcgaw/gluetun` | `:latest` | Docker Hub | qdm12 (community, widely used) |
+| sabnzbd | `ghcr.io/hotio/sabnzbd` | `:release` | GitHub Container Registry | hotio |
+| prowlarr | `ghcr.io/hotio/prowlarr` | `:release` | GitHub Container Registry | hotio |
+| radarr | `ghcr.io/hotio/radarr` | `:release` | GitHub Container Registry | hotio |
+| sonarr | `ghcr.io/hotio/sonarr` | `:release` | GitHub Container Registry | hotio |
+| lidarr | `ghcr.io/hotio/lidarr` | `:release` | GitHub Container Registry | hotio |
+| plex | `plexinc/pms-docker` | `:public` | Docker Hub | Plex Inc. (official) |
+| seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
+| bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
+| tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
+| recyclarr | `ghcr.io/recyclarr/recyclarr` | `:latest` | GitHub Container Registry | Recyclarr team (official) |
 
 **hotio** (`ghcr.io/hotio`) is the de facto standard for *arr app images — tightly maintained, consistent `PUID`/`PGID`/`UMASK` environment model, fast to release updates. Source: [hotio.dev](https://hotio.dev).
 
@@ -86,6 +86,6 @@ Present on Unraid by default or installed as part of the driver plugin.
 |------|--------|----------|
 | `docker` / `docker compose` | [Unraid built-in](https://docs.unraid.net/unraid-os/manual/docker-management/) | Container runtime |
 | `racadm` | [Dell RACADM](https://www.dell.com/support/kbdoc/en-us/000178114) — bundled in iDRAC firmware, accessed remotely | Fan control via iDRAC |
-| `nvidia-smi` | Nvidia — installed by ich777 plugin | GPU status and verification |
+| `nvidia-smi` | Nvidia — bundled with Unraid's Nvidia-Driver plugin (`unraid/unraid-nvidia-driver`) | GPU status and verification |
 | `git` | [Unraid built-in](https://docs.unraid.net/unraid-os/manual/) | Cloning this repo |
 | `python3` | Unraid built-in | Running setup scripts |

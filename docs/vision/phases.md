@@ -34,10 +34,11 @@ Configure Unraid's notification system for: drive errors, SMART warnings, parity
 
 ### 1.5 Harden the Tailscale admin plane
 
-- Tailscale ACLs: restrict `tag:admin → tag:server` to the specific admin ports (7878, 8989, 8686, 9696, 8080, 5055, 6767, 8181, 80/443 for Unraid UI). Deny everything else.
+> **Status:** Basic deployment is done. The tailnet exists, the server advertises `tag:server`, admin devices are tagged `tag:admin`, and `tailscale up --ssh` is live (see [deployment.md](../deployment.md#3a--tailscale)). The items below are the hardening work still outstanding.
+
+- Tailscale ACLs: tighten `tag:admin → tag:server` to the specific admin ports (7878, 8989, 8686, 9696, 8080, 5055, 6767, 8181, 80/443 for Unraid UI). Deny everything else.
 - Enforce SSO + device posture check; require MagicDNS + HTTPS certs for any browser-facing admin UI
 - Short key-expiry for admin devices (30–90 days); indefinite for the server node
-- `tailscale up --ssh` on the server so SSH rides the tailnet (no port 22 on LAN)
 - Quarterly audit of machines + ACLs in the Tailscale admin console
 
 ---
@@ -90,6 +91,8 @@ Deploy a DNS sinkhole as a Docker container on Unraid. Blocks ads and trackers a
 ## Phase 3 — Power Resilience
 
 *Goal: Survive power outages gracefully — no data corruption, no service interruption for short outages, clean automated shutdown for extended outages.*
+
+> **Status:** The present-day rack already has an APC Smart-UPS X SMX1500RM2U (1500 VA / 1200 W, pure sine) installed at U3–4 and apcupsd configured via `setup-unraid.sh` (`BATTERYLEVEL=20`, `MINUTES=5`, USB cable). That covers the R640 + MD1400 with ~10–12 minutes typical-load runtime and a graceful-shutdown trigger. Remaining Phase-3 work is re-sizing for the full future rack (UniFi + Proxmox + PoE load) and extending NUT server/client to those nodes.
 
 ### 3.1 UPS Sizing
 
@@ -214,13 +217,13 @@ Storage: 500GB–2TB on the array for 30–90 day retention of event clips. Cont
 | Gitea/Forgejo | GitHub (private) | `gitea` | Self-hosted Git |
 | Audiobookshelf | Audible | `audiobookshelf` | Audiobook + podcast server |
 
+Tailscale is already the admin plane in today's stack — not a Phase-7 addition.
+
 ### 7.2 Key Services
 
 **Nextcloud**: deploy with PostgreSQL + Redis. Store data on array. Reach it over Tailscale (same admin plane as the rest of the stack). Budget 2–4GB RAM.
 
 **Immich**: store photo library on array, back up to Backblaze B2 — personal photos are irreplaceable. Can use the RTX 3050 for faster ML inference.
-
-**Tailscale**: already the primary admin plane (Phase 1). Installed on every admin phone/laptop and as a subnet router on Unraid. Free for personal use up to 100 devices.
 
 ---
 

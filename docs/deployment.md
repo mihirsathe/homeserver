@@ -27,7 +27,7 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
 
 1. **Assign array disks** — verify drive serial numbers before assigning (Main tab)
    - Parity: 16TB HDD · Disk 1–4: 8TB HDDs · Cache: both 480GB SSDs
-2. **Plug in UPS data cable** (skip if UPS is not yet physically installed — safe to add later) — USB-B end → UPS, USB-A end → any rear R640 USB port. `setup-unraid.sh` has already written `/boot/config/plugins/dynamix/ups.cfg` with `SERVICE=enable`, `CABLE=usb`, `BATTERYLEVEL=20`, `MINUTES=5`. After the step-4 reboot, verify with `apcaccess status` — expect `STATUS : ONLINE` and a non-zero `BCHARGE` / `TIMELEFT`.
+2. **Plug in UPS data cable** (skip if UPS is not yet physically installed — safe to add later) — USB-B end → UPS, USB-A end → any rear R640 USB port. `setup-unraid.sh` has already written `/boot/config/plugins/dynamix/ups.cfg` with `SERVICE=enable`, `CABLE=usb`, `BATTERYLEVEL=20`, `MINUTES=5`. After the reboot in sub-step 4 below, verify with `apcaccess status` — expect `STATUS : ONLINE` and a non-zero `BCHARGE` / `TIMELEFT`.
 3. **Start array and format** — Main → Start → check format boxes → Format
 4. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
 5. **Verify GPU and container toolkit**:

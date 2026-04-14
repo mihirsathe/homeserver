@@ -177,7 +177,7 @@ Then generate the config files:
 python3 scripts/generate-configs.py
 ```
 
-**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `recyclarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists, `.env.docker` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
+**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `recyclarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
 
 ---
 
@@ -185,7 +185,7 @@ python3 scripts/generate-configs.py
 
 ```bash
 cd ~/homeserver/homeserver
-docker compose --env-file .env.docker up -d
+docker compose --env-file .env --env-file generated.env up -d
 watch -n 2 'docker compose ps'
 ```
 
@@ -205,14 +205,17 @@ curl -fsS http://localhost:6767/bazarr/
 curl -fsS http://localhost:32400/identity | head -c 200
 ```
 
-**Inter-container DNS** (medianet)
+**Inter-container DNS** (across the `downloaders` / `automation` / `frontend` networks)
 
 ```bash
+# radarr shares `downloaders` with sabnzbd (via gluetun's netns)
 docker exec radarr curl -fsS http://sabnzbd:8080/sabnzbd/api?mode=version
-docker exec overseerr wget -qO- http://plex:32400/identity | head -c 200
+
+# seerr shares `frontend` with plex
+docker exec seerr wget -qO- http://plex:32400/identity | head -c 200
 ```
 
-If these fail: check `docker network inspect medianet` and `docker compose logs <svc>`.
+If these fail: check `docker network inspect downloaders automation frontend` and `docker compose logs <svc>`.
 
 ---
 
@@ -402,7 +405,7 @@ Simulate a rollback path: pin one image to a broken tag (`sabnzbd: image: ghcr.i
 
 ```bash
 cd ~/homeserver/homeserver
-docker compose --env-file .env.docker down -v
+docker compose --env-file .env --env-file generated.env down -v
 docker volume prune -f
 sudo rm -rf /mnt/user  # destroys the sandbox; do not run on the real Unraid box
 ```

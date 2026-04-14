@@ -20,16 +20,16 @@ The plan is eight sequential phases ordered by dependency and impact. Each phase
 
 ## Phase Sequence
 
-| Phase | Focus | Priority |
-|-------|-------|----------|
-| [1 — Harden](phases.md#phase-1--harden-the-media-server) | Dual parity, RAM, backups, notifications | **Critical** |
-| [2 — Network](phases.md#phase-2--network-infrastructure) | UniFi stack, VLANs, DNS sinkhole | High |
-| [3 — Power](phases.md#phase-3--power-resilience) | UPS, automated shutdown | **Critical** |
-| [4 — Wiring](phases.md#phase-4--structured-wiring) | Cat6A to every room, patch panel | High |
-| [5 — Home Automation](home-automation.md) | Proxmox HA, Home Assistant, Thread/Matter | Medium |
-| [6 — Cameras](phases.md#phase-6--security-cameras) | Frigate NVR, PoE cameras, AI detection | Medium |
-| [7 — Personal Cloud](phases.md#phase-7--personal-cloud) | Nextcloud, Immich, Vaultwarden, Tailscale | Low |
-| [8 — Media Upgrades](phases.md#phase-8--advanced-media-upgrades) | GPU, array expansion, indexers | Low |
+| Phase | Focus | Priority | Status |
+|-------|-------|----------|--------|
+| [1 — Harden](phases.md#phase-1--harden-the-media-server) | Dual parity, RAM, backups, notifications | **Critical** | Tailscale admin plane deployed (basic ACLs pending); rest outstanding |
+| [2 — Network](phases.md#phase-2--network-infrastructure) | UniFi stack, VLANs, DNS sinkhole | High | Future |
+| [3 — Power](phases.md#phase-3--power-resilience) | UPS, automated shutdown | **Critical** | APC Smart-UPS + apcupsd shipped (see [hardware.md](../hardware.md#rack) + [deployment.md](../deployment.md)); remaining sizing/NUT-client items below |
+| [4 — Wiring](phases.md#phase-4--structured-wiring) | Cat6A to every room, patch panel | High | Future |
+| [5 — Home Automation](home-automation.md) | Proxmox HA, Home Assistant, Thread/Matter | Medium | Future |
+| [6 — Cameras](phases.md#phase-6--security-cameras) | Frigate NVR, PoE cameras, AI detection | Medium | Future |
+| [7 — Personal Cloud](phases.md#phase-7--personal-cloud) | Nextcloud, Immich, Vaultwarden | Low | Future (Tailscale already in use — not a Phase-7 item) |
+| [8 — Media Upgrades](phases.md#phase-8--advanced-media-upgrades) | GPU, array expansion, indexers | Low | Future |
 
 ---
 
@@ -51,9 +51,10 @@ Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software
 
 | Gap | Severity | Phase |
 |-----|----------|-------|
-| No UPS — power flicker risks cache pool (BTRFS) corruption | **Critical** | 3 |
 | No off-system backup — single catastrophic event = total data loss | **Critical** | 1 |
 | Consumer-grade networking — no VLANs, no PoE, no segmentation | High | 2 |
 | Single parity — one drive failure during rebuild = total array loss | High | 1 |
 | 32GB RAM — constrained under concurrent transcodes + downloads | Medium | 1 |
 | No home automation, cameras, or structured wiring | — | 5–6 |
+
+UPS is in place (APC Smart-UPS X SMX1500RM2U + apcupsd) — the cache-pool-corruption risk from power loss is mitigated. Sizing headroom for the full future rack is still a Phase-3 item.
