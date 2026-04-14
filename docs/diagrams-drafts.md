@@ -28,21 +28,25 @@ Source: [assets/storage.svg](assets/storage.svg)
 
 Flow graph per feedback lesson #7 — auto-layout tool with real product logos, not hand-SVG. Source: [assets/diagrams/docker-stack.py](assets/diagrams/docker-stack.py). Output: `assets/docker-stack.png` (user renders via `python docker-stack.py` after `pip install diagrams` + icon download).
 
-Structure: Viewer → Overseerr → *arr cluster → Prowlarr (search) / SABnzbd (NZB queue) → Usenet provider (dashed, external) → `/data/usenet` → hardlink into `/data/media` → Plex → back to Viewer. Numbered 1–7 matching the text flow in `software.md`.
+Structure: Viewer → Seerr (Plex Watchlist-driven) → *arr cluster → Prowlarr (search) / SABnzbd (NZB queue) → Usenet provider (dashed, external) → `/data/usenet` → hardlink into `/data/media` → Plex → back to Viewer. Numbered 1–7 matching the text flow in `software.md`.
 
 ---
 
 ## 4. External access boundary — mingrammer (candidate: `software.md` external-access section)
 
-Illustrates the zero-open-ports property **and** the outbound-only paths (NNTP to Usenet, HTTPS to indexers). Source: [assets/diagrams/external-access.py](assets/diagrams/external-access.py). Output: `assets/external-access.png`.
+Illustrates the one-port-open property **and** the VPN-forced egress for downloaders. Source: [assets/diagrams/external-access.py](assets/diagrams/external-access.py). Output: `assets/external-access.png`.
 
-Structure: Remote client → Cloudflare edge ↔ `cloudflared` (outbound persistent tunnel, dashed purple) → family-facing services (Plex, Overseerr, Tautulli). Admin-only subcluster (SAB, Prowlarr) reaches out independently to Usenet/indexers (dashed amber). Home router has a dashed red "No Inbound" arrow to nowhere, emphasising that no ingress passes through it.
+Structure: Remote Plex client → Home router (TCP 32400 port-forward, blue) → Plex. Admin device ↔ Tailscale (dashed purple, outbound-initiated WireGuard) → Seerr + Tautulli. SAB + Prowlarr live in a "VPN-egress only" subcluster — their traffic is force-routed through Gluetun → Mullvad (dashed amber) → Usenet/indexers. Everything else on the router is closed.
 
 ---
 
 ## Icons
 
-Both mingrammer diagrams expect PNG icons at `docs/assets/diagrams/icons/`. Suggested source: [walkxcode/dashboard-icons](https://github.com/walkxcode/dashboard-icons/tree/main/png). Required filenames are listed in each script's header docstring.
+Both mingrammer diagrams load icons from `docs/assets/diagrams/icons/`. Graphviz accepts SVG and PNG interchangeably. Sources:
+
+- [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png) — plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, tautulli (all PNG)
+- [seerr-team/seerr logo_full.svg](https://github.com/seerr-team/seerr/blob/develop/public/logo_full.svg) — seerr (SVG)
+- Wikimedia Commons — [Tailscale-Logo-Black.svg](https://commons.wikimedia.org/wiki/File:Tailscale-Logo-Black.svg), [Mullvad_logo.svg](https://commons.wikimedia.org/wiki/File:Mullvad_logo.svg) (SVG)
 
 ---
 
@@ -112,7 +116,7 @@ Services, volumes, and the life of a content request from click to stream.
 ```mermaid
 flowchart LR
     viewer["Viewer"]
-    osr["Overseerr"]
+    seerr["Seerr"]
     subgraph arr["*arr services"]
         direction TB
         radarr["Radarr"]
@@ -126,8 +130,8 @@ flowchart LR
     inc[("/data/usenet/")]
     media[("/data/media/")]
 
-    viewer -->|"1 · request"| osr
-    osr -->|"2 · push"| arr
+    viewer -->|"1 · request"| seerr
+    seerr -->|"2 · push"| arr
     arr -->|"3 · search"| prow
     arr -->|"4 · queue NZB"| sab
     sab <-->|"5 · download"| usenet
@@ -139,29 +143,6 @@ flowchart LR
 
 ---
 
-## 4. External access via Cloudflare Tunnel (candidate: `software.md` external-access section)
+## (reference, do not land) ~~4. External access — Mermaid r1~~
 
-Illustrates the zero-open-ports property — the tunnel is established outbound by `cloudflared`, so nothing in the home router needs to be opened.
-
-```mermaid
-flowchart LR
-    client["Remote client<br/>(phone, laptop)"]
-    cf["Cloudflare edge"]
-    subgraph home["Home network"]
-        router["Home router<br/>·· no inbound ports ··"]
-        cloudflared["cloudflared<br/>container"]
-        subgraph stack["Docker medianet"]
-            plex["Plex"]
-            osr["Overseerr"]
-            taut["Tautulli"]
-        end
-    end
-
-    client -->|"HTTPS<br/>plex.example.com"| cf
-    cloudflared -. "outbound tunnel<br/>(persistent)" .-> cf
-    cf -. "multiplexed over tunnel" .-> cloudflared
-    cloudflared --> plex
-    cloudflared --> osr
-    cloudflared --> taut
-    router -.-|"inbound: nothing"| cf
-```
+Earlier draft assumed Cloudflare Tunnel for every externally-reachable service. Architecture pivoted to port-forward + Tailscale; the mingrammer source above is the current version. Keeping this block unrendered for provenance.

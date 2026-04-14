@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Diagram #4 — External access boundary (Cloudflare Tunnel in; Usenet/indexers out).
+Diagram #4 — External access boundary
+(Plex port-forward in; Tailscale admin plane; Usenet via Gluetun/Mullvad out).
 
 Renders to docs/assets/external-access.png.
 
@@ -9,12 +10,12 @@ Setup once:
     # Graphviz must be on PATH (dot -V)
 
 Icons:
-    Place PNGs in docs/assets/diagrams/icons/ named:
-        plex.png overseerr.png tautulli.png sabnzbd.png prowlarr.png
-        cloudflare.png
-    Source: https://github.com/homarr-labs/dashboard-icons/tree/main/png
-    (cloudflared reuses cloudflare.png — same company, different endpoint.
-     Usenet + indexers use mingrammer's generic Internet icon.)
+    docs/assets/diagrams/icons/ contains:
+        plex.png tautulli.png sabnzbd.png prowlarr.png     (from homarr-labs/dashboard-icons)
+        seerr.svg                                          (seerr-team/seerr logo_full.svg)
+        tailscale.svg mullvad.svg                          (Wikimedia Commons)
+    Graphviz renders SVG and PNG interchangeably.
+    (Usenet + indexers use mingrammer's generic Internet icon.)
 
 Render:
     cd docs/assets/diagrams && python external-access.py
@@ -23,6 +24,7 @@ from pathlib import Path
 
 from diagrams import Cluster, Diagram, Edge
 from diagrams.custom import Custom
+from diagrams.generic.device import Mobile
 from diagrams.generic.network import Router
 from diagrams.onprem.client import Users
 from diagrams.onprem.network import Internet
@@ -31,7 +33,11 @@ ICONS = Path(__file__).parent / "icons"
 
 
 def ico(name: str) -> str:
-    return str(ICONS / f"{name}.png")
+    for ext in ("svg", "png"):
+        p = ICONS / f"{name}.{ext}"
+        if p.exists():
+            return str(p)
+    raise FileNotFoundError(f"icon not found: {name}.(svg|png) in {ICONS}")
 
 
 graph_attr = {
@@ -63,7 +69,7 @@ home_cluster_attr = {
     "pencolor": "#94a3b8",
     "style": "dashed,rounded",
     "margin": "20",
-    "label": "Home Network · No Inbound Ports",
+    "label": "Home Network · Only TCP 32400 Open",
 }
 stack_cluster_attr = {
     "fontname": "Inter, Helvetica, Arial",
@@ -76,7 +82,7 @@ stack_cluster_attr = {
 }
 
 with Diagram(
-    "External Access · Cloudflare Tunnel Boundary",
+    "External Access · Port-forward + Tailscale Boundary",
     filename="../external-access",
     outformat="png",
     show=False,
@@ -85,40 +91,44 @@ with Diagram(
     node_attr=node_attr,
     edge_attr=edge_attr,
 ):
-    client = Users("Remote Client\n(Phone · Laptop)")
-    cf_edge = Custom("Cloudflare Edge", ico("cloudflare"))
+    plex_client = Users("Remote Plex Client\n(Phone · Laptop)")
+    admin = Mobile("Admin Device\n(on tailnet)")
 
     usenet = Internet("Usenet Provider")
     indexers = Internet("Indexers")
+    mullvad = Custom("Mullvad\nWireGuard", ico("mullvad"))
 
     with Cluster("", graph_attr=home_cluster_attr):
-        router = Router("Home Router")
-        cloudflared = Custom("cloudflared\n(Tunnel Client)", ico("cloudflare"))
+        router = Router("Home Router\n(port-forward 32400)")
+        tailscale = Custom("Tailscale\n(subnet router)", ico("tailscale"))
 
-        with Cluster("Family-Facing", graph_attr=stack_cluster_attr):
+        with Cluster("Public Service", graph_attr=stack_cluster_attr):
             plex = Custom("Plex", ico("plex"))
-            overseerr = Custom("Overseerr", ico("overseerr"))
-            tautulli = Custom("Tautulli", ico("tautulli"))
-            family = [plex, overseerr, tautulli]
 
-        with Cluster("Admin-Only", graph_attr=stack_cluster_attr):
+        with Cluster("Admin-Only · Tailnet-Reachable", graph_attr=stack_cluster_attr):
+            seerr = Custom("Seerr", ico("seerr"))
+            tautulli = Custom("Tautulli", ico("tautulli"))
+            admin_svcs = [seerr, tautulli]
+
+        with Cluster("VPN-Egress Only · via Gluetun", graph_attr=stack_cluster_attr):
             sab = Custom("SABnzbd", ico("sabnzbd"))
             prowlarr = Custom("Prowlarr", ico("prowlarr"))
 
-    # Inbound: HTTPS → Cloudflare → outbound tunnel → cloudflared → services
-    client >> Edge(label="HTTPS", color="#1d4ed8", fontcolor="#1e3a8a") >> cf_edge
-    cloudflared >> Edge(
-        label="Outbound Tunnel (Persistent)",
+    # Inbound Plex: exactly one port-forward, direct-connect terminates at Plex
+    plex_client >> Edge(label="TCP 32400", color="#1d4ed8", fontcolor="#1e3a8a") >> router
+    router >> Edge(color="#1d4ed8") >> plex
+
+    # Admin inbound: WireGuard mesh, outbound-initiated from both sides via Tailscale coordination
+    admin >> Edge(
+        label="WireGuard\n(outbound-initiated)",
         style="dashed",
         color="#6d28d9",
         fontcolor="#4c1d95",
-    ) >> cf_edge
-    cf_edge >> Edge(style="dotted", color="#94a3b8") >> cloudflared
-    cloudflared >> Edge(color="#94a3b8") >> family
+    ) >> tailscale
+    tailscale >> Edge(color="#94a3b8") >> admin_svcs
 
-    # Router is bystander — nothing passes through it for tunnel traffic
-    router >> Edge(label="No Inbound", style="dashed", color="#b91c1c", fontcolor="#7f1d1d") >> cf_edge
-
-    # Outbound: NNTP + HTTPS to external services
-    sab >> Edge(label="NNTP 563 TLS", style="dashed", color="#b45309", fontcolor="#78350f") >> usenet
-    prowlarr >> Edge(label="HTTPS", style="dashed", color="#b45309", fontcolor="#78350f") >> indexers
+    # Outbound downloader egress forced through Mullvad WireGuard (Gluetun kill-switch)
+    sab >> Edge(label="via Gluetun", style="dashed", color="#b45309", fontcolor="#78350f") >> mullvad
+    prowlarr >> Edge(label="via Gluetun", style="dashed", color="#b45309", fontcolor="#78350f") >> mullvad
+    mullvad >> Edge(label="NNTP 563 TLS", style="dashed", color="#b45309") >> usenet
+    mullvad >> Edge(label="HTTPS", style="dashed", color="#b45309") >> indexers

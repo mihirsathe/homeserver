@@ -9,10 +9,11 @@ Setup once:
     # Graphviz must be on PATH (dot -V)
 
 Icons:
-    Place PNGs in docs/assets/diagrams/icons/ named:
-        plex.png overseerr.png radarr.png sonarr.png lidarr.png
-        prowlarr.png sabnzbd.png
-    Source: https://github.com/homarr-labs/dashboard-icons/tree/main/png
+    docs/assets/diagrams/icons/ contains:
+        plex.png radarr.png sonarr.png lidarr.png prowlarr.png sabnzbd.png
+            (from homarr-labs/dashboard-icons)
+        seerr.svg   (seerr-team/seerr logo_full.svg)
+    Graphviz renders SVG and PNG interchangeably.
     (Usenet provider uses mingrammer's generic Internet icon.)
 
 Render:
@@ -30,7 +31,11 @@ ICONS = Path(__file__).parent / "icons"
 
 
 def ico(name: str) -> str:
-    return str(ICONS / f"{name}.png")
+    for ext in ("svg", "png"):
+        p = ICONS / f"{name}.{ext}"
+        if p.exists():
+            return str(p)
+    raise FileNotFoundError(f"icon not found: {name}.(svg|png) in {ICONS}")
 
 
 graph_attr = {
@@ -78,7 +83,7 @@ with Diagram(
     usenet = Internet("Usenet Provider")
 
     with Cluster("Home Server · Docker medianet", graph_attr=cluster_attr):
-        overseerr = Custom("Overseerr", ico("overseerr"))
+        seerr = Custom("Seerr", ico("seerr"))
         prowlarr = Custom("Prowlarr", ico("prowlarr"))
         sab = Custom("SABnzbd", ico("sabnzbd"))
         plex = Custom("Plex", ico("plex"))
@@ -93,8 +98,8 @@ with Diagram(
             incoming = Storage("/data/usenet")
             library = Storage("/data/media")
 
-    viewer >> Edge(label="1 · Request") >> overseerr
-    overseerr >> Edge(label="2 · Push") >> arr
+    viewer >> Edge(label="1 · Watchlist add") >> seerr
+    seerr >> Edge(label="2 · Push") >> arr
     arr >> Edge(label="3 · Search") >> prowlarr
     arr >> Edge(label="4 · Queue NZB") >> sab
     sab >> Edge(label="5 · Download NZB", style="dashed") >> usenet
