@@ -2,13 +2,13 @@
 
 ## Rack
 
-**15U, 4-post, full-depth (30"+).** Compute-only rack in the garage. Networking equipment (router, PoE switch, patch panel, APs) lives in a separate rack inside the house, connected via 10G SFP+ uplink.
+**15U, 4-post, full-depth (30"+).** Compute-only rack in the garage. Networking is handled by the home router — the R640 connects directly via 1GbE. A managed switch + dedicated networking rack is a future upgrade (see [decisions.md#expansion-paths](decisions.md#expansion-paths)).
 
 ### Layout
 
 | U | Device | Notes |
 |---|--------|-------|
-| 15 | Ubiquiti USW-Pro-Max-16 | SFP+ #1 → R640 X710 (10G) · SFP+ #2 → future uplink to networking rack |
+| 15 | Vented blank | Reserved for future managed switch |
 | 14 | Vented blank | |
 | 13 | Vented blank | |
 | 12 | Vented blank | |
@@ -26,32 +26,19 @@ Vented blanks at U9 and U11 are thermal breaks, not filler. The R640 intakes fro
 
 U5–6 are reserved for a second MD1400. The MD1400 supports daisy-chaining via its dual EMM modules; a second unit would connect with a short SFF-8644 jumper and no other hardware needs to move.
 
-### Switch — Ubiquiti USW-Pro-Max-16
-
-12×1GbE + 4×2.5GbE + 2×10G SFP+. Layer 3. Fanless. UniFi managed.
-
-SFP+ #1 → R640 X710 at 10G. SFP+ #2 reserved for the trunk uplink to the networking rack.
-
-Chosen over:
-- **USW-Enterprise-8-PoE** — two SFP+ ports and 8×2.5GbE but bundles 120W PoE that will never be used here. $200 more for fewer total ports.
-- **MikroTik CRS310-8G+2S+IN** — same port layout, $50 cheaper, but loses UniFi integration.
-- **USW-Lite-8-PoE / USW-Ultra-60W** — no SFP+ ports; would bottleneck the R640 to 1GbE.
-- **USW-Flex-2.5G-8** — single SFP+ combo port; can't do 10G to server and 10G uplink simultaneously.
-
-No PDU (UPS has enough outlets), no patch panel (only 3–4 devices — a panel makes sense at 8+ runs).
+No PDU (UPS has enough outlets), no patch panel (only 3–4 runs — a panel makes sense at 8+).
 
 ### Cabling
 
 | Connection | Cable | Speed |
 |------------|-------|-------|
-| R640 X710 → Switch SFP+ #1 | SFP+ DAC or LC fiber | 10 Gbps |
-| R640 I350 → Switch RJ45 | Cat6A | 1 Gbps (management / fallback) |
-| R640 iDRAC → Switch RJ45 | Cat6A | 1 Gbps |
+| R640 I350 → Home router | Cat6A | 1 Gbps |
+| R640 iDRAC → Home router | Cat6A | 1 Gbps (out-of-band management) |
 | R640 → MD1400 | SFF-8644 SAS | 12 Gbps |
-| Switch SFP+ #2 → Networking rack | SFP+ fiber or DAC (future) | 10 Gbps |
 | UPS → R640 (×2 PSU) | IEC C13/C14 | — |
 | UPS → MD1400 (×2 PSU) | IEC C13/C14 | — |
-| UPS → Switch | IEC or barrel adapter | — |
+
+The X710 10GbE SFP+ ports on the daughter card are installed but unused; they become useful once a managed switch is added.
 
 ---
 

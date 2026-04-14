@@ -54,17 +54,17 @@ Unraid restarts Docker on every boot. External networks would need to be recreat
 
 ## Rack / Hardware
 
-### Switch — USW-Pro-Max-16 over alternatives
+### Direct-to-router over a managed switch (for now)
 
-Two SFP+ ports needed simultaneously (10G to server + 10G uplink to networking rack). Staying in the UniFi ecosystem is worth the delta on a long build-out timeline. See full rationale in [hardware.md](hardware.md#switch--ubiquiti-usw-pro-max-16).
+The R640 connects straight to the home router via 1GbE. A managed switch is documented as a future upgrade (below) rather than a current component — one port on the home router is enough for a single-host stack, and the X710 10GbE SFP+ ports on the R640 daughter card aren't saturated by any current workload. Upgrading to a managed switch only becomes worthwhile when a second host or multi-gig client transfers enter the picture.
 
 ### No PDU
 
-The UPS has enough outlets for the current device count (R640, MD1400, switch). A PDU adds cost and complexity for no benefit at this scale.
+The UPS has enough outlets for the current device count (R640, MD1400). A PDU adds cost and complexity for no benefit at this scale.
 
 ### No patch panel
 
-Three to four devices — direct patch cables are cleaner than terminating to a panel. A panel makes sense at 8+ runs, which only applies to the future networking rack.
+Two runs (R640 NIC + iDRAC) — direct patch cables are cleaner than terminating to a panel. A panel makes sense at 8+ runs, which only applies to the future networking rack.
 
 ### UPS at the bottom
 
@@ -101,7 +101,7 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 | GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams | Must be LP form factor |
 | RAM to 128 GB+ | Comfortable headroom for everything | DDR4 RDIMM, verify DIMM config for 6146 dual-socket |
 | Second MD1400 | 12 more drive bays via daisy-chain | LSI 9300-8e supports it; drops into U5–6 |
-| 10GbE switch to client devices | Multi-gigabit transfers where clients support it | X710 on R640 already has SFP+ |
+| Managed switch + 10G LAN | Saturate X710 SFP+; dedicated networking rack; VLAN segregation | Candidate: **Ubiquiti USW-Pro-Max-16** (12×1GbE + 4×2.5GbE + 2×10G SFP+, fanless, UniFi-managed) — SFP+ #1 → R640 X710, SFP+ #2 → uplink to networking rack. Alternatives considered: USW-Enterprise-8-PoE (bundled PoE is wasted here), MikroTik CRS310-8G+2S+IN ($50 cheaper but loses UniFi integration), USW-Flex-2.5G-8 (only one SFP+, can't do both 10G server and 10G uplink simultaneously). |
 
 ### Architectural changes (if needs change significantly)
 
