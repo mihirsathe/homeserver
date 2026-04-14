@@ -11,8 +11,10 @@ Setup once:
 Icons:
     Place PNGs in docs/assets/diagrams/icons/ named:
         plex.png overseerr.png tautulli.png sabnzbd.png prowlarr.png
-        cloudflared.png cloudflare.png usenet.png
-    Source: https://github.com/walkxcode/dashboard-icons/tree/main/png
+        cloudflare.png
+    Source: https://github.com/homarr-labs/dashboard-icons/tree/main/png
+    (cloudflared reuses cloudflare.png — same company, different endpoint.
+     Usenet + indexers use mingrammer's generic Internet icon.)
 
 Render:
     cd docs/assets/diagrams && python external-access.py
@@ -23,6 +25,7 @@ from diagrams import Cluster, Diagram, Edge
 from diagrams.custom import Custom
 from diagrams.generic.network import Router
 from diagrams.onprem.client import Users
+from diagrams.onprem.network import Internet
 
 ICONS = Path(__file__).parent / "icons"
 
@@ -85,12 +88,12 @@ with Diagram(
     client = Users("Remote Client\n(Phone · Laptop)")
     cf_edge = Custom("Cloudflare Edge", ico("cloudflare"))
 
-    usenet = Custom("Usenet Provider", ico("usenet"))
-    indexers = Custom("Indexers", ico("prowlarr"))
+    usenet = Internet("Usenet Provider")
+    indexers = Internet("Indexers")
 
     with Cluster("", graph_attr=home_cluster_attr):
         router = Router("Home Router")
-        cloudflared = Custom("cloudflared", ico("cloudflared"))
+        cloudflared = Custom("cloudflared\n(Tunnel Client)", ico("cloudflare"))
 
         with Cluster("Family-Facing", graph_attr=stack_cluster_attr):
             plex = Custom("Plex", ico("plex"))

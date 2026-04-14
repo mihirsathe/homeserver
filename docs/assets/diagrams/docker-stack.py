@@ -11,8 +11,9 @@ Setup once:
 Icons:
     Place PNGs in docs/assets/diagrams/icons/ named:
         plex.png overseerr.png radarr.png sonarr.png lidarr.png
-        prowlarr.png sabnzbd.png usenet.png
-    Source: https://github.com/walkxcode/dashboard-icons/tree/main/png
+        prowlarr.png sabnzbd.png
+    Source: https://github.com/homarr-labs/dashboard-icons/tree/main/png
+    (Usenet provider uses mingrammer's generic Internet icon.)
 
 Render:
     cd docs/assets/diagrams && python docker-stack.py
@@ -23,6 +24,7 @@ from diagrams import Cluster, Diagram, Edge
 from diagrams.custom import Custom
 from diagrams.generic.storage import Storage
 from diagrams.onprem.client import Users
+from diagrams.onprem.network import Internet
 
 ICONS = Path(__file__).parent / "icons"
 
@@ -73,7 +75,7 @@ with Diagram(
     edge_attr=edge_attr,
 ):
     viewer = Users("Viewer")
-    usenet = Custom("Usenet Provider", ico("usenet"))
+    usenet = Internet("Usenet Provider")
 
     with Cluster("Home Server · Docker medianet", graph_attr=cluster_attr):
         overseerr = Custom("Overseerr", ico("overseerr"))
