@@ -1,14 +1,60 @@
-# Diagram drafts
+# Diagram drafts (revision 3)
 
-**Not linked from nav.** Four candidate diagrams for the doc site. Pick which to keep; rejected drafts and this file get deleted afterward.
-
-Destination notes for each diagram appear above it; change if a different home makes more sense.
+**Not linked from nav.** Pivoted off Mermaid — moving to hand-crafted SVG (rack) + mingrammer/diagrams (flows, real product icons). One diagram landed for review; the other three are queued behind your aesthetic sign-off on #1.
 
 ---
 
-## 1. Physical topology (candidate: top of `hardware.md`)
+## 1. Physical topology — SVG (candidate: top of `hardware.md`)
 
-Rack contents + every cable that leaves the rack. Zooms out one level from the rack-layout table further down the page.
+Rack faceplate detail (R640 8-bay, MD1400 12-bay grid with parity/data/empty color-coded, UPS LCD), single uplink with shared-LOM iDRAC, color-coded power/data/SAS lines, external home router.
+
+![Rack diagram](assets/rack.svg)
+
+Source: [assets/rack.svg](assets/rack.svg)
+
+---
+
+## 2. Storage pool layout — SVG (candidate: `hardware.md` storage section)
+
+Physical drives → Unraid pools → shares. Same hand-SVG aesthetic as the rack: dark chassis with color-coded bay grids (parity amber, data purple, cache blue, empty slate), pool boxes with accent stripe, share pills with monospaced mount paths. Dashed amber connector for the "parity protects" relationship since parity isn't stored content.
+
+![Storage diagram](assets/storage.svg)
+
+Source: [assets/storage.svg](assets/storage.svg)
+
+---
+
+## 3. Docker stack + request flow — mingrammer (candidate: `software.md`)
+
+Flow graph per feedback lesson #7 — auto-layout tool with real product logos, not hand-SVG. Source: [assets/diagrams/docker-stack.py](assets/diagrams/docker-stack.py). Output: `assets/docker-stack.png` (user renders via `python docker-stack.py` after `pip install diagrams` + icon download).
+
+Structure: Viewer → Seerr (Plex Watchlist-driven) → *arr cluster → Prowlarr (search) / SABnzbd (NZB queue) → Usenet provider (dashed, external) → `/data/usenet` → hardlink into `/data/media` → Plex → back to Viewer. Numbered 1–7 matching the text flow in `software.md`.
+
+---
+
+## 4. External access boundary — mingrammer (candidate: `software.md` external-access section)
+
+Illustrates the one-port-open property **and** the VPN-forced egress for downloaders. Source: [assets/diagrams/external-access.py](assets/diagrams/external-access.py). Output: `assets/external-access.png`.
+
+Structure: Remote Plex client → Home router (TCP 32400 port-forward, blue) → Plex. Admin device ↔ Tailscale (dashed purple, outbound-initiated WireGuard) → Seerr + Tautulli. SAB + Prowlarr live in a "VPN-egress only" subcluster — their traffic is force-routed through Gluetun → Mullvad (dashed amber) → Usenet/indexers. Everything else on the router is closed.
+
+---
+
+## Icons
+
+Both mingrammer diagrams load icons from `docs/assets/diagrams/icons/`. Graphviz accepts SVG and PNG interchangeably. Sources:
+
+- [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png) — plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, tautulli (all PNG)
+- [seerr-team/seerr logo_full.svg](https://github.com/seerr-team/seerr/blob/develop/public/logo_full.svg) — seerr (SVG)
+- Wikimedia Commons — [Tailscale-Logo-Black.svg](https://commons.wikimedia.org/wiki/File:Tailscale-Logo-Black.svg), [Mullvad_logo.svg](https://commons.wikimedia.org/wiki/File:Mullvad_logo.svg) (SVG)
+
+---
+
+The existing Mermaid drafts for 2–4 are below for reference only; do not land them.
+
+---
+
+## (reference, do not land) ~~1. Physical topology — Mermaid r1~~
 
 ```mermaid
 flowchart LR
@@ -97,9 +143,9 @@ flowchart LR
 
 ---
 
-## 4. External access: Plex port-forward + Tailscale admin plane (candidate: `software.md` external-access section)
+## (reference, do not land) ~~4. External access — Mermaid r2~~
 
-Illustrates the one-port-open property — Plex is forwarded directly on TCP 32400; every other service is reachable only over the tailnet.
+The mingrammer source at `assets/diagrams/external-access.py` is the current version. Block below kept for provenance — earlier revision assumed Cloudflare Tunnel; this one reflects the port-forward + Tailscale pivot.
 
 ```mermaid
 flowchart LR

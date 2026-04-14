@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="820" height="480" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="40" y="38" font-size="18" font-weight="700" fill="#0f172a">Storage Layout</text>
+  <text x="40" y="56" font-size="11" fill="#64748b">Physical Drives &#x2192; Unraid Pools &#x2192; Shares</text>
+
+  <!-- Column headers -->
+  <g font-size="10" font-weight="600" fill="#94a3b8" text-anchor="middle" letter-spacing="1">
+    <text x="160" y="92">PHYSICAL</text>
+    <text x="440" y="92">POOLS</text>
+    <text x="700" y="92">SHARES</text>
+  </g>
+
+  <!-- ============ PHYSICAL: MD1400 ============ -->
+  <g transform="translate(40, 110)">
+    <rect width="240" height="90" fill="#0f172a" stroke="#1e293b" stroke-width="0.5" rx="2"/>
+    <g transform="translate(14, 10)">
+      <!-- Row 1: parity + 3 data -->
+      <rect x="0"   y="0" width="50" height="20" fill="#b45309" stroke="#7c2d12" stroke-width="0.5"/>
+      <rect x="52"  y="0" width="50" height="20" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+      <rect x="104" y="0" width="50" height="20" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+      <rect x="156" y="0" width="50" height="20" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+      <!-- Row 2: 1 data + 3 empty -->
+      <rect x="0"   y="22" width="50" height="20" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+      <rect x="52"  y="22" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="104" y="22" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="156" y="22" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <!-- Row 3: 4 empty -->
+      <rect x="0"   y="44" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="52"  y="44" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="104" y="44" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="156" y="44" width="50" height="20" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <!-- Capacity marks on populated bays -->
+      <g font-size="9" font-weight="600" text-anchor="middle">
+        <text x="25" y="14" fill="#fef3c7">16T</text>
+        <text x="77"  y="14" fill="#ede9fe">8T</text>
+        <text x="129" y="14" fill="#ede9fe">8T</text>
+        <text x="181" y="14" fill="#ede9fe">8T</text>
+        <text x="25"  y="36" fill="#ede9fe">8T</text>
+      </g>
+    </g>
+    <text x="230" y="84" fill="#f1f5f9" font-size="11" font-weight="600" text-anchor="end">Dell MD1400 &#xb7; 12-Bay DAS</text>
+  </g>
+
+  <!-- ============ PHYSICAL: Dell R640 (contains front bays + BOSS) ============ -->
+  <g transform="translate(40, 225)">
+    <rect width="240" height="150" fill="#0f172a" stroke="#1e293b" stroke-width="0.5" rx="2"/>
+
+    <!-- Sub-label: Front Bays -->
+    <text x="14" y="12" font-size="8" font-weight="600" fill="#64748b" letter-spacing="1">FRONT BAYS &#xb7; 8</text>
+
+    <!-- 8-bay front strip -->
+    <g transform="translate(14, 18)">
+      <rect x="0"   y="0" width="24" height="22" fill="#1d4ed8" stroke="#0b1d4d" stroke-width="0.5"/>
+      <rect x="26"  y="0" width="24" height="22" fill="#1d4ed8" stroke="#0b1d4d" stroke-width="0.5"/>
+      <rect x="52"  y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="78"  y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="104" y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="130" y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="156" y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <rect x="182" y="0" width="24" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <g font-size="8" font-weight="600" fill="#dbeafe" text-anchor="middle">
+        <text x="12" y="15">480G</text>
+        <text x="38" y="15">480G</text>
+      </g>
+    </g>
+
+    <!-- Sub-label: BOSS card -->
+    <text x="14" y="80" font-size="8" font-weight="600" fill="#64748b" letter-spacing="1">BOSS-S1 CARD &#xb7; M.2 MIRROR</text>
+
+    <!-- BOSS M.2 pair -->
+    <g transform="translate(14, 86)">
+      <rect x="0"  y="0" width="36" height="22" fill="#475569" stroke="#64748b" stroke-width="0.5" rx="1"/>
+      <rect x="40" y="0" width="36" height="22" fill="#475569" stroke="#64748b" stroke-width="0.5" rx="1"/>
+      <g font-size="9" font-weight="600" fill="#f1f5f9" text-anchor="middle">
+        <text x="18" y="15">240G</text>
+        <text x="58" y="15">240G</text>
+      </g>
+    </g>
+
+    <!-- Main chassis label -->
+    <text x="230" y="140" fill="#f1f5f9" font-size="12" font-weight="700" text-anchor="end">Dell R640</text>
+  </g>
+
+  <!-- ============ POOLS (all 54h, centered on each physical row) ============ -->
+  <!-- Unraid array: chassis center y=155 → box y=128, h=54 -->
+  <g transform="translate(340, 128)">
+    <rect width="200" height="54" fill="#ffffff" stroke="#0f172a" stroke-width="1.5" rx="4"/>
+    <rect x="0" y="0" width="6" height="54" fill="#6d28d9" rx="2"/>
+    <text x="18" y="22" font-size="12" font-weight="700" fill="#0f172a">Unraid Array</text>
+    <text x="18" y="38" font-size="10" fill="#475569">Single Parity</text>
+    <text x="190" y="44" font-size="12" font-weight="700" fill="#6d28d9" text-anchor="end">32 TB Usable</text>
+  </g>
+
+  <!-- Cache pool: R640 front bay center y=254 → box y=227, h=54 -->
+  <g transform="translate(340, 227)">
+    <rect width="200" height="54" fill="#ffffff" stroke="#0f172a" stroke-width="1.5" rx="4"/>
+    <rect x="0" y="0" width="6" height="54" fill="#1d4ed8" rx="2"/>
+    <text x="18" y="22" font-size="12" font-weight="700" fill="#0f172a">Cache Pool</text>
+    <text x="18" y="38" font-size="10" fill="#475569">BTRFS Mirror</text>
+    <text x="190" y="44" font-size="12" font-weight="700" fill="#1d4ed8" text-anchor="end">480 GB</text>
+  </g>
+
+  <!-- Boot: R640 BOSS center y=322 → box y=295, h=54 -->
+  <g transform="translate(340, 295)">
+    <rect width="200" height="54" fill="#ffffff" stroke="#0f172a" stroke-width="1.5" rx="4"/>
+    <rect x="0" y="0" width="6" height="54" fill="#64748b" rx="2"/>
+    <text x="18" y="22" font-size="12" font-weight="700" fill="#0f172a">Boot</text>
+    <text x="18" y="38" font-size="10" fill="#475569">ZFS Mirror</text>
+    <text x="190" y="44" font-size="12" font-weight="700" fill="#475569" text-anchor="end">240 GB</text>
+  </g>
+
+  <!-- ============ SHARES (54h, centered on same y as pools) ============ -->
+  <g transform="translate(600, 128)">
+    <rect width="200" height="54" fill="#faf5ff" stroke="#6d28d9" stroke-width="1" rx="27"/>
+    <text x="100" y="24" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Consolas, monospace">/mnt/user/data</text>
+    <text x="100" y="40" font-size="10" fill="#6d28d9" text-anchor="middle">Media + Downloads</text>
+  </g>
+
+  <g transform="translate(600, 227)">
+    <rect width="200" height="54" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1" rx="27"/>
+    <text x="100" y="24" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Consolas, monospace">/mnt/user/appdata</text>
+    <text x="100" y="40" font-size="10" fill="#1d4ed8" text-anchor="middle">Docker Configs</text>
+  </g>
+
+  <g transform="translate(600, 295)">
+    <rect width="200" height="54" fill="#f8fafc" stroke="#64748b" stroke-width="1" rx="27"/>
+    <text x="100" y="24" font-size="12" font-weight="700" fill="#334155" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Consolas, monospace">/boot</text>
+    <text x="100" y="40" font-size="10" fill="#64748b" text-anchor="middle">Unraid OS</text>
+  </g>
+
+  <!-- ============ CONNECTORS: physical -> pool (y matches sub-component center) ============ -->
+  <g fill="none" stroke="#64748b" stroke-width="1.75">
+    <path d="M 280 155 L 340 155" marker-end="url(#arr)"/>
+    <path d="M 280 254 L 340 254" marker-end="url(#arr)"/>
+    <path d="M 280 322 L 340 322" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ============ CONNECTORS: pool -> share ============ -->
+  <g fill="none" stroke="#64748b" stroke-width="1.75">
+    <path d="M 540 155 L 600 155" marker-end="url(#arr)"/>
+    <path d="M 540 254 L 600 254" marker-end="url(#arr)"/>
+    <path d="M 540 322 L 600 322" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ============ LEGEND ============ -->
+  <g transform="translate(40, 440)">
+    <rect x="0" y="-7" width="14" height="8" fill="#b45309"/>
+    <text x="18" y="0" font-size="10" fill="#334155">Parity</text>
+    <rect x="64" y="-7" width="14" height="8" fill="#6d28d9"/>
+    <text x="82" y="0" font-size="10" fill="#334155">Data</text>
+    <rect x="124" y="-7" width="14" height="8" fill="#1d4ed8"/>
+    <text x="142" y="0" font-size="10" fill="#334155">Cache SSD</text>
+    <rect x="204" y="-7" width="14" height="8" fill="#475569"/>
+    <text x="222" y="0" font-size="10" fill="#334155">Boot M.2</text>
+    <rect x="282" y="-7" width="14" height="8" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+    <text x="300" y="0" font-size="10" fill="#334155">Empty Bay</text>
+  </g>
+</svg>
