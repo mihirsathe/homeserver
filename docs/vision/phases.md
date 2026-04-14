@@ -24,7 +24,7 @@ Headroom gained: Plex metadata operations, concurrent transcoding, SABnzbd par2 
 
 | Tier | What | How |
 |------|------|-----|
-| 1 — Local redundancy | CA Appdata Backup (weekly to array), BTRFS RAID1 cache pool, BOSS card mirror | Already exists |
+| 1 — Local redundancy | Appdata Backup plugin (weekly to array), BTRFS RAID1 cache pool, BOSS card mirror | Already exists |
 | 2 — External local | USB 3.0 external drive (4–8TB) via Unassigned Devices plugin, rsync via User Script weekly | Store in different room or fireproof enclosure; rotate two drives monthly |
 | 3 — Cloud offsite | rclone → Backblaze B2 ($6/TB/month). For ~50–100GB of appdata, cost is under $1/month. Focus on irreplaceable data: Plex watch history, Docker configs, HA config, personal files. Not the media library. | |
 
@@ -32,12 +32,13 @@ Headroom gained: Plex metadata operations, concurrent transcoding, SABnzbd par2 
 
 Configure Unraid's notification system for: drive errors, SMART warnings, parity check results, array status changes, Docker container health. At minimum: email + one push service (Pushover, Discord). Know immediately when something needs attention.
 
-### 1.5 Harden Cloudflare Tunnel
+### 1.5 Harden the Tailscale admin plane
 
-- Verify admin-only routes (`manage.yourdomain.com/*`) are restricted to your email only
-- Session durations: 7-day family, 24-hour admin
-- Enable Cloudflare WAF rules on the tunnel
-- Consider TOTP authenticator as second factor (Cloudflare Access supports it alongside OTP email)
+- Tailscale ACLs: restrict `tag:admin → tag:server` to the specific admin ports (7878, 8989, 8686, 9696, 8080, 5055, 6767, 8181, 80/443 for Unraid UI). Deny everything else.
+- Enforce SSO + device posture check; require MagicDNS + HTTPS certs for any browser-facing admin UI
+- Short key-expiry for admin devices (30–90 days); indefinite for the server node
+- `tailscale up --ssh` on the server so SSH rides the tailnet (no port 22 on LAN)
+- Quarterly audit of machines + ACLs in the Tailscale admin console
 
 ---
 
@@ -121,7 +122,7 @@ For Proxmox nodes: run NUT in server/client mode. Unraid is the NUT server; Prox
 
 ### 3.3 Redundant Internet (Optional)
 
-LTE/5G modem (T-Mobile Home Internet, ~$50/month) as failover WAN on the UniFi gateway (native dual-WAN). Keeps Cloudflare Tunnel connected and remote access working during ISP outages.
+LTE/5G modem (T-Mobile Home Internet, ~$50/month) as failover WAN on the UniFi gateway (native dual-WAN). Keeps Tailscale reachable and remote access working during ISP outages.
 
 Critical principle: **local services must always work without internet.** Home Assistant, Plex for local clients, and cameras should never depend on the WAN.
 
@@ -215,11 +216,11 @@ Storage: 500GB–2TB on the array for 30–90 day retention of event clips. Cont
 
 ### 7.2 Key Services
 
-**Nextcloud**: deploy with PostgreSQL + Redis. Store data on array. Expose via Cloudflare Tunnel or Tailscale. Budget 2–4GB RAM.
+**Nextcloud**: deploy with PostgreSQL + Redis. Store data on array. Reach it over Tailscale (same admin plane as the rest of the stack). Budget 2–4GB RAM.
 
 **Immich**: store photo library on array, back up to Backblaze B2 — personal photos are irreplaceable. Can use the RTX 3050 for faster ML inference.
 
-**Tailscale**: install on phone, laptop, and as a subnet router container on Unraid. Full access to every internal service as if physically at home. Free for personal use up to 100 devices. Complements Cloudflare Tunnel rather than replacing it.
+**Tailscale**: already the primary admin plane (Phase 1). Installed on every admin phone/laptop and as a subnet router on Unraid. Free for personal use up to 100 devices.
 
 ---
 

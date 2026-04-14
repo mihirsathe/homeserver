@@ -1,21 +1,20 @@
 # =============================================================================
-# docker-compose.yml — Unraid / Compose Manager Plus edition
+# docker-compose.yml — Unraid edition
 #
 # WHERE THIS FILE LIVES ON THE SERVER:
 #   /mnt/user/appdata/homeserver/homeserver/docker-compose.yml
 #
-# HOW TO REGISTER WITH COMPOSE MANAGER PLUS:
-#   Option A (recommended): In the plugin settings, change Projects Folder to
-#     /mnt/user/appdata
-#   Then "Add Stack" and it will detect this directory automatically.
-#
-#   Option B: Use "Indirect Path" in the plugin and point at this file directly.
+# HOW THE STACK IS BROUGHT UP:
+#   Unraid ships `docker compose` in the base OS — no plugin needed. The
+#   `media_stack_up` User Script (installed by setup-unraid.sh) runs at
+#   array start and issues:
+#     cd /mnt/user/appdata/homeserver/homeserver
+#     docker compose --env-file .env --env-file generated.env up -d
 #
 # UNRAID-SPECIFIC DECISIONS IN THIS FILE:
 #
-#   Absolute paths everywhere — relative ./configs/ paths break when
-#   Compose Manager Plus runs from its own working directory on /boot.
-#   Every volume mount uses its full /mnt/user/... path.
+#   Absolute paths everywhere — volume mounts use their full /mnt/user/...
+#   path so Compose doesn't depend on the caller's working directory.
 #
 #   Networks defined here, not external:true — on vanilla Linux you
 #   pre-create networks before first run. On Unraid the Docker service
@@ -25,54 +24,97 @@
 #
 #   No systemd — fan control and scheduled maintenance run via
 #   Unraid's User Scripts plugin instead.
+#
+# NETWORK PLANES:
+#
+#   downloaders  — gluetun, sabnzbd, prowlarr. SAB and Prowlarr share
+#                  gluetun's netns so all their outbound traffic exits via
+#                  Mullvad with a kill-switch. Only gluetun publishes ports.
+#   frontend     — plex, seerr, tautulli, bazarr. Family-facing services.
+#   automation   — sonarr, radarr, lidarr. Dual-homed to frontend (for
+#                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
+#                  Prowlarr via gluetun). Blocks a popped frontend container
+#                  from pivoting straight into the downloader plane.
+#
+# PUBLIC-FACING:
+#   Only plex is reachable from the internet — TCP 32400 is port-forwarded
+#   on the home router. Everything else is admin-only, reachable via
+#   Tailscale (installed on the Unraid host, not inside containers).
 # =============================================================================
 
 networks:
-  # Single bridge network — services reach each other by container name.
-  # e.g. radarr connects to sabnzbd at http://sabnzbd:8080/sabnzbd.
-  # A previous revision split traffic into `medianet` + `cloudflared`, but the
-  # tunnel container has to be on both (so it can route to every service it
-  # fronts), which meant the split enforced nothing. Now: one network.
-  medianet:
-    name: medianet
+  downloaders:
+    name: downloaders
+    driver: bridge
+  frontend:
+    name: frontend
+    driver: bridge
+  automation:
+    name: automation
     driver: bridge
 
 services:
 
   # ---------------------------------------------------------------------------
-  # CLOUDFLARE TUNNEL — fully configured by TUNNEL_TOKEN env var
+  # GLUETUN — outbound VPN for SABnzbd + Prowlarr
   #
-  # No healthcheck: cloudflared's image is distroless (no shell, no curl, no
-  # wget). The container's own exit semantics + Docker restart policy are the
-  # liveness signal here.
+  # Mullvad WireGuard. FIREWALL=on enforces a kill-switch: if the tunnel drops,
+  # SAB and Prowlarr have zero outbound connectivity. This is the whole point
+  # — a misconfiguration fails closed, not open.
+  #
+  # Gluetun publishes SAB's 8080 and Prowlarr's 9696 on the host. Those
+  # services remove their own `ports:` because they share gluetun's netns
+  # (network_mode: "service:gluetun") and can't publish ports independently.
   # ---------------------------------------------------------------------------
-  cloudflared:
-    # cloudflared doesn't publish a float-tag channel; bump manually on updates.
-    # Check https://github.com/cloudflare/cloudflared/releases for the current stable.
-    image: cloudflare/cloudflared:2024.12.2
-    container_name: cloudflared
-    command: tunnel --no-autoupdate run
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${VPN_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${VPN_ADDRESS}
+      - SERVER_CITIES=${VPN_CITY}
+      - FIREWALL=on
+      # Ports we want reachable from the LAN host through the gluetun netns.
+      - FIREWALL_VPN_INPUT_PORTS=8080,9696
+      - TZ=${TZ}
     networks:
-      - medianet
+      - downloaders
+    ports:
+      # SAB and Prowlarr are owned by gluetun's netns; their UIs are published here.
+      - "8080:8080"   # sabnzbd
+      - "9696:9696"   # prowlarr
     restart: unless-stopped
+    healthcheck:
+      # Gluetun exposes its own health endpoint on 9999 (localhost-only).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9999/v1/openvpn/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
           memory: 256M
 
   # ---------------------------------------------------------------------------
-  # SABNZBD
+  # SABNZBD — inside gluetun's netns
   # sabnzbd.ini is pre-generated by generate-configs.py and bind-mounted
   # into the config directory. SABnzbd reads it on startup — no wizard.
   # ---------------------------------------------------------------------------
   sabnzbd:
-    # hotio :release = stable channel, auto-absorbs patch-level updates
     image: ghcr.io/hotio/sabnzbd:release
     container_name: sabnzbd
-    networks:
-      - medianet
+    # network_mode ties this container to gluetun's netns. No `networks:` and
+    # no `ports:` — both are inherited from / owned by gluetun.
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun: { condition: service_healthy }
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -82,10 +124,15 @@ services:
       - /mnt/user/appdata/sabnzbd:/config
       - ${STACK_DIR}/configs/sabnzbd/sabnzbd.ini:/config/sabnzbd.ini
       - /mnt/user/data:/data
-    ports:
-      - "8080:8080"
+      # Incomplete downloads live on the cache pool (SSD) — par2 repair and
+      # unrar hammer this path, and doing it on spinning disks is 10–20×
+      # slower. Separate cache-only share so mover never touches it.
+      # Completed files move to /data/usenet/complete (array), where hardlinks
+      # to /data/media work because both are on the same filesystem.
+      - /mnt/user/usenet-incomplete:/incomplete
     restart: unless-stopped
     healthcheck:
+      # Runs inside gluetun's netns, so localhost:8080 is SAB's own port.
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/sabnzbd/api?mode=version' || exit 1"]
       interval: 30s
       timeout: 10s
@@ -97,13 +144,15 @@ services:
           memory: 2G
 
   # ---------------------------------------------------------------------------
-  # PROWLARR — config.xml pre-generated, indexers wired by bootstrap.py
+  # PROWLARR — inside gluetun's netns
+  # config.xml pre-generated, indexers wired by bootstrap.py
   # ---------------------------------------------------------------------------
   prowlarr:
     image: ghcr.io/hotio/prowlarr:release
     container_name: prowlarr
-    networks:
-      - medianet
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun: { condition: service_healthy }
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -112,8 +161,6 @@ services:
     volumes:
       - /mnt/user/appdata/prowlarr:/config
       - ${STACK_DIR}/configs/prowlarr/config.xml:/config/config.xml
-    ports:
-      - "9696:9696"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9696/prowlarr/ping || exit 1"]
@@ -127,13 +174,16 @@ services:
           memory: 512M
 
   # ---------------------------------------------------------------------------
-  # RADARR — config.xml pre-generated, root folder + download client via bootstrap.py
+  # RADARR — dual-homed on automation + downloaders
+  # Reaches SAB and Prowlarr through gluetun's published bridge endpoint.
+  # config.xml pre-generated, root folder + download client via bootstrap.py
   # ---------------------------------------------------------------------------
   radarr:
     image: ghcr.io/hotio/radarr:release
     container_name: radarr
     networks:
-      - medianet
+      - automation
+      - downloaders
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -146,9 +196,6 @@ services:
     ports:
       - "7878:7878"
     restart: unless-stopped
-    # service_healthy gates startup on the downstream's /ping actually responding,
-    # not just the container process existing. bootstrap.py's retry loop was
-    # papering over this race before.
     depends_on:
       sabnzbd:  { condition: service_healthy }
       prowlarr: { condition: service_healthy }
@@ -170,7 +217,8 @@ services:
     image: ghcr.io/hotio/sonarr:release
     container_name: sonarr
     networks:
-      - medianet
+      - automation
+      - downloaders
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -204,7 +252,8 @@ services:
     image: ghcr.io/hotio/lidarr:release
     container_name: lidarr
     networks:
-      - medianet
+      - automation
+      - downloaders
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -237,14 +286,18 @@ services:
   # PLEX_PREFERENCE_* vars are applied to Preferences.xml on FIRST BOOT ONLY
   # by the official plexinc/pms-docker image. After that, edit Preferences.xml
   # directly if you need to change them.
+  #
+  # Only public-facing service: TCP 32400 is forwarded on the router. UDP
+  # ports for DLNA/GDM are deliberately NOT published — DLNA is off and
+  # clients discover via Plex account, not broadcast. Closes CVE-2021-33959
+  # UDP amplification.
   # ---------------------------------------------------------------------------
   plex:
-    # :public = Plex's stable public release channel
     image: plexinc/pms-docker:public
     container_name: plex
     runtime: nvidia
     networks:
-      - medianet
+      - frontend
     environment:
       - TZ=${TZ}
       - PLEX_UID=${PUID}
@@ -252,8 +305,12 @@ services:
       - PLEX_CLAIM=${PLEX_CLAIM}
       - ADVERTISE_IP=http://${PLEX_LAN_IP}:32400
       - ALLOWED_NETWORKS=${PLEX_LAN_SUBNET}
+      # Minimal NVIDIA capability surface. `all` grants compute+utility+
+      # video+graphics+display — way more than Plex needs, and historical
+      # nvidia-container-toolkit escapes (CVE-2024-0132) abused the broader
+      # set. compute+video is enough for NVENC/NVDEC.
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video
       - PLEX_PREFERENCE_FriendlyName=${PLEX_SERVER_NAME}
       - PLEX_PREFERENCE_LanNetworks=${PLEX_LAN_SUBNET}
       - PLEX_PREFERENCE_HardwareAcceleratedCodecs=1
@@ -267,20 +324,15 @@ services:
       - PLEX_PREFERENCE_RelayEnabled=0
       - PLEX_PREFERENCE_ScheduledLibraryUpdatesEnabled=1
       - PLEX_PREFERENCE_ScheduledLibraryUpdateAt=3
+      - PLEX_PREFERENCE_DlnaEnabled=0
     volumes:
       - /mnt/user/appdata/plex:/config
       - /mnt/user/appdata/plex-transcode:/transcode
       # Read-only — Plex never needs to modify the library; the arr apps own writes.
       - /mnt/user/data/media:/data/media:ro
     ports:
+      # Only the main HTTP port is published. Router forwards WAN:32400 → here.
       - "32400:32400"
-      - "8324:8324"
-      - "32469:32469"
-      - "1900:1900/udp"
-      - "32410:32410/udp"
-      - "32412:32412/udp"
-      - "32413:32413/udp"
-      - "32414:32414/udp"
     restart: unless-stopped
     healthcheck:
       # /identity is unauthenticated and returns quickly even during library scans.
@@ -296,26 +348,37 @@ services:
           memory: 8G
 
   # ---------------------------------------------------------------------------
-  # OVERSEERR — family-facing request portal
+  # SEERR — family request portal + Plex Watchlist auto-request
   # settings.json pre-generated, Plex + arr connections via bootstrap.py
   #
-  # No `depends_on` block here: Overseerr connects to Radarr/Sonarr/Plex lazily
-  # via HTTP at request time, not at container start, so ordering is only a
-  # bootstrap.py concern (it waits for each service before wiring connections).
+  # Runs as UID 1000 (node user) — PUID/PGID are ignored. Appdata is chowned
+  # to 1000:1000 by bootstrap.py on first run.
+  #
+  # No public exposure — reachable only via Tailscale to the Unraid host's
+  # LAN IP at :5055. Family never visits a Seerr URL; they add titles to
+  # their Plex Watchlist and Seerr auto-requests within ~5–15 min.
+  #
+  # No `depends_on:` — Seerr connects to Plex/arr lazily via HTTP at request
+  # time, not at container start. bootstrap.py waits per-service before wiring.
+  #
+  # UID note: Seerr's image runs as the `node` user (UID 1000) by default and
+  # doesn't read PUID/PGID, but Docker's `user:` override works fine per
+  # upstream (confirmed by a Seerr collaborator — the "remove user directive"
+  # migration note is specifically for people upgrading from pre-Seerr images
+  # where UID 1000 was previously hardcoded). Running Seerr as 99:100 keeps
+  # it consistent with the rest of the stack and with Unraid's nobody:users.
   # ---------------------------------------------------------------------------
-  overseerr:
-    image: ghcr.io/hotio/overseerr:release
-    container_name: overseerr
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
+    user: "${PUID}:${PGID}"
     networks:
-      - medianet
+      - frontend
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - UMASK=002
       - TZ=${TZ}
     volumes:
-      - /mnt/user/appdata/overseerr:/config
-      - ${STACK_DIR}/configs/overseerr/settings.json:/config/settings.json
+      - /mnt/user/appdata/seerr:/app/config
     ports:
       - "5055:5055"
     restart: unless-stopped
@@ -339,7 +402,7 @@ services:
     image: ghcr.io/hotio/tautulli:release
     container_name: tautulli
     networks:
-      - medianet
+      - frontend
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -363,15 +426,44 @@ services:
           memory: 512M
 
   # ---------------------------------------------------------------------------
+  # RECYCLARR — sync TRaSH-Guides quality profiles + custom formats into
+  # Radarr/Sonarr on a schedule. Headless CLI; runs once per CRON_SCHEDULE
+  # then sleeps. No UI, no published ports.
+  #
+  # recyclarr.yml is pre-written by generate-configs.py into
+  # /mnt/user/appdata/recyclarr/recyclarr.yml and reads API keys from env.
+  # ---------------------------------------------------------------------------
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    user: "${PUID}:${PGID}"
+    networks:
+      - automation
+    environment:
+      - TZ=${TZ}
+      - CRON_SCHEDULE=0 5 * * MON
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+    volumes:
+      - /mnt/user/appdata/recyclarr:/config
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
   # BAZARR — subtitle automation
   # config.ini pre-generated with Sonarr + Radarr connections.
-  # Same lazy-HTTP rationale as Overseerr: no runtime `depends_on` needed.
+  # Same lazy-HTTP rationale as Seerr: no runtime `depends_on` needed.
   # ---------------------------------------------------------------------------
   bazarr:
     image: ghcr.io/hotio/bazarr:release
     container_name: bazarr
     networks:
-      - medianet
+      - frontend
+      # bazarr talks to sonarr/radarr which are dual-homed on automation.
+      - automation
     environment:
       - PUID=${PUID}
       - PGID=${PGID}

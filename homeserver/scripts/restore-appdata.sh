@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# restore-appdata.sh — interactive restore from a CA Appdata Backup archive
+# restore-appdata.sh — interactive restore from a Appdata Backup archive
 #
 # Walks you through selecting an archive (local or offsite), stopping affected
 # containers, extracting, restarting, and waiting for healthchecks to confirm
@@ -92,7 +92,7 @@ esac
 
 for svc in $services; do
     src=""
-    # CA Appdata Backup usually nests either under ./appdata/<svc> or ./<svc>
+    # Appdata Backup usually nests either under ./appdata/<svc> or ./<svc>
     for candidate in "$tmp/appdata/$svc" "$tmp/$svc"; do
         [[ -d "$candidate" ]] && { src="$candidate"; break; }
     done

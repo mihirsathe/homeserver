@@ -8,24 +8,29 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 **Check in this order:**
 
-1. **Does Overseerr show it as "Approved"?**
-   - If pending — it's an Overseerr permission issue, not a stack issue.
-   - If failed — Overseerr → Issues tab shows why.
+1. **Did the Watchlist add reach Seerr?**
+   - Seerr polls Plex Watchlist every ~2 minutes (`plex-watchlist-sync` job). Expect up to a 2-minute lag between a family member tapping "Add to Watchlist" and Seerr submitting a request.
+   - Seerr → Requests should show the title as "Pending" or "Approved". If it never appears, the user probably doesn't have the **Auto-Request** permission — Seerr → Settings → Users → edit user → grant Auto-Request.
 
-2. **Did Radarr/Sonarr see the request?**
-   - Open Radarr/Sonarr → Activity → Queue. If nothing there, Overseerr didn't push it.
-   - Check Overseerr's connection to Radarr: Settings → Services → Radarr → Test. A green checkmark means the API key is correct.
-   - Re-run `python3 scripts/bootstrap.py` — it's idempotent and re-establishes the Overseerr → Radarr link.
+2. **Does Seerr show it as "Approved"?**
+   - If pending — the user lacks auto-approve, or it's a 4K request (4K always requires manual approval by design).
+   - If failed — Seerr → Issues tab shows why.
 
-3. **Is the *arr searching?**
+3. **Did Radarr/Sonarr see the request?**
+   - Open Radarr/Sonarr → Activity → Queue. If nothing there, Seerr didn't push it.
+   - Check Seerr's connection to Radarr: Settings → Services → Radarr → Test. A green checkmark means the API key is correct.
+   - Re-run `python3 scripts/bootstrap.py` — it's idempotent and re-establishes the Seerr → Radarr link.
+
+4. **Is the *arr searching?**
    - Radarr → Movies → click the movie → Manual Search. If "No results", Prowlarr isn't returning anything.
    - Prowlarr → Indexers → Test All. Expect green checkmarks. If red — indexer API key wrong, account expired, or indexer temporarily down.
+   - Prowlarr egresses through Gluetun; if the Mullvad tunnel is down, Prowlarr has no internet at all. See "Gluetun kill-switch engaged" below.
 
-4. **Is SABnzbd getting NZBs?**
+5. **Is SABnzbd getting NZBs?**
    - SAB → Queue. If empty, the *arr never pushed one. If stuck, check Status tab for stalled servers.
-   - SAB → Status → Connections — does it show active connections to your Usenet provider? If not, check `USENET_*` credentials in `.env`.
+   - SAB → Status → Connections — does it show active connections to your Usenet provider? If not, either the Mullvad tunnel is down (see next section) or the `USENET_*` credentials in `.env` are wrong.
 
-5. **Post-download import failure**
+6. **Post-download import failure**
    - Radarr → Activity → History → look for import errors. Usually "No files found in release" (something unzipped weirdly) or permission issues.
    - Hardlink failures: see next section.
 
@@ -83,17 +88,35 @@ rm -rf /mnt/user/appdata/plex-transcode/*
 docker image prune -f
 
 # Stuck SAB downloads in incomplete that haven't moved in days:
-ls -lah /mnt/user/data/usenet/incomplete/
+ls -lah /mnt/user/usenet-incomplete/
 # (manually remove anything you're sure is stuck)
 ```
 
 ---
 
-## External services unreachable (tunnel down)
+## Admin UIs unreachable over Tailscale
 
-LAN works, external domains don't.
+LAN still works; `mediaserver.<tailnet>.ts.net` doesn't.
 
-See [disaster-recovery.md#cloudflare-tunnel-down](disaster-recovery.md#cloudflare-tunnel-down).
+1. On the admin device: `tailscale status` — is the device itself connected? If not, Tailscale app → sign in again.
+2. Check the Unraid host is still on the tailnet: from the Unraid terminal, `tailscale status` — should show `mediaserver` as `active`. If not: `tailscale up --ssh --advertise-tags=tag:server` and re-auth via the printed URL.
+3. Tailscale admin console → Machines — confirm the host isn't expired / tagged off. If a key expired, re-run the `tailscale up` command above.
+4. ACL sanity: console → Access controls — confirm `tag:admin → tag:server` still permits the port you're trying to hit.
+
+Plex (port 32400) doesn't ride Tailscale — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
+
+---
+
+## Gluetun kill-switch engaged (SAB / Prowlarr offline)
+
+SAB UI doesn't load, Prowlarr UI doesn't load, both via `http://<server-ip>:8080` and `:9696`. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+
+This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
+
+1. `docker logs gluetun --tail 50` — look for WireGuard handshake failures or DNS resolution errors.
+2. Verify `VPN_PRIVATE_KEY`, `VPN_ADDRESS`, `VPN_CITY` in `.env` match a current Mullvad WireGuard config. Mullvad occasionally revokes keys; regenerate via the account page if needed.
+3. `docker compose up -d gluetun` — forces a clean reconnect.
+4. If Mullvad itself is having an incident (rare but not unprecedented), SAB / Prowlarr will stay offline until it recovers. That's intended behavior — nothing in this stack should ever egress on the home WAN IP for Usenet / indexer traffic.
 
 ---
 
@@ -150,6 +173,6 @@ A service's healthcheck isn't passing or port isn't bound. `wait_for` reports th
 `.env` is read by two layers:
 
 - **`generate-configs.py`** reads `.env` at run time and writes per-service config files. If you changed anything that's baked into a config (Usenet password, API key, URL base), you must re-run it.
-- **Docker Compose** reads `.env` + `generated.env` (merged into `.env.docker` for Compose Manager Plus) at `docker compose up`. If you changed anything that's injected as an env var (TZ, `PLEX_LAN_IP`, tunnel token), re-run `docker compose up -d`.
+- **Docker Compose** reads `.env` + `generated.env` at `docker compose up`. If you changed anything that's injected as an env var (TZ, `PLEX_LAN_IP`, VPN key), re-run `docker compose up -d`.
 
 Rule of thumb: any `.env` change that matters needs both `python3 scripts/generate-configs.py` and `docker compose up -d` to fully propagate.

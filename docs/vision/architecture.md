@@ -15,14 +15,14 @@ All traffic flows through the UniFi managed switch. Every device connects back v
 | Plex streaming | Client (VLAN 10) → Switch → R640 (VLAN 20) — permitted by firewall rule |
 | Camera to Frigate | Camera (VLAN 40) → Switch → R640 Frigate (VLAN 40) — same VLAN |
 | Home Assistant to IoT | HA VM (VLAN 30) → Switch → IoT device (VLAN 30) — same VLAN |
-| External Plex | Internet → Cloudflare → Tunnel → R640 (VLAN 20) — tunnel terminates inside server |
-| Tailscale remote | Phone → Tailscale → R640 subnet router → local network |
+| External Plex | Internet → Router port-forward (TCP 32400) → R640 (VLAN 20) — only public ingress |
+| Admin / remote | Phone or laptop → Tailscale → R640 subnet router → internal services (*arr, SAB, Unraid UI) |
 
 ### DNS Architecture
 
 Run dual DNS: primary AdGuard on Proxmox, secondary on Unraid. Both sync blocklists. DHCP hands out both IPs.
 
-Configure **split-horizon DNS** so internal services resolve to local IPs (e.g., `plex.yourdomain.com` → `10.0.20.x` internally) rather than routing through Cloudflare and back. This keeps local Plex traffic off the WAN and reduces latency.
+Configure **split-horizon DNS** so LAN clients resolve local hostnames (e.g., `plex.home.arpa` → `10.0.20.x`) directly rather than hairpinning through the WAN. Keeps LAN Plex traffic off the uplink and shaves latency on large streams.
 
 ---
 
@@ -57,7 +57,7 @@ Both Proxmox nodes need shared storage for VM migration. Simplest: NFS share fro
 
 | Data | Local Backup | Offsite | Frequency | Retention |
 |------|-------------|---------|-----------|-----------|
-| Unraid appdata | CA plugin → array + USB drive | rclone → B2 | Weekly | 4wk / 12wk |
+| Unraid appdata | Appdata Backup plugin → array + USB drive | rclone → B2 | Weekly | 4wk / 12wk |
 | Plex database | Included above | Included above | Weekly | 4wk / 12wk |
 | Home Assistant | HA snapshots → NFS on Unraid | rclone → B2 | Daily | 7d / 30d |
 | Vaultwarden | Encrypted export → array | rclone → B2 (double-encrypted) | Daily | 30d / 90d |
@@ -70,7 +70,7 @@ Both Proxmox nodes need shared storage for VM migration. Simplest: NFS share fro
 
 **Single drive failure**: With dual parity, a non-event. Replace the drive, rebuild from parity. Array remains accessible during rebuild (~12–24 hours for 16TB).
 
-**Cache pool failure (both SSDs)**: Unlikely with BTRFS RAID1 but devastating — all Docker configs lost. Recovery: restore from most recent CA Appdata Backup (written to the array). Downtime: 1–2 hours.
+**Cache pool failure (both SSDs)**: Unlikely with BTRFS RAID1 but devastating — all Docker configs lost. Recovery: restore from most recent Appdata Backup archive (written to the array). Downtime: 1–2 hours.
 
 **Total R640 hardware failure**: Media server down but Home Assistant continues on Proxmox. Recovery: new hardware, install Unraid, restore USB flash, deploy Compose stack, restore appdata from USB/cloud backup, re-mount MD1400 (drives retain data independently). Downtime: 4–8 hours with hardware on hand.
 
@@ -82,7 +82,7 @@ Both Proxmox nodes need shared storage for VM migration. Simplest: NFS share fro
 
 ### Network
 
-- Zero open ports on the router — all external access via Cloudflare Tunnel or Tailscale
+- Exactly one open port on the router — TCP 32400 → Plex. All admin access via Tailscale (outbound-initiated, no inbound port)
 - VLAN segmentation: IoT cannot reach management, cameras have no internet
 - UniFi gateway IDS/IPS for WAN traffic inspection
 - DNS sinkhole blocks malware and phishing domains network-wide
@@ -90,9 +90,8 @@ Both Proxmox nodes need shared storage for VM migration. Simplest: NFS share fro
 
 ### Authentication
 
-- Cloudflare Zero Trust with OTP (+ optional TOTP) for all public-facing services
-- Admin routes locked to single email, 24-hour session
-- Tailscale for private remote access (WireGuard)
+- Tailscale (WireGuard) with SSO + device posture checks for all admin access; ACLs restrict `tag:admin → tag:server` to named ports
+- Plex-account 2FA mandatory on every shared account (the one public service)
 - Vaultwarden for strong unique passwords everywhere
 - Two-factor authentication on all supporting services
 

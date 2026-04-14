@@ -1,8 +1,8 @@
 # homeserver
 
-Self-hosted media automation on Unraid. Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Overseerr for family requests and Cloudflare Tunnel for remote access.
+Self-hosted media automation on Unraid. Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting from Plex Watchlist. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
 
-No open router ports. No UI wizards — every app's config is pre-seeded before first boot.
+One open router port (TCP 32400 → Plex); all admin UIs reachable only via Tailscale. No UI wizards — every app's config is pre-seeded before first boot.
 
 ---
 

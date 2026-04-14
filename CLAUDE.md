@@ -1,6 +1,6 @@
 # CLAUDE.md — Home Media Server Repo
 
-Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based, zero open router ports (Cloudflare Tunnel).
+Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. One open router port (TCP 32400 → Plex); all admin access via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
 
 ---
 
@@ -12,7 +12,7 @@ Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running 
 | [docs/software.md](docs/software.md) | OS, plugins, Docker stack, folder structure, external access, Usenet |
 | [docs/deployment.md](docs/deployment.md) | Step-by-step deployment and scheduled maintenance setup |
 | [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, monitoring, secret rotation |
-| [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, tunnel down |
+| [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, Tailscale/Gluetun outages |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |
 | [docs/decisions.md](docs/decisions.md) | Why things are the way they are + expansion paths |
 
@@ -40,10 +40,11 @@ homeserver/
 
 ## Key Conventions
 
-- **Absolute paths** in `docker-compose.yml` — Compose Manager Plus runs from `/boot`, relative paths break
+- **Absolute paths** in `docker-compose.yml` — the stack is started by a User Script at array boot whose working directory is not guaranteed
 - **All containers mount `/mnt/user/data` at `/data`** — required for hardlinks to work
 - **Networks defined in Compose, not `external: true`** — Docker restarts on every Unraid boot
 - **Never commit `.env`** — use `.env.example` as the template
+- **No Compose Manager plugin** — Unraid ships `docker compose`; we run it from `media_stack_up` User Script instead
 
 ---
 
@@ -53,7 +54,7 @@ homeserver/
 |------|-------------|
 | docker-compose.yml | `/mnt/user/appdata/homeserver/homeserver/` |
 | App configs | `/mnt/user/appdata/<container-name>/` |
-| Downloads in-flight | `/mnt/user/data/usenet/incomplete/` |
+| Downloads in-flight | `/mnt/user/usenet-incomplete/` (cache-only share, SSD) |
 | Downloads complete | `/mnt/user/data/usenet/complete/{movies,tv,music}/` |
 | Media library | `/mnt/user/data/media/{movies,tv,music}/` |
 | Plex database | `/mnt/user/appdata/plex/` |

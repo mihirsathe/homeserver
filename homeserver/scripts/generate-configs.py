@@ -10,7 +10,7 @@ Interactive setup script. Run once before starting the stack.
 What it does:
   1. Prompts for any credentials not yet in .env, writes them back
   2. Auto-generates STACK_DIR and UUID API keys into generated.env
-  3. Writes a merged .env.docker for Compose Manager Plus
+  3. Writes a merged .env.docker (convenience single-file env for `docker compose --env-file`)
   4. Writes all app config files to configs/ so no setup wizard is needed
   5. Creates the /mnt/user/data/ directory structure
 
@@ -39,7 +39,7 @@ from typing import Callable, Optional
 STACK_DIR: Path      = Path(__file__).resolve().parent.parent   # homeserver/
 ENV_FILE: Path       = STACK_DIR / ".env"           # user-edited credentials
 GENERATED_FILE: Path = STACK_DIR / "generated.env"  # machine-written, gitignored
-DOCKER_ENV: Path     = STACK_DIR / ".env.docker"    # merged, for Compose Manager Plus
+DOCKER_ENV: Path     = STACK_DIR / ".env.docker"    # merged, single-file env
 CONFIGS: Path        = STACK_DIR / "configs"
 
 # ---------------------------------------------------------------------------
@@ -102,12 +102,12 @@ def write_generated(updates: dict):
     GENERATED_FILE.chmod(0o600)
 
 def write_merged_docker_env():
-    """Write .env.docker = .env + generated.env merged, for Compose Manager Plus."""
+    """Write .env.docker = .env + generated.env merged — convenience for tooling that takes a single --env-file."""
     merged = {}
     for path in (ENV_FILE, GENERATED_FILE):
         if path.exists():
             merged.update(_parse_env_file(path))
-    lines = ["# Merged env for Compose Manager Plus — auto-generated, do not edit\n"]
+    lines = ["# Merged env — auto-generated, do not edit\n"]
     for k, v in merged.items():
         lines.append(f"{k}={v}\n")
     DOCKER_ENV.write_text("".join(lines))
@@ -186,9 +186,10 @@ def prompt_for_missing(env: dict) -> dict:
 
     missing = [
         k for k in [
-            "TZ", "DOMAIN", "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
+            "TZ", "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
+            "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
             "USENET_HOST", "USENET_USER", "USENET_PASS",
-            "NZBGEEK_API_KEY", "NZBPLANET_API_KEY", "CLOUDFLARE_TUNNEL_TOKEN",
+            "NZBGEEK_API_KEY", "NZBPLANET_API_KEY",
         ]
         if not env.get(k, "").strip()
     ]
@@ -207,11 +208,9 @@ def prompt_for_missing(env: dict) -> dict:
                    validator=validate_tz)
 
     # Network / Plex
-    net_missing = [k for k in ["DOMAIN", "PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
+    net_missing = [k for k in ["PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
     if net_missing:
         print("\n--- Network ---")
-        if "DOMAIN" in missing:
-            get_or_ask("DOMAIN", "Domain", hint="e.g. smithmedia.net (registered via Cloudflare Registrar)")
         if "PLEX_LAN_IP" in missing:
             get_or_ask("PLEX_LAN_IP", "Server LAN IP",
                        hint="shown in Unraid UI top-right corner, e.g. 192.168.1.50",
@@ -220,6 +219,22 @@ def prompt_for_missing(env: dict) -> dict:
             get_or_ask("PLEX_LAN_SUBNET", "LAN subnet (CIDR)",
                        hint="e.g. 192.168.1.0/24  — run: ip route | grep default",
                        validator=validate_cidr)
+
+    # Mullvad WireGuard — for Gluetun outbound VPN on SAB + Prowlarr
+    vpn_missing = [k for k in ["VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY"] if k in missing]
+    if vpn_missing:
+        print("\n--- Mullvad WireGuard (Gluetun outbound VPN) ---")
+        print("  Generate a config at mullvad.net/account → WireGuard configuration.")
+        if "VPN_PRIVATE_KEY" in missing:
+            get_or_ask("VPN_PRIVATE_KEY", "WireGuard private key",
+                       hint="from [Interface] PrivateKey = ... in the downloaded .conf")
+        if "VPN_ADDRESS" in missing:
+            get_or_ask("VPN_ADDRESS", "WireGuard address",
+                       hint="from [Interface] Address = ... (comma-separated v4,v6)")
+        if "VPN_CITY" in missing:
+            get_or_ask("VPN_CITY", "Exit city",
+                       default="Amsterdam",
+                       hint="pick one near your Usenet provider for lowest latency")
 
     # Usenet
     usenet_missing = [k for k in ["USENET_HOST", "USENET_USER", "USENET_PASS"] if k in missing]
@@ -251,14 +266,6 @@ def prompt_for_missing(env: dict) -> dict:
             get_or_ask("NZBGEEK_API_KEY", "NZBGeek API key", hint="nzbgeek.info → My Profile → API Key")
         if "NZBPLANET_API_KEY" in missing:
             get_or_ask("NZBPLANET_API_KEY", "NZBPlanet API key", hint="nzbplanet.net → My Account → API Key")
-
-    # Cloudflare
-    if "CLOUDFLARE_TUNNEL_TOKEN" in missing:
-        print("\n--- Cloudflare ---")
-        get_or_ask(
-            "CLOUDFLARE_TUNNEL_TOKEN", "Tunnel token",
-            hint="Zero Trust → Networks → Tunnels → your tunnel → Configure → Token"
-        )
 
     # Plex server name (optional, has default)
     if not env.get("PLEX_SERVER_NAME", "").strip():
@@ -309,7 +316,6 @@ def write_sabnzbd(env: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     api_key  = env["SABNZBD_API_KEY"]
-    domain   = env["DOMAIN"]
     host     = env["USENET_HOST"]
     port     = env.get("USENET_PORT", "563")
     ssl      = env.get("USENET_SSL", "1")
@@ -345,17 +351,18 @@ def write_sabnzbd(env: dict):
 host = 0.0.0.0
 port = 8080
 url_base = /sabnzbd
-# host_whitelist blocks requests from hostnames not listed here.
-# This WILL break access through the Cloudflare tunnel unless your
-# manage.yourdomain.com is present. Add more comma-separated entries as needed.
-host_whitelist = localhost,sabnzbd,mediaserver.local,manage.{domain}
+# host_whitelist blocks requests from hostnames not listed here. SAB is
+# reachable only via Tailscale (no public URL) — localhost + service name
+# covers Gluetun-internal health checks and admin access. Add more comma-
+# separated entries (e.g. your Tailscale MagicDNS hostname) as needed.
+host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local
 api_key = {api_key}
 nzo_ids = {api_key}
 wizard_step = 10
 language = en
 cherryhost = 0.0.0.0
 cherryport = 8080
-download_dir = /data/usenet/incomplete
+download_dir = /incomplete
 complete_dir = /data/usenet/complete
 log_dir = /config/logs
 admin_dir = /config/admin
@@ -450,8 +457,8 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
   <EnableSsl>False</EnableSsl>
   <LaunchBrowser>False</LaunchBrowser>
   <ApiKey>{api_key}</ApiKey>
-  <AuthenticationMethod>None</AuthenticationMethod>
-  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+  <AuthenticationMethod>Forms</AuthenticationMethod>
+  <AuthenticationRequired>Enabled</AuthenticationRequired>
   <Branch>main</Branch>
   <LogLevel>info</LogLevel>
   <UrlBase>{url_base}</UrlBase>
@@ -461,11 +468,19 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
     _write_secret(dest / "config.xml", content)
     print(f"  ✓ configs/{name}/config.xml")
 
-def write_overseerr(env: dict):
-    dest = CONFIGS / "overseerr"
+def write_seerr(env: dict):
+    """Write Seerr's settings.json.
+
+    Seerr is the actively-maintained successor to Overseerr (Overseerr +
+    Jellyseerr lineage). Its settings schema is largely a superset of
+    Overseerr's — the keys below are Overseerr-compatible and accepted by
+    Seerr. Plex Watchlist auto-request is enabled by default so family
+    members can "Add to Watchlist" in the Plex app and have Seerr submit
+    the request on their behalf.
+    """
+    dest = CONFIGS / "seerr"
     dest.mkdir(parents=True, exist_ok=True)
 
-    domain = env["DOMAIN"]
     lan_ip = env["PLEX_LAN_IP"]
 
     settings = {
@@ -473,11 +488,13 @@ def write_overseerr(env: dict):
         "main": {
             "apiKey": uuid.uuid4().hex,
             "applicationTitle": "Media Requests",
-            "applicationUrl": f"https://request.{domain}",
-            "trustProxy": True,
+            # Admin-only; Seerr reachable via Tailscale MagicDNS.
+            "applicationUrl": "",
+            "trustProxy": False,
             "hideAvailable": False,
-            "localLogin": True,
+            "localLogin": False,
             "newPlexLogin": True,
+            # REQUEST + AUTO_APPROVE + AUTO_REQUEST for Watchlist flow.
             "defaultPermissions": 32,
             "defaultQuotas": {
                 "movie": {"quotaLimit": 0, "quotaDays": 7},
@@ -491,7 +508,9 @@ def write_overseerr(env: dict):
             "ip": lan_ip,
             "port": 32400,
             "useSsl": False,
-            "libraries": []
+            "libraries": [],
+            # Poll Plex Watchlist every 5 min for auto-request.
+            "webAppUrl": ""
         },
         "tautulli": None,
         "radarr": [],
@@ -511,11 +530,76 @@ def write_overseerr(env: dict):
                 "webpush":    {"enabled": False, "types": 0, "options": {}}
             }
         },
-        "jobs": {}
+        "jobs": {
+            "plex-watchlist-sync": {
+                "schedule": "0 */2 * * * *"
+            }
+        }
     }
 
     _write_secret(dest / "settings.json", json.dumps(settings, indent=2))
-    print("  ✓ configs/overseerr/settings.json")
+    print("  ✓ configs/seerr/settings.json")
+
+def write_recyclarr(env: dict):
+    """Write recyclarr.yml pulling the TRaSH-Guides HD Bluray + WEB templates
+    for Radarr and Sonarr. The `include:` lines reference upstream template
+    files in the Recyclarr configs repo, so TRaSH updates land automatically
+    on the next scheduled sync (CRON_SCHEDULE in compose, Monday 5am).
+
+    API keys are read at runtime from the container environment (the compose
+    service passes RADARR_API_KEY / SONARR_API_KEY through), so this file
+    contains no secrets and is written world-readable at /app/config/...
+
+    The destination lives in /mnt/user/appdata/recyclarr/ so Recyclarr reads
+    it directly on start — no separate bind-mount needed.
+    """
+    dest = Path("/mnt/user/appdata/recyclarr")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+
+    content = """\
+# Recyclarr config — TRaSH-Guides HD Bluray + WEB profile for 1080p.
+# Regenerated by scripts/generate-configs.py. Add custom sections below
+# the generated block; they'll be preserved on re-run via the .new-file
+# mechanism.
+
+radarr:
+  radarr-main:
+    base_url: http://radarr:7878/radarr
+    api_key: !env_var RADARR_API_KEY
+
+    include:
+      - template: radarr-quality-definition-movie
+      - template: radarr-quality-profile-hd-bluray-web
+      - template: radarr-custom-formats-hd-bluray-web
+
+    delete_old_custom_formats: true
+    replace_existing_custom_formats: true
+
+sonarr:
+  sonarr-main:
+    base_url: http://sonarr:8989/sonarr
+    api_key: !env_var SONARR_API_KEY
+
+    include:
+      - template: sonarr-quality-definition-series
+      - template: sonarr-v4-quality-profile-web-1080p
+      - template: sonarr-v4-custom-formats-web-1080p
+
+    delete_old_custom_formats: true
+    replace_existing_custom_formats: true
+"""
+    target = dest / "recyclarr.yml"
+    if target.exists() and target.read_text() != content and _PRESERVE_USER_EDITS:
+        new_target = target.with_suffix(".yml.new")
+        new_target.write_text(content)
+        _PENDING_NEW_FILES.append(new_target)
+        print(f"  ! {target} differs — wrote {new_target.name} alongside")
+    else:
+        target.write_text(content)
+        subprocess.run(["chown", "nobody:users", str(target)], check=False)
+        target.chmod(0o644)
+        print(f"  ✓ {target}")
 
 def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
@@ -602,7 +686,10 @@ refresh_users_on_startup = 0
 # ---------------------------------------------------------------------------
 def create_data_dirs():
     dirs = [
-        Path("/mnt/user/data/usenet/incomplete"),
+        # Incomplete downloads live on a cache-only share — setup-unraid.sh
+        # provisions /boot/config/shares/usenet-incomplete.cfg with
+        # shareUseCache=only so mover never migrates these files to the array.
+        Path("/mnt/user/usenet-incomplete"),
         Path("/mnt/user/data/usenet/complete/movies"),
         Path("/mnt/user/data/usenet/complete/tv"),
         Path("/mnt/user/data/usenet/complete/music"),
@@ -620,6 +707,22 @@ def create_data_dirs():
             print(f"  ✓ created {d}")
     else:
         print("  ✓ data directories already exist")
+
+    # Seed Seerr's settings.json into appdata directly. Seerr owns the whole
+    # /app/config directory once running, so we can't bind-mount a single host
+    # file into it cleanly — we drop the seed template into appdata and let
+    # the container pick it up on first start. Owned by nobody:users (99:100),
+    # matching the `user:` override on the seerr service in compose.
+    seerr_appdata = Path("/mnt/user/appdata/seerr")
+    seerr_appdata.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(seerr_appdata)], check=False)
+    seed = CONFIGS / "seerr" / "settings.json"
+    target = seerr_appdata / "settings.json"
+    if seed.exists() and not target.exists():
+        target.write_bytes(seed.read_bytes())
+        subprocess.run(["chown", "nobody:users", str(target)], check=False)
+        target.chmod(0o600)
+        print(f"  ✓ seeded {target}")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -681,17 +784,17 @@ def main() -> None:
             print(f"  {k}")
         print()
 
-    # Step 3: Write merged .env.docker for Compose Manager Plus
+    # Step 3: Write merged .env.docker (single-file env for docker compose)
     write_merged_docker_env()
 
     # Step 4: Final validation — everything required must now be set.
     required = [
-        "TZ", "DOMAIN", "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
+        "TZ", "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
+        "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
         "LIDARR_API_KEY", "PROWLARR_API_KEY",
         "USENET_HOST", "USENET_USER", "USENET_PASS",
         "NZBGEEK_API_KEY", "NZBPLANET_API_KEY",
-        "CLOUDFLARE_TUNNEL_TOKEN",
     ]
     missing = [k for k in required if not env.get(k, "").strip()]
     if missing:
@@ -707,7 +810,8 @@ def main() -> None:
     write_arr_config("sonarr",   8989, env["SONARR_API_KEY"],  "/sonarr")
     write_arr_config("lidarr",   8686, env["LIDARR_API_KEY"],  "/lidarr")
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"],"/prowlarr")
-    write_overseerr(env)
+    write_seerr(env)
+    write_recyclarr(env)
     write_bazarr(env)
     write_tautulli(env)
 
@@ -730,7 +834,6 @@ Done.
 Next steps:
   1. Start the stack:
        docker compose --env-file .env --env-file generated.env up -d
-     Or use Compose Manager Plus with .env.docker as the env file.
   2. Wait ~60s for containers to initialise.
   3. python3 scripts/bootstrap.py
 """)

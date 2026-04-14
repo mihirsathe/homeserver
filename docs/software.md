@@ -17,14 +17,15 @@
 | Plugin | Purpose |
 |--------|---------|
 | Community Applications | App store |
-| Compose Manager Plus | Docker Compose support |
-| Nvidia-Driver | RTX 3050 kernel driver |
-| nvidia-container-toolkit | GPU access for Docker containers |
+| Nvidia-Driver | RTX 3050 kernel driver; bundles nvidia-container-toolkit |
 | Fix Common Problems | Config scanning and alerts |
-| CA Appdata Backup/Restore | Weekly Docker config backup |
-| User Scripts | Scheduled scripts (fan control, updates) |
+| Appdata Backup | Weekly Docker config backup (Commifreak's fork; replaces the deprecated ca.backup2) |
+| User Scripts | Scheduled scripts (stack boot, updates, backups, optional fan control) |
 | Unassigned Devices | External drive mounting |
 | Dynamix File Integrity | File checksum / silent corruption detection |
+| Tailscale | Admin-plane mesh VPN — only path to *arr / SAB / Seerr / Unraid webUI |
+
+`docker compose` is built into Unraid — no plugin needed. The stack is brought up at array start by the `media_stack_up` User Script that `setup-unraid.sh` writes.
 
 ---
 
@@ -34,26 +35,35 @@ All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/use
 
 | Container | Image | Port | Role |
 |-----------|-------|------|------|
-| cloudflared | `cloudflare/cloudflared` | — | Outbound-only Cloudflare tunnel |
-| sabnzbd | `hotio/sabnzbd` | 8080 | Usenet downloader |
-| prowlarr | `hotio/prowlarr` | 9696 | Indexer manager |
+| gluetun | `qmcgaw/gluetun` | 8080, 9696 | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
+| sabnzbd | `hotio/sabnzbd` | (via gluetun) | Usenet downloader |
+| prowlarr | `hotio/prowlarr` | (via gluetun) | Indexer manager |
 | radarr | `hotio/radarr` | 7878 | Movie automation |
 | sonarr | `hotio/sonarr` | 8989 | TV automation |
 | lidarr | `hotio/lidarr` | 8686 | Music automation |
-| plex | `plexinc/pms-docker` | 32400 | Media server + GPU transcode |
-| overseerr | `hotio/overseerr` | 5055 | Content request portal |
+| plex | `plexinc/pms-docker` | 32400 | Media server + GPU transcode (the one public service) |
+| seerr | `ghcr.io/seerr-team/seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | 6767 | Subtitle automation |
 | tautulli | `hotio/tautulli` | 8181 | Plex analytics, stream history, notifications |
+| recyclarr | `ghcr.io/recyclarr/recyclarr` | — | Weekly TRaSH-Guides sync of quality profiles + custom formats into Radarr/Sonarr |
 
 ### Networks
 
-A single `medianet` bridge network — all containers reach each other by name (e.g. `http://sabnzbd:8080`). Defined inline in the Compose file rather than `external: true`, since Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate. See [decisions.md](decisions.md).
+Three bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
+
+| Network | Members | Purpose |
+|---------|---------|---------|
+| `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
+| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `recyclarr` | *arr ↔ Bazarr traffic + Recyclarr's weekly quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
+| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+
+Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
 
 ### Folder Structure on Server
 
 ```
 /mnt/user/
-├── appdata/                          ← cache pool (SSD)
+├── appdata/                          ← cache pool (SSD), shareUseCache=only
 │   ├── homeserver/                   ← docker-compose.yml, .env, scripts
 │   ├── plex/                         ← Plex database + metadata (can grow 50–200 GB)
 │   ├── plex-transcode/               ← active transcode temp (purged on restart)
@@ -62,12 +72,15 @@ A single `medianet` bridge network — all containers reach each other by name (
 │   ├── sonarr/
 │   ├── lidarr/
 │   ├── prowlarr/
-│   ├── overseerr/
+│   ├── gluetun/
+│   ├── seerr/
 │   ├── bazarr/
-│   └── tautulli/
-└── data/                             ← spinning array
+│   ├── tautulli/
+│   └── recyclarr/                    ← recyclarr.yml (TRaSH template includes)
+├── usenet-incomplete/                ← cache pool (SSD), shareUseCache=only
+│                                        SABnzbd active downloads + par2/unrar
+└── data/                             ← spinning array, shareUseCache=yes
     ├── usenet/
-    │   ├── incomplete/               ← SABnzbd active downloads
     │   └── complete/
     │       ├── movies/               ← post-download, pre-import
     │       ├── tv/
@@ -78,40 +91,44 @@ A single `medianet` bridge network — all containers reach each other by name (
         └── music/                    ← Lidarr final library
 ```
 
-All containers mount `/mnt/user/data` at `/data` inside the container. This shared mount path is what makes hardlinks work — SABnzbd's completed download and Radarr's imported file occupy the same disk blocks, making every import an instant rename instead of a copy.
+All containers mount `/mnt/user/data` at `/data` inside the container. This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
+
+`usenet-incomplete/` is a separate cache-only share, bind-mounted into SAB at `/incomplete`. Active downloads, par2 repair, and unrar all hammer this path, so it lives on SSD where those operations are 10–20× faster than on spinning disks. `shareUseCache=only` means mover never migrates these files to the array. When a download completes, SAB moves the assembled file from `/incomplete` (SSD) to `/data/usenet/complete/` (array) — a one-time cross-filesystem copy. From there, hardlinks to `/data/media/` work normally.
 
 ---
 
 ## External Access
 
-No ports are open on the router. Cloudflare Tunnel creates an outbound-only encrypted connection from the server to Cloudflare's edge. The server's home IP is never exposed.
+One port is open on the router. **TCP 32400 → Plex** is the only public ingress; everything else is admin-plane and reachable only through Tailscale.
 
-**Plex ports are LAN-only.** The 32400/8324/32469 TCP and 1900/32410–32414 UDP ports published in the Compose file serve Plex's own DLNA and autodiscovery traffic on the home network. They are **not** routed through the Cloudflare tunnel; external Plex clients go through `plex.yourdomain.com` and hit Plex's standard HTTPS interface over the tunnel.
+### Plex — the public service
 
-### Domains and Subdomains
+Plex is forwarded directly on TCP 32400. The router port-forward goes to the server's LAN IP; Plex's own wildcard TLS (`*.plex.direct`, issued by Plex) terminates the connection and Plex's native clients negotiate direct-connect via `app.plex.tv`. Cloudflare is not involved — streaming video through a Cloudflare free/pro tunnel violates their Service-Specific Terms §2.8, and the WAN IP is already published to `plex.tv` regardless, so a tunnel buys nothing. Family members use the Plex app; no custom subdomain, no user-facing URL.
 
-| URL | Service | Who can access |
-|-----|---------|----------------|
-| `plex.yourdomain.com` | Plex Media Server | Family |
-| `request.yourdomain.com` | Overseerr | Family |
-| `manage.yourdomain.com/radarr` | Radarr | Admin only |
-| `manage.yourdomain.com/sonarr` | Sonarr | Admin only |
-| `manage.yourdomain.com/prowlarr` | Prowlarr | Admin only |
-| `manage.yourdomain.com/sabnzbd` | SABnzbd | Admin only |
-| `manage.yourdomain.com/lidarr` | Lidarr | Admin only |
-| `manage.yourdomain.com/bazarr` | Bazarr | Admin only |
+Plex-account 2FA is mandatory on every shared account. Relay is toggled off (`PLEX_PREFERENCE_RelayEnabled=0`), but the claim itself still publishes the WAN IP to plex.tv — this is intrinsic to Plex's architecture and not something the port-forward changes.
 
-### Authentication
+### Everything else — Tailscale
 
-All external access goes through **Cloudflare Zero Trust** — OTP login code sent to approved email addresses.
+The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, and the Unraid webUI are reachable only from devices on the tailnet. No public URL, no Cloudflare Access, no reverse proxy. Admin devices install Tailscale, tag themselves `tag:admin`, and Tailscale ACLs restrict `tag:admin → tag:server` to the specific admin ports. The server runs `tailscale up --ssh` so SSH also rides the tailnet.
 
-- **Family group** — approved email list; 7-day session
-- **Admin group** — your email only; 24-hour session
-- Internal management apps (SABnzbd, *arr stack) not exposed to family — admin only via `manage.*`
+### Family request flow (no public request portal)
+
+Family uses the Plex app they already have:
+
+1. Search a title in Plex → tap "Add to Watchlist".
+2. Seerr polls Plex's Watchlist API every ~2 minutes.
+3. Matching Watchlist entries auto-submit as Radarr / Sonarr requests (admin grants the `AUTO_REQUEST` permission in Seerr per user).
+4. The title downloads and appears in the library.
+
+No-one other than the admin ever needs to touch Seerr directly. Seerr's web UI exists as an admin tool (managing requests, tuning quality profiles, granting permissions) on the tailnet.
 
 ---
 
 ## Usenet Setup
+
+SABnzbd and Prowlarr ride through **Gluetun** (Mullvad WireGuard) via `network_mode: "service:gluetun"`. Gluetun's `FIREWALL=on` kill-switch means if the VPN tunnel drops, SAB + Prowlarr lose all network connectivity until it reconnects — there is no path for their traffic to ever reach the internet on the home WAN IP. SSL alone isn't enough for this threat model: SSL encrypts content but not the fact of a connection to a Usenet ASN on port 563, or the destination SNI in the TLS handshake.
+
+Register Usenet and indexer accounts **from the Mullvad exit IP**, after Gluetun is up. Any account registered from the home IP is permanently tainted in the provider's logs. Monero is preferred for payment where the provider accepts it.
 
 ### Providers
 
@@ -132,10 +149,11 @@ Managed in Prowlarr, auto-synced to all apps.
 ### Download Flow
 
 ```
-Overseerr request
+Plex Watchlist addition (family)
+    → Seerr (polls Plex every 5 min, auto-submits request)
     → Radarr / Sonarr / Lidarr
-    → Prowlarr (searches all indexers)
-    → SABnzbd (downloads NZB over SSL)
+    → Prowlarr (searches all indexers, via Gluetun)
+    → SABnzbd (downloads NZB over Mullvad VPN on port 563)
     → Radarr / Sonarr hardlinks file to media library
     → Plex library updated
     → Available to stream

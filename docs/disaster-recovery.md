@@ -68,7 +68,7 @@ Specific enough to warrant its own entry, because Plex's DB grows to 50–200 GB
 3. Follow Plex's [DB repair docs](https://support.plex.tv/articles/repair-a-corrupted-database/) — runs `sqlite3` over the blobs.
 4. `docker compose start plex`.
 
-**If repair fails**, restore from backup via `restore-appdata.sh`. Plex's own backup lives inside `appdata/plex/`, so the CA Appdata Backup archive already covers it. The restore invalidates watch history / play state since the last backup.
+**If repair fails**, restore from backup via `restore-appdata.sh`. Plex's own backup lives inside `appdata/plex/`, so the Appdata Backup archive already covers it. The restore invalidates watch history / play state since the last backup.
 
 **Last resort**: delete the DB entirely and let Plex rebuild from metadata. Slow (hours on a large library) and loses all watch history, collections, and custom posters.
 
@@ -83,12 +83,12 @@ This is the most common real incident on this stack — the 480 GB cache pool is
 **Triage**:
 ```bash
 du -sh /mnt/user/appdata/*/ | sort -hr | head
-du -sh /mnt/user/data/usenet/incomplete/
+du -sh /mnt/user/usenet-incomplete/
 ```
 
 Common culprits:
 - **Plex transcode dir** (`appdata/plex-transcode/`) — should be empty; if not, Plex crashed mid-transcode. Safe to `rm -rf` contents while Plex is running.
-- **Stuck SAB download** in `usenet/incomplete/` that's >20 GB and hasn't moved in days.
+- **Stuck SAB download** in `usenet-incomplete/` that's >20 GB and hasn't moved in days. This share is `cache=only`, so every stuck download eats cache-pool space directly.
 - **Plex DB bloat** — `Plug-in Support/Databases/com.plexapp.plugins.library.db` grows forever without pruning. Plex has a "Optimize Database" tool under Settings → Troubleshooting.
 - **Docker image sprawl** — run `docker image prune -f` (the monthly update-stack.sh does this, but only if the health gate passed).
 
@@ -113,13 +113,40 @@ Media data — if no offsite copy — is gone. For this stack, the library is la
 
 ---
 
-## Cloudflare tunnel down
+## Tailscale admin plane down
 
-**Symptom**: external URLs (`plex.yourdomain.com`, `request.yourdomain.com`) return 530 / 502. LAN access works fine.
+**Symptom**: `mediaserver.<tailnet>.ts.net` doesn't resolve or times out from admin devices. Plex (router port-forward) still works; LAN access still works.
 
-1. Check container: `docker compose ps cloudflared` — should be `running`.
-2. Check logs: `docker logs cloudflared --tail 50`. Usual culprits: tunnel token rotated, Cloudflare outage, temporary network issue at the ISP.
-3. Cloudflare dashboard → Zero Trust → Networks → Tunnels — is the tunnel status "Healthy"?
-4. If token was rotated, update `.env` `CLOUDFLARE_TUNNEL_TOKEN` and `docker compose up -d cloudflared`.
+1. From an admin device: `tailscale status` — is the device itself connected to the tailnet? If not, open the Tailscale app, sign in again.
+2. From the Unraid terminal (LAN or physical console): `tailscale status` — should list the host as `active`. If not: `tailscale up --ssh --advertise-tags=tag:server` and re-auth via the printed URL.
+3. Tailscale admin console → Machines — confirm the host's key hasn't expired and `tag:server` is still applied. Tailscale expires keys periodically unless key-expiry is disabled per-machine.
+4. Check ACLs: console → Access controls — the `tag:admin → tag:server` rule must still permit the port you're trying to reach.
 
-Cloudflare-side outages (rare) resolve without intervention — there is no workaround except waiting or temporarily opening a port on the router (don't).
+Tailscale-side outages (rare) resolve without intervention. During an outage you can still reach the server from the LAN; there is no fallback path from outside the home network until the tailnet recovers (by design — that's the whole point of not publishing the admin UIs).
+
+---
+
+## Gluetun tunnel down (SAB + Prowlarr offline)
+
+**Symptom**: SAB UI (`:8080`) and Prowlarr UI (`:9696`) unreachable. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
+
+This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
+
+1. `docker logs gluetun --tail 50` — expect WireGuard handshake failures, DNS errors, or a revoked-key message.
+2. Verify `VPN_PRIVATE_KEY` / `VPN_ADDRESS` / `VPN_CITY` in `.env` match a current Mullvad WireGuard config. Regenerate on the Mullvad account page if the key was revoked.
+3. `docker compose up -d gluetun` — forces a clean reconnect. SAB + Prowlarr come back once the tunnel handshakes.
+4. Verify egress: `docker exec sabnzbd curl -s https://ifconfig.me` — must be a Mullvad exit IP, never your home WAN IP.
+
+Mullvad-side outages (rare) resolve without intervention. SAB/Prowlarr stay offline until the provider is back — that's intended.
+
+---
+
+## Seerr down / Watchlist still queues
+
+**Symptom**: Seerr UI unreachable, but family members keep adding titles to Plex Watchlist. Nothing downloads.
+
+Seerr is the bridge between Plex Watchlist and Radarr/Sonarr. If Seerr is down, Watchlist additions accumulate on Plex's side (no data loss) but nothing moves to the *arrs. Once Seerr comes back, the next `plex-watchlist-sync` job (runs every ~2 min) picks them all up at once.
+
+1. `docker compose ps seerr` — restart if needed: `docker compose restart seerr`.
+2. Check logs for DB corruption: `docker logs seerr --tail 100`. If corrupt, restore from appdata backup per [Appdata corruption (single service)](#appdata-corruption-single-service).
+3. Family can keep adding titles to the Watchlist during the outage; backlog clears automatically on recovery.

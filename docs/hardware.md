@@ -17,7 +17,7 @@
 | 9 | Vented blank | Thermal break between R640 and DAS |
 | 7–8 | Dell MD1400 DAS | 12-bay · 4×8TB data + 1×16TB parity |
 | 5–6 | Vented blanks | Reserved for second MD1400 (daisy-chain) |
-| 3–4 | UPS (2U) | APC SMT1500RM2U or SMT2200RM2U |
+| 3–4 | UPS (2U) | APC Smart-UPS X SMX1500RM2U · 1500 VA / 1200 W · pure sine |
 | 1–2 | Vented blanks | Reserved for UPS battery expansion |
 
 UPS is at the bottom because it's the heaviest component — keeps center of gravity low. Pure sine wave is required; the R640's Platinum-rated PSUs expect clean power and may refuse simulated sine wave on battery.
@@ -37,6 +37,7 @@ No PDU (UPS has enough outlets), no patch panel (only 3–4 runs — a panel mak
 | R640 → MD1400 | SFF-8644 SAS | 12 Gbps |
 | UPS → R640 (×2 PSU) | IEC C13/C14 | — |
 | UPS → MD1400 (×2 PSU) | IEC C13/C14 | — |
+| UPS → R640 (data) | USB Type A→B (shipped with UPS) | — |
 
 The X710 10GbE SFP+ ports on the daughter card are installed but unused; they become useful once a managed switch is added.
 
