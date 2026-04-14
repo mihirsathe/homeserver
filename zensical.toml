@@ -1,0 +1,23 @@
+[project]
+site_name = "Home Server"
+site_description = "Self-hosted media stack on Dell R640 + MD1400"
+docs_dir = "docs"
+site_dir = "site"
+nav = [
+  {"Home" = "index.md"},
+  {"Hardware" = "hardware.md"},
+  {"Software" = "software.md"},
+  {"Deployment" = "deployment.md"},
+  {"Operations" = "operations.md"},
+  {"Decisions" = "decisions.md"},
+  {"Vision" = [
+    {"Overview" = "vision/index.md"},
+    {"Phases 1–4, 6–8" = "vision/phases.md"},
+    {"Home Automation" = "vision/home-automation.md"},
+    {"Architecture" = "vision/architecture.md"},
+    {"Planning" = "vision/planning.md"}
+  ]}
+]
+
+[project.theme]
+variant = "modern"

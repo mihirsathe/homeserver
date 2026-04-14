@@ -1,0 +1,21 @@
+# Secrets — never commit
+.env
+
+# Generated config files contain your API keys and credentials
+configs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
