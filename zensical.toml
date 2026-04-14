@@ -9,6 +9,8 @@ nav = [
   {"Software" = "software.md"},
   {"Deployment" = "deployment.md"},
   {"Operations" = "operations.md"},
+  {"Disaster recovery" = "disaster-recovery.md"},
+  {"Troubleshooting" = "troubleshooting.md"},
   {"Sources" = "sources.md"},
   {"Decisions" = "decisions.md"},
   {"Vision" = [
@@ -22,3 +24,8 @@ nav = [
 
 [project.theme]
 variant = "modern"
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
