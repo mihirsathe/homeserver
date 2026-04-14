@@ -24,6 +24,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
 | SMART check (cache SSDs) | Quarterly | iDRAC storage view or PERC UI (SMART not available via Unraid) |
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |
+| UPS self-test / battery health | Quarterly | `apcaccess status` for a quick read; `apctest` walks an interactive battery/calibration test |
 
 ---
 
@@ -112,6 +113,7 @@ No dedicated metrics stack — the goal is low operational cost, not an observab
 | Drive health (MD1400 HDDs) | Unraid SMART | Settings → Notifications → enable SMART warnings; pick an agent (see below) |
 | Array parity errors | Unraid | Same notification settings; alert on parity check completion with errors > 0 |
 | Cache pool fill | Unraid | Settings → Disk Settings → warning/critical threshold (set 75% / 90%) |
+| UPS on battery / low battery | apcupsd events | Unraid's notification agent forwards apcupsd events (ONBATT, OFFBATT, LOWBATT, COMMLOST) once `SERVICE=enable` is set in `ups.cfg` |
 | Container liveness | Docker healthchecks | `docker compose ps` shows `unhealthy` within ~90s of a crash. Fix Common Problems plugin surfaces unhealthy containers on the dashboard |
 | Update-stack failures | update-stack.sh log | Configure User Scripts email-on-failure on the `media_stack_update` job |
 | Cloudflare tunnel down | Cloudflare dashboard | Zero Trust → Networks → Tunnels → Notifications (email on disconnect) |

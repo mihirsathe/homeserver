@@ -27,15 +27,16 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
 
 1. **Assign array disks** — verify drive serial numbers before assigning (Main tab)
    - Parity: 16TB HDD · Disk 1–4: 8TB HDDs · Cache: both 480GB SSDs
-2. **Start array and format** — Main → Start → check format boxes → Format
-3. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
-4. **Verify GPU**:
+2. **Plug in UPS data cable** (skip if UPS is not yet physically installed — safe to add later) — USB-B end → UPS, USB-A end → any rear R640 USB port. `setup-unraid.sh` has already written `/boot/config/plugins/dynamix/ups.cfg` with `SERVICE=enable`, `CABLE=usb`, `BATTERYLEVEL=20`, `MINUTES=5`. After the step-4 reboot, verify with `apcaccess status` — expect `STATUS : ONLINE` and a non-zero `BCHARGE` / `TIMELEFT`.
+3. **Start array and format** — Main → Start → check format boxes → Format
+4. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
+5. **Verify GPU**:
    ```bash
    nvidia-smi
    docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
    ```
    If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle)
-5. **Set User Script schedules** — Settings → User Scripts:
+6. **Set User Script schedules** — Settings → User Scripts:
    - `media_stack_update` → Monthly (1st, 3am)
    - `media_stack_backup` → Weekly (Sunday, 4am, after CA Appdata Backup)
    - `fan_control` → At Startup of Array *(only if you ran `setup-fan-control.sh`)*

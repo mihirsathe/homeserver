@@ -48,7 +48,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # STEP 1: Community Applications plugin
 # ---------------------------------------------------------------------------
-info "Step 1/7 — Installing Community Applications plugin..."
+info "Step 1/8 — Installing Community Applications plugin..."
 
 CA_PLG="https://raw.githubusercontent.com/Squidly271/community.applications/master/plugins/community.applications.plg"
 CA_DEST="/boot/config/plugins/community.applications.plg"
@@ -63,7 +63,7 @@ fi
 # ---------------------------------------------------------------------------
 # STEP 2: Install all required plugins
 # ---------------------------------------------------------------------------
-info "Step 2/7 — Installing required plugins..."
+info "Step 2/8 — Installing required plugins..."
 echo ""
 
 # Plugin URLs — all sourced from the official Unraid community repos.
@@ -92,7 +92,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # STEP 3: Docker settings
 # ---------------------------------------------------------------------------
-info "Step 3/7 — Writing Docker settings..."
+info "Step 3/8 — Writing Docker settings..."
 
 DOCKER_CFG="/boot/config/docker.cfg"
 
@@ -123,7 +123,7 @@ ok "Docker settings written to $DOCKER_CFG"
 # ---------------------------------------------------------------------------
 # STEP 4: Global share settings (hardlinks)
 # ---------------------------------------------------------------------------
-info "Step 4/7 — Writing global share settings..."
+info "Step 4/8 — Writing global share settings..."
 
 SHARE_CFG="/boot/config/share.cfg"
 touch "$SHARE_CFG"
@@ -146,9 +146,39 @@ set_cfg "$SHARE_CFG" "shareHardLinks"       "yes"
 ok "Share settings written to $SHARE_CFG"
 
 # ---------------------------------------------------------------------------
-# STEP 5: Create the data share config
+# STEP 5: UPS settings (apcupsd via USB)
 # ---------------------------------------------------------------------------
-info "Step 5/7 — Creating share configs..."
+# Unraid reads /boot/config/plugins/dynamix/ups.cfg at boot and regenerates
+# /etc/apcupsd/apcupsd.conf from it. Writing this file directly is equivalent
+# to toggling Settings → UPS Settings in the UI. Safe to run before the UPS
+# is physically connected — apcupsd will start, fail to find a HID device,
+# and idle until the USB cable appears. Nothing else is affected.
+#
+# Thresholds match the guidance in docs/vision/phases.md §3.2.
+info "Step 5/8 — Writing UPS settings..."
+
+UPS_CFG_DIR="/boot/config/plugins/dynamix"
+UPS_CFG="${UPS_CFG_DIR}/ups.cfg"
+mkdir -p "$UPS_CFG_DIR"
+touch "$UPS_CFG"
+
+set_cfg "$UPS_CFG" "SERVICE"      "enable"
+set_cfg "$UPS_CFG" "CABLE"        "usb"
+set_cfg "$UPS_CFG" "TYPE"         "usb"
+set_cfg "$UPS_CFG" "DEVICE"       ""
+set_cfg "$UPS_CFG" "UPSNAME"      "r640-ups"
+set_cfg "$UPS_CFG" "BATTERYLEVEL" "20"
+set_cfg "$UPS_CFG" "MINUTES"      "5"
+set_cfg "$UPS_CFG" "TIMEOUT"      "0"
+set_cfg "$UPS_CFG" "KILLUPS"      "no"
+set_cfg "$UPS_CFG" "NISIP"        "127.0.0.1"
+
+ok "UPS settings written to $UPS_CFG"
+
+# ---------------------------------------------------------------------------
+# STEP 6: Create the data share config
+# ---------------------------------------------------------------------------
+info "Step 6/8 — Creating share configs..."
 
 SHARES_DIR="/boot/config/shares"
 mkdir -p "$SHARES_DIR"
@@ -200,9 +230,9 @@ fi
 ok "Share configs written"
 
 # ---------------------------------------------------------------------------
-# STEP 6: Folder structure and permissions
+# STEP 7: Folder structure and permissions
 # ---------------------------------------------------------------------------
-info "Step 6/7 — Creating folder structure..."
+info "Step 7/8 — Creating folder structure..."
 
 # Wait for the array to be available. If this script runs before array start,
 # /mnt/user won't exist yet. In that case, print the commands and exit.
@@ -228,9 +258,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# STEP 7: Create User Scripts
+# STEP 8: Create User Scripts
 # ---------------------------------------------------------------------------
-info "Step 7/7 — Creating User Scripts..."
+info "Step 8/8 — Creating User Scripts..."
 
 USER_SCRIPTS_DIR="/boot/config/plugins/user.scripts/scripts"
 mkdir -p "$USER_SCRIPTS_DIR"
@@ -281,11 +311,16 @@ echo "      Parity  → 16TB HDD"
 echo "      Disk 1-4 → 8TB HDDs"
 echo "      Cache   → both 480GB SSDs"
 echo ""
-echo " 2. START ARRAY AND FORMAT DISKS"
+echo " 2. PLUG IN UPS DATA CABLE (skip if UPS not yet physically installed)"
+echo "    USB-B end → UPS, USB-A end → any rear R640 USB port."
+echo "    ups.cfg is already written. Verify after the step-4 reboot:"
+echo "      apcaccess status   (expect STATUS : ONLINE)"
+echo ""
+echo " 3. START ARRAY AND FORMAT DISKS"
 echo "    Main → Start → check format boxes → Format"
 echo "    Parity sync will begin (~30-45 hours, array usable during sync)"
 echo ""
-echo " 3. REBOOT — activate Nvidia-Driver"
+echo " 4. REBOOT — activate Nvidia-Driver"
 echo "    Main → Reboot"
 echo "    After reboot, verify:"
 echo "      nvidia-smi"
@@ -293,16 +328,16 @@ echo "      docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 n
 echo "    If the container test fails: Apps → search 'nvidia container toolkit' → Install"
 echo "    Then restart Docker (Settings → Docker → toggle off/on)"
 echo ""
-echo " 4. SET USER SCRIPT SCHEDULES"
+echo " 5. SET USER SCRIPT SCHEDULES"
 echo "    Settings → User Scripts:"
 echo "      media_stack_update → Monthly (1st, 3am)"
 echo "      media_stack_backup → Weekly (Sunday, 4am)"
 echo ""
-echo " 5. (OPTIONAL) FAN CONTROL"
+echo " 6. (OPTIONAL) FAN CONTROL"
 echo "    Only if chassis fans stay at ~100% after boot with the GPU installed:"
 echo "      bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-fan-control.sh"
 echo ""
-echo " 6. DEPLOY THE STACK"
+echo " 7. DEPLOY THE STACK"
 echo "    git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver"
 echo "    cd /mnt/user/appdata/homeserver/homeserver"
 echo "    cp .env.example .env"
