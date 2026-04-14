@@ -20,17 +20,17 @@ What it does:
   Plex     — creates Movies / TV Shows / Music libraries, triggers scan
 """
 
+import argparse
 import getpass
 import subprocess
 import sys
-import os
 
 # ---------------------------------------------------------------------------
 # Inline dependency installation
 # Unraid does not persist pip packages across reboots.
 # We install to /tmp so we don't litter the system.
 # ---------------------------------------------------------------------------
-def ensure_deps():
+def ensure_deps() -> None:
     import importlib
     missing = []
     for pkg, import_name in [("requests", "requests"), ("plexapi", "plexapi")]:
@@ -51,18 +51,21 @@ def ensure_deps():
 
 ensure_deps()
 
-import json
 import time
-import requests
 from pathlib import Path
+from typing import Optional
+
+import requests
 
 # ---------------------------------------------------------------------------
 # Paths and env loading
+# Paths are module-level but mutable at argparse time (via --stack-dir)
+# before main() dispatches.
 # ---------------------------------------------------------------------------
-STACK_DIR      = Path(__file__).resolve().parent.parent   # homeserver/
-ENV_FILE       = STACK_DIR / ".env"
-GENERATED_FILE = STACK_DIR / "generated.env"
-DOCKER_ENV     = STACK_DIR / ".env.docker"
+STACK_DIR: Path      = Path(__file__).resolve().parent.parent   # homeserver/
+ENV_FILE: Path       = STACK_DIR / ".env"
+GENERATED_FILE: Path = STACK_DIR / "generated.env"
+DOCKER_ENV: Path     = STACK_DIR / ".env.docker"
 
 def _parse_env_file(path: Path) -> dict:
     env = {}
@@ -87,7 +90,7 @@ def load_env() -> dict:
         env.update(_parse_env_file(GENERATED_FILE))
     return env
 
-def write_generated(updates: dict):
+def write_generated(updates: dict) -> None:
     """Append or update keys in generated.env."""
     existing = _parse_env_file(GENERATED_FILE) if GENERATED_FILE.exists() else {}
     existing.update(updates)
@@ -97,7 +100,7 @@ def write_generated(updates: dict):
     GENERATED_FILE.write_text("".join(lines))
     GENERATED_FILE.chmod(0o600)
 
-def refresh_docker_env():
+def refresh_docker_env() -> None:
     """Rewrite .env.docker after generated.env changes."""
     merged = {}
     for path in (ENV_FILE, GENERATED_FILE):
@@ -122,12 +125,12 @@ def get(env: dict, key: str, default: str = "") -> str:
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
-def arr_get(base: str, key: str, path: str):
+def arr_get(base: str, key: str, path: str) -> dict:
     r = requests.get(f"{base}{path}", headers={"X-Api-Key": key}, timeout=15)
     r.raise_for_status()
     return r.json()
 
-def arr_post(base: str, key: str, path: str, body: dict):
+def arr_post(base: str, key: str, path: str, body: dict) -> dict:
     r = requests.post(
         f"{base}{path}", json=body,
         headers={"X-Api-Key": key, "Content-Type": "application/json"},
@@ -136,7 +139,7 @@ def arr_post(base: str, key: str, path: str, body: dict):
     r.raise_for_status()
     return r.json()
 
-def arr_put(base: str, key: str, path: str, body: dict):
+def arr_put(base: str, key: str, path: str, body: dict) -> dict:
     r = requests.put(
         f"{base}{path}", json=body,
         headers={"X-Api-Key": key, "Content-Type": "application/json"},
@@ -152,7 +155,7 @@ def already_exists(base: str, key: str, list_path: str, name_field: str, name: s
     except Exception:
         return False
 
-def wait_for(url: str, label: str, timeout: int = 180):
+def wait_for(url: str, label: str, timeout: int = 180) -> None:
     """Poll until `url` responds with a non-5xx, or bail after `timeout` seconds.
 
     Exponential backoff with a 15s ceiling. A connection error means the
@@ -187,7 +190,8 @@ def wait_for(url: str, label: str, timeout: int = 180):
 # Configure an *arr app: root folder + SABnzbd client + media management
 # ---------------------------------------------------------------------------
 def configure_arr(label: str, base: str, key: str, root_folder: str,
-                  sabnzbd_category: str, sabnzbd_key: str, extra_mm: dict = None):
+                  sabnzbd_category: str, sabnzbd_key: str,
+                  extra_mm: Optional[dict] = None) -> None:
 
     # Root folder
     existing_roots = arr_get(base, key, "/api/v3/rootfolder")
@@ -237,9 +241,9 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
 # ---------------------------------------------------------------------------
 # Configure Prowlarr: add indexers, connect arr apps, sync
 # ---------------------------------------------------------------------------
-def configure_prowlarr(base: str, key: str, env: dict):
+def configure_prowlarr(base: str, key: str, env: dict) -> None:
 
-    def add_indexer(name: str, defn: str, api_key_value: str):
+    def add_indexer(name: str, defn: str, api_key_value: str) -> None:
         if already_exists(base, key, "/api/v1/indexer", "name", name):
             print(f"  ✓ Prowlarr: {name} already added")
             return
@@ -267,7 +271,7 @@ def configure_prowlarr(base: str, key: str, env: dict):
         except Exception as e:
             print(f"  ⚠ Prowlarr: failed to add {name}: {e}")
 
-    def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str):
+    def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
         if already_exists(base, key, "/api/v1/applications", "name", name):
             print(f"  ✓ Prowlarr: {name} already connected")
             return
@@ -312,7 +316,7 @@ def configure_prowlarr(base: str, key: str, env: dict):
 # ---------------------------------------------------------------------------
 # Configure Plex: create libraries, trigger scan
 # ---------------------------------------------------------------------------
-def configure_plex(token: str, lan_ip: str):
+def configure_plex(token: str, lan_ip: str) -> None:
     try:
         from plexapi.server import PlexServer
         from plexapi.exceptions import BadRequest
@@ -351,7 +355,30 @@ def configure_plex(token: str, lan_ip: str):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Wire the homeserver stack together via API after first boot."
+    )
+    p.add_argument(
+        "--stack-dir", type=Path,
+        help="Override the homeserver/ directory (default: inferred from script location)"
+    )
+    p.add_argument(
+        "--timeout", type=int, default=180,
+        help="Per-service wait timeout in seconds (default: 180)"
+    )
+    return p.parse_args()
+
+
+def main() -> None:
+    global STACK_DIR, ENV_FILE, GENERATED_FILE, DOCKER_ENV
+    args = _parse_args()
+    if args.stack_dir:
+        STACK_DIR = args.stack_dir.resolve()
+        ENV_FILE = STACK_DIR / ".env"
+        GENERATED_FILE = STACK_DIR / "generated.env"
+        DOCKER_ENV = STACK_DIR / ".env.docker"
+
     env = load_env()
     lan_ip = require(env, "PLEX_LAN_IP")
     sabnzbd_key = require(env, "SABNZBD_API_KEY")
@@ -364,11 +391,12 @@ def main():
     }
 
     print("\n=== Waiting for services ===\n")
-    wait_for("http://localhost:8080/sabnzbd/api?mode=version", "sabnzbd")
+    wait_for("http://localhost:8080/sabnzbd/api?mode=version", "sabnzbd",
+             timeout=args.timeout)
     for name, (url, _key) in SERVICES.items():
         api_ver = "v1" if name == "prowlarr" else "v3"
-        wait_for(f"{url}/api/{api_ver}/system/status", name)
-    wait_for("http://localhost:5055", "overseerr")
+        wait_for(f"{url}/api/{api_ver}/system/status", name, timeout=args.timeout)
+    wait_for("http://localhost:5055", "overseerr", timeout=args.timeout)
 
     print("\n=== Radarr ===\n")
     url, key = SERVICES["radarr"]
