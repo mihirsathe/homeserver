@@ -24,21 +24,23 @@ existing API keys, and mkdir -p is idempotent.
 Uses only stdlib — no pip dependencies.
 """
 
-import os
-import sys
+import argparse
+import ipaddress
 import json
-import uuid
 import subprocess
+import sys
+import uuid
 from pathlib import Path
+from typing import Callable, Optional
 
 # ---------------------------------------------------------------------------
 # Paths — derived from script location, not hardcoded
 # ---------------------------------------------------------------------------
-STACK_DIR      = Path(__file__).resolve().parent.parent   # homeserver/
-ENV_FILE       = STACK_DIR / ".env"           # user-edited credentials
-GENERATED_FILE = STACK_DIR / "generated.env"  # machine-written, gitignored
-DOCKER_ENV     = STACK_DIR / ".env.docker"    # merged, for Compose Manager Plus
-CONFIGS        = STACK_DIR / "configs"
+STACK_DIR: Path      = Path(__file__).resolve().parent.parent   # homeserver/
+ENV_FILE: Path       = STACK_DIR / ".env"           # user-edited credentials
+GENERATED_FILE: Path = STACK_DIR / "generated.env"  # machine-written, gitignored
+DOCKER_ENV: Path     = STACK_DIR / ".env.docker"    # merged, for Compose Manager Plus
+CONFIGS: Path        = STACK_DIR / "configs"
 
 # ---------------------------------------------------------------------------
 # .env loader / writer
@@ -112,20 +114,59 @@ def write_merged_docker_env():
     DOCKER_ENV.chmod(0o600)
 
 # ---------------------------------------------------------------------------
+# Input validators
+# Each returns the validated value, or raises ValueError with a user-facing
+# message. ask() catches the error and reprompts.
+# ---------------------------------------------------------------------------
+ZONEINFO = Path("/usr/share/zoneinfo")
+
+def validate_tz(val: str) -> str:
+    # /usr/share/zoneinfo exists on every Unraid host and every modern Linux.
+    # On platforms where it doesn't (e.g. running this script on macOS for
+    # testing), skip validation rather than rejecting every timezone.
+    if ZONEINFO.exists() and not (ZONEINFO / val).is_file():
+        raise ValueError(f"not a valid timezone (no {ZONEINFO}/{val})")
+    return val
+
+def validate_ip(val: str) -> str:
+    try:
+        ipaddress.ip_address(val)
+    except ValueError as e:
+        raise ValueError(f"not a valid IP address: {e}") from e
+    return val
+
+def validate_cidr(val: str) -> str:
+    try:
+        ipaddress.ip_network(val, strict=False)
+    except ValueError as e:
+        raise ValueError(f"not a valid CIDR: {e}") from e
+    return val
+
+# ---------------------------------------------------------------------------
 # Interactive prompts
 # ---------------------------------------------------------------------------
-def ask(label: str, default: str = "", hint: str = "") -> str:
-    """Prompt until a non-empty value is entered. Returns default if provided and input is blank."""
+def ask(label: str, default: str = "", hint: str = "",
+        validator: Optional[Callable[[str], str]] = None) -> str:
+    """Prompt until a non-empty value is entered and (optionally) validates.
+    Returns default if provided and input is blank.
+    """
     if hint:
         print(f"    {hint}")
     suffix = f" [{default}]" if default else ""
     while True:
         val = input(f"  {label}{suffix}: ").strip()
-        if val:
-            return val
-        if default:
-            return default
-        print("    Required.")
+        if not val and default:
+            val = default
+        if not val:
+            print("    Required.")
+            continue
+        if validator is not None:
+            try:
+                return validator(val)
+            except ValueError as e:
+                print(f"    Invalid: {e}")
+                continue
+        return val
 
 def prompt_for_missing(env: dict) -> dict:
     """
@@ -134,11 +175,12 @@ def prompt_for_missing(env: dict) -> dict:
     """
     updates = {}
 
-    def get_or_ask(key: str, label: str, default: str = "", hint: str = "") -> str:
+    def get_or_ask(key: str, label: str, default: str = "", hint: str = "",
+                   validator: Optional[Callable[[str], str]] = None) -> str:
         val = env.get(key, "").strip()
         if val:
             return val
-        val = ask(label, default=default, hint=hint)
+        val = ask(label, default=default, hint=hint, validator=validator)
         updates[key] = val
         return val
 
@@ -159,7 +201,9 @@ def prompt_for_missing(env: dict) -> dict:
     # System
     if "TZ" in missing:
         print("--- System ---")
-        get_or_ask("TZ", "Timezone", hint="e.g. America/New_York, America/Los_Angeles, Europe/London")
+        get_or_ask("TZ", "Timezone",
+                   hint="e.g. America/New_York, America/Los_Angeles, Europe/London",
+                   validator=validate_tz)
 
     # Network / Plex
     net_missing = [k for k in ["DOMAIN", "PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
@@ -168,9 +212,13 @@ def prompt_for_missing(env: dict) -> dict:
         if "DOMAIN" in missing:
             get_or_ask("DOMAIN", "Domain", hint="e.g. smithmedia.net (registered via Cloudflare Registrar)")
         if "PLEX_LAN_IP" in missing:
-            get_or_ask("PLEX_LAN_IP", "Server LAN IP", hint="shown in Unraid UI top-right corner, e.g. 192.168.1.50")
+            get_or_ask("PLEX_LAN_IP", "Server LAN IP",
+                       hint="shown in Unraid UI top-right corner, e.g. 192.168.1.50",
+                       validator=validate_ip)
         if "PLEX_LAN_SUBNET" in missing:
-            get_or_ask("PLEX_LAN_SUBNET", "LAN subnet (CIDR)", hint="e.g. 192.168.1.0/24  — run: ip route | grep default")
+            get_or_ask("PLEX_LAN_SUBNET", "LAN subnet (CIDR)",
+                       hint="e.g. 192.168.1.0/24  — run: ip route | grep default",
+                       validator=validate_cidr)
 
     # Usenet
     usenet_missing = [k for k in ["USENET_HOST", "USENET_USER", "USENET_PASS"] if k in missing]
@@ -224,9 +272,34 @@ def prompt_for_missing(env: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Config writers
 # ---------------------------------------------------------------------------
-def _write_secret(path: Path, content: str):
+_PRESERVE_USER_EDITS = True
+_PENDING_NEW_FILES: list[Path] = []
+
+def _write_secret(path: Path, content: str) -> None:
     """Write a config file that contains credentials or API keys. Mode 0600
-    so only the owner (nobody on Unraid, after chown) can read it."""
+    so only the owner (nobody on Unraid, after chown) can read it.
+
+    If the target file already exists and its content differs from what we
+    want to write, the new template is written alongside as <path>.new and
+    the existing file is left untouched. This preserves user customizations
+    made through a service's own UI (e.g. additional Radarr custom formats)
+    on re-runs of generate-configs.py. Matches the Debian/Unraid convention
+    for handling package-owned config files that may have been edited. main()
+    prints a summary at the end for every `.new` file produced, so they're
+    hard to miss.
+
+    The .new-on-conflict behavior can be disabled with --force-overwrite.
+    """
+    if path.exists() and _PRESERVE_USER_EDITS:
+        if path.read_text() == content:
+            path.chmod(0o600)
+            return
+        new_path = path.with_suffix(path.suffix + ".new")
+        new_path.write_text(content)
+        new_path.chmod(0o600)
+        _PENDING_NEW_FILES.append(path)
+        print(f"    ! existing file preserved; new template at {new_path.name}")
+        return
     path.write_text(content)
     path.chmod(0o600)
 
@@ -550,7 +623,32 @@ def create_data_dirs():
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Interactive setup: writes .env + generated.env + per-service configs."
+    )
+    p.add_argument(
+        "--stack-dir", type=Path,
+        help="Override the homeserver/ directory (default: inferred from script location)"
+    )
+    p.add_argument(
+        "--force-overwrite", action="store_true",
+        help="Overwrite existing config files instead of writing a .new alongside."
+    )
+    return p.parse_args()
+
+
+def main() -> None:
+    global STACK_DIR, ENV_FILE, GENERATED_FILE, DOCKER_ENV, CONFIGS, _PRESERVE_USER_EDITS
+    args = _parse_args()
+    if args.stack_dir:
+        STACK_DIR = args.stack_dir.resolve()
+        ENV_FILE = STACK_DIR / ".env"
+        GENERATED_FILE = STACK_DIR / "generated.env"
+        DOCKER_ENV = STACK_DIR / ".env.docker"
+        CONFIGS = STACK_DIR / "configs"
+    _PRESERVE_USER_EDITS = not args.force_overwrite
+
     print(f"Stack directory: {STACK_DIR}\n")
 
     # Load both files — generated.env may not exist yet on first run
@@ -615,6 +713,15 @@ def main():
     # Step 6: Create data directories.
     print("\nCreating data directories...")
     create_data_dirs()
+
+    if _PENDING_NEW_FILES:
+        print("\n" + "-" * 60)
+        print("Existing configs preserved; new templates written alongside:")
+        for p in _PENDING_NEW_FILES:
+            print(f"  diff {p} {p}.new")
+        print("Reconcile (or delete the .new files) before starting the stack.")
+        print("Re-run with --force-overwrite to replace existing files instead.")
+        print("-" * 60)
 
     print(f"""
 Done.
