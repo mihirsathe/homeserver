@@ -24,5 +24,7 @@ Full walkthrough: [docs/deployment.md](../docs/deployment.md)
 - [Hardware](../docs/hardware.md) — rack, compute, storage, GPU
 - [Software](../docs/software.md) — OS, Docker stack, external access, Usenet
 - [Deployment](../docs/deployment.md) — step-by-step setup
-- [Operations](../docs/operations.md) — maintenance, diagnostics, known issues
+- [Operations](../docs/operations.md) — maintenance, diagnostics, monitoring, secret rotation
+- [Disaster recovery](../docs/disaster-recovery.md) — drive / appdata / cache / tunnel failure recovery
+- [Troubleshooting](../docs/troubleshooting.md) — symptom-driven decision tree
 - [Decisions](../docs/decisions.md) — design rationale and expansion paths

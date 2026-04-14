@@ -11,7 +11,9 @@ Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running 
 | [docs/hardware.md](docs/hardware.md) | Rack layout, compute, storage, GPU specs |
 | [docs/software.md](docs/software.md) | OS, plugins, Docker stack, folder structure, external access, Usenet |
 | [docs/deployment.md](docs/deployment.md) | Step-by-step deployment and scheduled maintenance setup |
-| [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, known limitations |
+| [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, monitoring, secret rotation |
+| [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, tunnel down |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |
 | [docs/decisions.md](docs/decisions.md) | Why things are the way they are + expansion paths |
 
 ---
@@ -27,8 +29,11 @@ homeserver/
 └── scripts/
     ├── generate-configs.py    ← run before first boot
     ├── bootstrap.py           ← run once after first boot
-    ├── setup-unraid.sh        ← Unraid-specific setup
-    └── update-stack.sh        ← monthly update routine
+    ├── setup-unraid.sh        ← Unraid-specific setup (plugins, shares, folder structure)
+    ├── setup-fan-control.sh   ← opt-in iDRAC fan control (run only if needed)
+    ├── update-stack.sh        ← monthly image-pull + redeploy + health gate
+    ├── backup-appdata.sh      ← weekly backup verification + optional offsite copy
+    └── restore-appdata.sh     ← interactive restore helper
 ```
 
 ---
