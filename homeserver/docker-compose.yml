@@ -186,7 +186,6 @@ services:
     image: plexinc/pms-docker:public
     container_name: plex
     runtime: nvidia
-    privileged: true
     networks:
       - medianet
       - cloudflared
@@ -215,7 +214,8 @@ services:
     volumes:
       - /mnt/user/appdata/plex:/config
       - /mnt/user/appdata/plex-transcode:/transcode
-      - /mnt/user/data/media:/data/media
+      # Read-only — Plex never needs to modify the library; the arr apps own writes.
+      - /mnt/user/data/media:/data/media:ro
     ports:
       - "32400:32400"
       - "8324:8324"
