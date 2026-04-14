@@ -20,6 +20,7 @@ What it does:
   Plex     — creates Movies / TV Shows / Music libraries, triggers scan
 """
 
+import getpass
 import subprocess
 import sys
 import os
@@ -376,7 +377,8 @@ def main():
         print("  2. Sign in with your Plex account")
         print("  3. Settings → General → scroll to bottom → click 'Show'")
         print("  4. Copy the X-Plex-Token value\n")
-        plex_token = input("  Paste PLEX_TOKEN here (or press Enter to skip): ").strip()
+        # getpass suppresses terminal echo and keeps the token out of shell history.
+        plex_token = getpass.getpass("  Paste PLEX_TOKEN here (or press Enter to skip): ").strip()
         if plex_token:
             write_generated({"PLEX_TOKEN": plex_token})
             refresh_docker_env()
