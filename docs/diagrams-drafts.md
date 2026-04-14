@@ -70,7 +70,7 @@ Services, volumes, and the life of a content request from click to stream.
 ```mermaid
 flowchart LR
     viewer["Viewer"]
-    osr["Overseerr"]
+    seerr["Seerr"]
     subgraph arr["*arr services"]
         direction TB
         radarr["Radarr"]
@@ -84,8 +84,8 @@ flowchart LR
     inc[("/data/usenet/")]
     media[("/data/media/")]
 
-    viewer -->|"1 · request"| osr
-    osr -->|"2 · push"| arr
+    viewer -->|"1 · request"| seerr
+    seerr -->|"2 · push"| arr
     arr -->|"3 · search"| prow
     arr -->|"4 · queue NZB"| sab
     sab <-->|"5 · download"| usenet
@@ -97,29 +97,28 @@ flowchart LR
 
 ---
 
-## 4. External access via Cloudflare Tunnel (candidate: `software.md` external-access section)
+## 4. External access: Plex port-forward + Tailscale admin plane (candidate: `software.md` external-access section)
 
-Illustrates the zero-open-ports property — the tunnel is established outbound by `cloudflared`, so nothing in the home router needs to be opened.
+Illustrates the one-port-open property — Plex is forwarded directly on TCP 32400; every other service is reachable only over the tailnet.
 
 ```mermaid
 flowchart LR
-    client["Remote client<br/>(phone, laptop)"]
-    cf["Cloudflare edge"]
+    client["Remote Plex client<br/>(phone, laptop)"]
+    admin["Admin device<br/>(on tailnet)"]
     subgraph home["Home network"]
-        router["Home router<br/>·· no inbound ports ··"]
-        cloudflared["cloudflared<br/>container"]
+        router["Home router<br/>·· only TCP 32400 open ··"]
+        tailscale["Tailscale<br/>subnet router"]
         subgraph stack["Docker medianet"]
             plex["Plex"]
-            osr["Overseerr"]
-            taut["Tautulli"]
+            seerr["Seerr"]
+            arr["*arr · SAB · Prowlarr"]
         end
     end
 
-    client -->|"HTTPS<br/>plex.example.com"| cf
-    cloudflared -. "outbound tunnel<br/>(persistent)" .-> cf
-    cf -. "multiplexed over tunnel" .-> cloudflared
-    cloudflared --> plex
-    cloudflared --> osr
-    cloudflared --> taut
-    router -.-|"inbound: nothing"| cf
+    client -->|"TCP 32400<br/>(app.plex.tv direct-connect)"| router
+    router --> plex
+    admin -. "WireGuard<br/>(outbound-initiated)" .-> tailscale
+    tailscale --> seerr
+    tailscale --> arr
+    router -.-|"inbound: only 32400"| client
 ```

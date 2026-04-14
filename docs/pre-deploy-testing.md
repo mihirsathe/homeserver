@@ -10,14 +10,15 @@ You have an Ubuntu LTS desktop with an NVIDIA GPU. Before racking the R640 you c
 
 | Tested here | Needs the real server |
 |-------------|-----------------------|
-| docker-compose.yml end-to-end | Unraid OS + plugins (CA Backup, Fix Common Problems, Nvidia-Driver plugin, User Scripts) |
+| docker-compose.yml end-to-end | Unraid OS + plugins (CA Backup, Fix Common Problems, Nvidia-Driver plugin, User Scripts, Tailscale) |
 | NVIDIA + NVENC passthrough to Plex | PERC H730P HBA mode + SMART passthrough |
-| Inter-container DNS on `medianet` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
+| Inter-container DNS on `downloaders` / `frontend` / `automation` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
 | Hardlink behaviour across `/data` | `/mnt/user/...` as a real Unraid share (we fake it with a bindmount) |
 | generate-configs.py + bootstrap.py | iDRAC / fan control (setup-fan-control.sh) |
 | backup-appdata.sh + restore-appdata.sh | setup-unraid.sh (plugin install/config) |
 | update-stack.sh (incl. health gate + rollback) | |
-| Cloudflare Tunnel dry-run | |
+| Gluetun + Mullvad WireGuard kill-switch behaviour | |
+| Recyclarr initial sync against Radarr/Sonarr | Tailscale mesh VPN to the live tailnet |
 | Diagram rendering (SVG + mingrammer PNG) | |
 | Zensical doc site build | |
 
@@ -110,8 +111,8 @@ ls -l ../docker-stack.png ../external-access.png
 
 Open both PNGs. Confirm:
 
-- **docker-stack.png**: Viewer → Overseerr → *arr cluster → Prowlarr / SABnzbd → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All 9 product logos render (plex, overseerr, radarr, sonarr, lidarr, prowlarr, sabnzbd are PNGs; Usenet is a generic internet icon).
-- **external-access.png**: dashed "Home Network · No Inbound Ports" cluster around the whole home. `cloudflared` icon matches the Cloudflare edge icon (same company, different endpoint). Router has a dashed red "No Inbound" arrow to the edge. SAB → Usenet and Prowlarr → Indexers are dashed amber outbound arrows.
+- **docker-stack.png**: Viewer → Seerr → *arr cluster → Prowlarr / SABnzbd → Gluetun → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All product logos render (plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, gluetun, bazarr, tautulli, recyclarr; Seerr + Usenet may fall back to a generic icon).
+- **external-access.png**: single open port (TCP 32400 → Plex) on the router. Tailscale mesh reaches `tag:server` with all admin UIs behind it. Gluetun has a dashed outbound arrow to Mullvad; SAB and Prowlarr share Gluetun's netns. Home WAN IP is explicitly annotated as published to `plex.tv` for direct-connect.
 
 If the mingrammer output has layout weirdness, tweak `ranksep`/`nodesep` in the graph_attr dict at the top of each script.
 
@@ -142,8 +143,9 @@ Open `http://localhost:8000` and click through every page. Confirm:
 The compose file hardcodes `/mnt/user/...` paths. On Ubuntu we fake that share with a bindmount-friendly tree and override `PUID`/`PGID` to match your Ubuntu user.
 
 ```bash
-# Fake Unraid share root
-sudo mkdir -p /mnt/user/{appdata,data/{usenet/{incomplete,complete/{movies,tv,music}},media/{movies,tv,music}},backups/appdata}
+# Fake Unraid share root. usenet-incomplete is its own share on the real server
+# (cache-only); here it's just another directory under /mnt/user.
+sudo mkdir -p /mnt/user/{appdata,usenet-incomplete,data/{usenet/complete/{movies,tv,music},media/{movies,tv,music}},backups/appdata}
 sudo chown -R "$USER:$USER" /mnt/user
 
 # Point STACK_DIR at the repo checkout instead of /mnt/user/appdata/homeserver
@@ -161,10 +163,10 @@ cp .env.example .env
 |-----|---------------|-----|
 | `PUID` / `PGID` | `$(id -u)` / `$(id -g)` | Match your Ubuntu user; the hotio images drop privileges |
 | `TZ` | your timezone | |
-| `DOMAIN` | `test.local` | Not exercised unless you bring up the tunnel for real |
-| `USENET_*` | leave blank or use a real trial account | SAB starts either way; connection will fail cleanly if stubbed |
+| `VPN_PRIVATE_KEY` / `VPN_ADDRESS` | real Mullvad WireGuard values | Gluetun crashes on stubs and takes SAB + Prowlarr down with it |
+| `VPN_CITY` | `Amsterdam` (or nearest to your provider) | |
+| `USENET_*` | real trial account or leave blank | SAB starts either way; connection will fail cleanly if stubbed |
 | `NZBGEEK_API_KEY`, `NZBPLANET_API_KEY` | real keys OR `TEST_KEY_PLACEHOLDER` | Prowlarr indexer add will 401 on stubs — that's fine |
-| `CLOUDFLARE_TUNNEL_TOKEN` | leave blank initially | cloudflared will crash-loop; rest of stack is unaffected |
 | `PLEX_LAN_IP` | your Ubuntu host IP (`ip -4 a`) | |
 | `PLEX_LAN_SUBNET` | e.g. `192.168.1.0/24` | |
 | `PLEX_CLAIM` | fresh token from https://plex.tv/claim | Grab right before `docker compose up` |
@@ -175,7 +177,7 @@ Then generate the config files:
 python3 scripts/generate-configs.py
 ```
 
-**Exit criteria** — `configs/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `overseerr/`, `tautulli/`, `bazarr/`), `generated.env` exists, `.env.docker` exists. `/mnt/user/data/` tree is present.
+**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `recyclarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists, `.env.docker` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
 
 ---
 
@@ -187,7 +189,7 @@ docker compose --env-file .env.docker up -d
 watch -n 2 'docker compose ps'
 ```
 
-Wait until every service except possibly `cloudflared` reaches `(healthy)`. Allow up to 3 minutes — Plex healthcheck has a 120s start_period.
+Wait until every service reaches `(healthy)`. Allow up to 3 minutes — Plex healthcheck has a 120s start_period, and Gluetun may restart once while the Mullvad handshake lands.
 
 **Per-service sanity**
 
@@ -273,32 +275,40 @@ Expected: same inode, `links=2`. If `links=1`, the mount layout is wrong — lik
 
 ---
 
-## 8 · Cloudflare Tunnel
+## 8 · External access (Plex port-forward + Tailscale admin plane)
 
-Pick the depth you want:
+Two properties to verify: (a) Plex is reachable from outside on exactly one port, and (b) the admin plane is reachable only via Tailscale.
 
-**(a) Skip.** Leave `CLOUDFLARE_TUNNEL_TOKEN=` blank; cloudflared crash-loops. That's fine — it proves nothing was depending on it at compose-up time.
-
-**(b) Quick-tunnel smoke test** — no account config needed:
+**(a) Plex port-forward.** From a phone on LTE (no home WiFi):
 
 ```bash
-# Replace the compose-managed cloudflared with a one-shot quick tunnel
-docker run --rm --network medianet cloudflare/cloudflared:2024.12.2 \
-  tunnel --url http://plex:32400
+# identity endpoint should respond over the router's WAN IP
+curl -fsS https://<wan-ip>:32400/identity | head -c 200
 ```
 
-Cloudflare prints a `*.trycloudflare.com` URL. Hit it from your phone on LTE — Plex identity should respond. Ctrl-C to tear down.
+Expected: a `MediaContainer` XML identity blob. If it times out, the router port-forward 32400 → R640 LAN IP isn't in place (or the ISP is blocking inbound 32400).
 
-**(c) Real tunnel dry-run.** Create a Zero Trust tunnel in the Cloudflare dashboard, paste the token into `.env`, re-run `docker compose up -d cloudflared`. Validate routing to `plex:32400`, `overseerr:5055`, etc. per the table in [software.md](software.md#domains-and-subdomains).
-
-**Boundary property check** (works in any mode):
+**(b) Tailscale admin plane.** On an admin device on the tailnet (and *only* on the tailnet):
 
 ```bash
-# No process on the host is listening for inbound Cloudflare traffic.
+# Each admin UI should respond over the tailnet hostname
+curl -fsS http://mediaserver:7878/radarr/ping
+curl -fsS http://mediaserver:8989/sonarr/ping
+curl -fsS http://mediaserver:9696/prowlarr/ping
+curl -fsS http://mediaserver:8080/sabnzbd/api?mode=version
+curl -fsS http://mediaserver:5055/api/v1/status | jq .
+```
+
+All should succeed. Then drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin ports are LAN-only, never reached over the WAN.
+
+**Boundary property check** — on the Unraid host:
+
+```bash
+# Nothing other than 32400 (Plex) should be WAN-reachable.
 sudo ss -tlnp | grep -v 127.0.0.1
 ```
 
-Only the ports explicitly `ports:`-published by compose should appear. Nothing from cloudflared should be listening — its connection is outbound.
+Expect every published port from compose to appear, but only 32400 is mapped through the router. Tailscale's socket appears here too (via the kernel module/container); its listener binds to the tailnet interface, not WAN.
 
 ---
 
@@ -334,7 +344,7 @@ Re-run `bootstrap.py` — it must be idempotent (no duplicate indexers, no dupli
 
 ## 10 · Backup + restore
 
-CA Appdata Backup doesn't exist on Ubuntu. Fake its output to exercise the wrapper:
+The Appdata Backup plugin doesn't exist on Ubuntu. Fake its output to exercise the wrapper:
 
 ```bash
 STAMP=$(date -u +%Y-%m-%d)
@@ -409,7 +419,7 @@ sudo rm -rf /mnt/user  # destroys the sandbox; do not run on the real Unraid box
 | MD1400 SAS enumeration | Requires the LSI 9300-8e HBA + SFF-8644 + real DAS |
 | Parity rebuild | Requires Unraid's driver + actual parity disk |
 | iDRAC + fan control (`setup-fan-control.sh`) | R640 BMC only |
-| Cloudflare Zero Trust Access policies | Partial — can configure but cannot emulate family OTP flow without real emails |
+| Tailscale ACLs under real admin load | Partial — can configure ACLs locally but cannot emulate multi-device SSO posture without real Tailscale users |
 | Plex Pass features (HW transcoding gating) | Requires a real Plex Pass on the claimed server |
 | AV1 encode absence on RTX 3050 | Untestable positive, testable negative: try and fail |
 
@@ -431,7 +441,7 @@ Keep a running list as you execute. One line per test, one of `PASS` / `FAIL` / 
 [ ] 6b NVENC transcode
 [ ] 6c Concurrent transcode stress
 [ ] 7  Hardlink across /data
-[ ] 8  Cloudflare tunnel (a/b/c)
+[ ] 8  External access: Plex port-forward + Tailscale admin plane
 [ ] 9  Bootstrap idempotency
 [ ] 10 Backup + restore round-trip
 [ ] 11 update-stack dry-run + live + rollback

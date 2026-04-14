@@ -2,7 +2,7 @@
 
 Self-hosted media automation stack on a Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro.
 
-Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Overseerr for family requests and Cloudflare Tunnel for external access. No open router ports. Every app pre-configured before first boot — no UI wizards.
+Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting from Plex Watchlist. Plex port-forwarded (TCP 32400); all admin UIs reachable only via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Every app pre-configured before first boot — no UI wizards.
 
 ---
 
@@ -28,6 +28,6 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Overseerr for family 
 | GPU | Yeston RTX 3050 LP 6G · 12 concurrent NVENC sessions |
 | Storage | Dell MD1400 DAS · 32 TB usable (4×8 TB + 16 TB parity) |
 | OS | Unraid Pro (lifetime) · BOSS card boot |
-| Stack | 9 Docker containers · defined in one Compose file |
-| Access | Cloudflare Tunnel · zero open router ports |
+| Stack | 11 Docker containers · defined in one Compose file |
+| Access | One router port (TCP 32400 → Plex) · admin via Tailscale · SAB/Prowlarr via Mullvad |
 | Rebuild time | ~15 minutes from scratch |

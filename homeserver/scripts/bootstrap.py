@@ -106,7 +106,7 @@ def refresh_docker_env() -> None:
     for path in (ENV_FILE, GENERATED_FILE):
         if path.exists():
             merged.update(_parse_env_file(path))
-    lines = ["# Merged env for Compose Manager Plus — auto-generated, do not edit\n"]
+    lines = ["# Merged env — auto-generated, do not edit\n"]
     for k, v in merged.items():
         lines.append(f"{k}={v}\n")
     DOCKER_ENV.write_text("".join(lines))
@@ -396,7 +396,7 @@ def main() -> None:
     for name, (url, _key) in SERVICES.items():
         api_ver = "v1" if name == "prowlarr" else "v3"
         wait_for(f"{url}/api/{api_ver}/system/status", name, timeout=args.timeout)
-    wait_for("http://localhost:5055", "overseerr", timeout=args.timeout)
+    wait_for("http://localhost:5055", "seerr", timeout=args.timeout)
 
     print("\n=== Radarr ===\n")
     url, key = SERVICES["radarr"]
@@ -442,6 +442,19 @@ def main() -> None:
     else:
         print("  ⚠ Skipped — re-run this script after signing into Plex")
 
+    print("\n=== Recyclarr ===\n")
+    print("  Triggering initial TRaSH-Guides sync...")
+    result = subprocess.run(
+        ["docker", "exec", "recyclarr", "recyclarr", "sync"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("  ✓ quality profiles + custom formats synced to Radarr/Sonarr")
+        print("  Next scheduled sync: Monday 5am (CRON_SCHEDULE in compose)")
+    else:
+        print("  ⚠ Sync failed. Check: docker logs recyclarr")
+        print(f"    stderr: {result.stderr.strip()[:200]}")
+
     print("\n=== Done ===\n")
     print("Stack is fully configured. Access points:")
     print(f"  SABnzbd:   http://{lan_ip}:8080/sabnzbd")
@@ -450,12 +463,18 @@ def main() -> None:
     print(f"  Sonarr:    http://{lan_ip}:8989/sonarr")
     print(f"  Lidarr:    http://{lan_ip}:8686/lidarr")
     print(f"  Plex:      http://{lan_ip}:32400/web")
-    print(f"  Overseerr: http://{lan_ip}:5055")
+    print(f"  Seerr:     http://{lan_ip}:5055")
     print()
-    print("One remaining manual step:")
-    print("  Plex → Settings → Transcoder → Use hardware acceleration when available")
-    print("  Select: NVIDIA GeForce RTX 3050")
-    print("  (requires Plex Pass — cannot be set via API)")
+    print("Admin UIs (everything above except Plex) are reachable via")
+    print("Tailscale MagicDNS from any device on your tailnet.")
+    print()
+    print("Remaining manual steps:")
+    print("  1. Plex → Settings → Transcoder → Use hardware acceleration when")
+    print("     available → select NVIDIA GeForce RTX 3050 (requires Plex Pass —")
+    print("     cannot be set via API).")
+    print("  2. Seerr → sign in with your Plex account, then Settings → Users →")
+    print("     edit each family member → grant 'Auto-Request' so their Plex")
+    print("     Watchlist additions become Radarr/Sonarr requests automatically.")
 
 if __name__ == "__main__":
     main()

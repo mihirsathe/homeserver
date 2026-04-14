@@ -50,7 +50,7 @@ echo ""
 # ---------------------------------------------------------------------------
 info "Step 1/8 — Installing Community Applications plugin..."
 
-CA_PLG="https://raw.githubusercontent.com/Squidly271/community.applications/master/plugins/community.applications.plg"
+CA_PLG="https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
 CA_DEST="/boot/config/plugins/community.applications.plg"
 
 if [[ -f /usr/local/emhttp/plugins/community.applications/plugin ]]; then
@@ -66,20 +66,27 @@ fi
 info "Step 2/8 — Installing required plugins..."
 echo ""
 
-# Plugin URLs — all sourced from the official Unraid community repos.
-# nvidia-container-toolkit URL includes the version path that Unraid's CA
-# store would normally resolve for you.
+# Plugin URLs — sourced from the official Unraid org (github.com/unraid) where
+# possible. User Scripts stays on Squidly271 — still actively maintained.
+# Appdata Backup is Commifreak/unraid-appdata.backup, the modern replacement
+# for ca.backup2 (deprecated as of Unraid 6.12).
+# Docker Compose is NOT installed via a plugin — we run `docker compose` (built
+# into Unraid) directly from a User Script at array start. Drops a dependency
+# on Compose Manager Plus.
 declare -A PLUGINS=(
-    ["Fix Common Problems"]="https://raw.githubusercontent.com/Squidly271/Fix-Common-Problems/master/source/fix.common.problems.plg"
-    ["CA Appdata Backup"]="https://raw.githubusercontent.com/Squidly271/ca.backup2/master/plugins/ca.backup2.plg"
+    ["Fix Common Problems"]="https://raw.githubusercontent.com/unraid/fix.common.problems/master/plugins/fix.common.problems.plg"
+    ["Appdata Backup"]="https://raw.githubusercontent.com/Commifreak/unraid-appdata.backup/master/appdata.backup.plg"
     ["User Scripts"]="https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
-    ["Unassigned Devices"]="https://raw.githubusercontent.com/dlandon/unassigned.devices/master/unassigned.devices.plg"
-    ["Compose Manager Plus"]="https://raw.githubusercontent.com/mstrhakr/compose_plugin/main/compose.manager.plus.plg"
+    ["Unassigned Devices"]="https://raw.githubusercontent.com/unraid/unassigned.devices/master/unassigned.devices.plg"
     ["Nvidia-Driver"]="https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
-    ["Dynamix File Integrity"]="https://raw.githubusercontent.com/bergware/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
+    ["Dynamix File Integrity"]="https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
+    # Tailscale — admin plane for every non-Plex service. After install, run
+    # `tailscale up --ssh --advertise-tags=tag:server` from the Unraid terminal
+    # to join the tailnet (interactive auth URL).
+    ["Tailscale"]="https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
 )
 
-# Modern ich777/unraid-nvidia-driver bundles the container toolkit — no separate
+# The Nvidia-Driver plugin bundles nvidia-container-toolkit — no separate
 # install needed. A single reboot after driver install is sufficient.
 for name in "${!PLUGINS[@]}"; do
     url="${PLUGINS[$name]}"
@@ -111,8 +118,8 @@ set_cfg() {
 
 set_cfg "$DOCKER_CFG" "DOCKER_ENABLED"          "yes"
 set_cfg "$DOCKER_CFG" "STORAGE_DRIVER"          "overlay2"
-# Host access to custom networks — critical for our medianet bridge network
-# to be reachable from the host (e.g. bootstrap.py calling localhost:7878)
+# Host access to custom networks — lets bootstrap.py reach container-only
+# services from the Unraid shell (e.g. localhost:7878 for Radarr).
 set_cfg "$DOCKER_CFG" "DOCKER_HOST_ACCESS"      "yes"
 # Docker image storage on the cache SSD, not the spinning array
 set_cfg "$DOCKER_CFG" "DOCKER_APP_CONFIG_PATH"  "/mnt/user/appdata"
@@ -227,6 +234,28 @@ EOF
     ok "  appdata share config written"
 fi
 
+# usenet-incomplete share — SABnzbd active downloads, par2 + unrar
+# cache=only means mover never touches these files; they stay on SSD until
+# SAB moves them to /mnt/user/data/usenet/complete/ on the array.
+INCOMPLETE_SHARE="$SHARES_DIR/usenet-incomplete.cfg"
+if [[ -f "$INCOMPLETE_SHARE" ]]; then
+    sed -i 's|^shareUseCache=.*|shareUseCache=only|' "$INCOMPLETE_SHARE" 2>/dev/null || true
+    ok "  usenet-incomplete share: verified cache=only"
+else
+    cat > "$INCOMPLETE_SHARE" << 'EOF'
+shareComment=SABnzbd incomplete downloads (cache-only, never migrates to array)
+shareAllocator=highwater
+shareSplitLevel=0
+shareInclude=
+shareExclude=
+shareUseCache=only
+shareCachePool=cache
+shareCOW=auto
+shareNameOrig=usenet-incomplete
+EOF
+    ok "  usenet-incomplete share config written"
+fi
+
 ok "Share configs written"
 
 # ---------------------------------------------------------------------------
@@ -240,21 +269,23 @@ if [[ ! -d /mnt/user ]]; then
     warn "/mnt/user not available — array may not be started yet."
     warn "After starting the array, run these commands manually:"
     echo ""
-    echo "  mkdir -p /mnt/user/data/{usenet/{incomplete,complete/{tv,movies,music}},media/{tv,movies,music}}"
+    echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
+    echo "  mkdir -p /mnt/user/usenet-incomplete"
     echo "  mkdir -p /mnt/user/appdata/plex-transcode"
-    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/appdata/plex-transcode"
-    echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/"
+    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode"
+    echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
 else
-    mkdir -p /mnt/user/data/{usenet/{incomplete,complete/{tv,movies,music}},media/{tv,movies,music}}
+    mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
+    mkdir -p /mnt/user/usenet-incomplete
     mkdir -p /mnt/user/appdata/plex-transcode
 
-    chown -R nobody:users /mnt/user/data/
+    chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
-    chmod -R a=,a+rX,u+w,g+w /mnt/user/data/
+    chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 
     ok "Folder structure created:"
-    find /mnt/user/data -type d | sort | sed 's/^/    /'
+    find /mnt/user/data /mnt/user/usenet-incomplete -maxdepth 3 -type d | sort | sed 's/^/    /'
 fi
 
 # ---------------------------------------------------------------------------
@@ -264,6 +295,26 @@ info "Step 8/8 — Creating User Scripts..."
 
 USER_SCRIPTS_DIR="/boot/config/plugins/user.scripts/scripts"
 mkdir -p "$USER_SCRIPTS_DIR"
+
+# At Array Start — bring the Compose stack up. Replaces Compose Manager Plus:
+# Unraid ships `docker compose` in the base OS, so we just call it from a
+# User Script scheduled for "At Startup of Array". Wait briefly for the Docker
+# service to settle before issuing commands.
+mkdir -p "$USER_SCRIPTS_DIR/media_stack_up"
+cat > "$USER_SCRIPTS_DIR/media_stack_up/script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+STACK_DIR=/mnt/user/appdata/homeserver/homeserver
+# Wait for Docker daemon to be ready (array start -> Docker start is async).
+for _ in $(seq 1 30); do
+    docker info >/dev/null 2>&1 && break
+    sleep 2
+done
+cd "$STACK_DIR"
+docker compose --env-file .env --env-file generated.env up -d
+EOF
+chmod +x "$USER_SCRIPTS_DIR/media_stack_up/script"
+ok "  media_stack_up created (run at array start)"
 
 # Monthly stack update — no credentials needed
 mkdir -p "$USER_SCRIPTS_DIR/media_stack_update"
@@ -275,7 +326,7 @@ chmod +x "$USER_SCRIPTS_DIR/media_stack_update/script"
 ok "  media_stack_update created"
 
 # Weekly appdata backup verification + optional offsite copy. Runs after the
-# CA Appdata Backup plugin's own schedule; see backup-appdata.sh for details.
+# Appdata Backup plugin's own schedule; see backup-appdata.sh for details.
 mkdir -p "$USER_SCRIPTS_DIR/media_stack_backup"
 cat > "$USER_SCRIPTS_DIR/media_stack_backup/script" <<'EOF'
 #!/bin/bash
@@ -292,8 +343,9 @@ ok "  media_stack_backup created"
 echo ""
 warn "Manual steps remaining for User Scripts:"
 warn "  Settings → User Scripts → set schedules:"
+warn "    media_stack_up     → At Startup of Array"
 warn "    media_stack_update → Monthly (1st, 3am)"
-warn "    media_stack_backup → Weekly (Sunday, 4am — after CA Appdata Backup)"
+warn "    media_stack_backup → Weekly (Sunday, 4am — after Appdata Backup)"
 
 # ---------------------------------------------------------------------------
 # Done — print what still needs human intervention
@@ -327,22 +379,50 @@ echo "      nvidia-smi"
 echo "      docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi"
 echo "    If the container test fails: Apps → search 'nvidia container toolkit' → Install"
 echo "    Then restart Docker (Settings → Docker → toggle off/on)"
+echo "    Confirm nvidia-container-toolkit >= 1.16.2 (closes CVE-2024-0132):"
+echo "      nvidia-ctk --version"
 echo ""
-echo " 5. SET USER SCRIPT SCHEDULES"
+echo " 5. JOIN TAILSCALE"
+echo "    Settings → Tailscale → Start the daemon."
+echo "    From the Unraid terminal:"
+echo "      tailscale up --ssh --advertise-tags=tag:server"
+echo "    Open the auth URL, sign in. Install Tailscale on admin devices,"
+echo "    tag them tag:admin, and apply ACLs so only tag:admin can reach"
+echo "    tag:server on the *arr/SAB/Seerr/Unraid-webUI ports."
+echo ""
+echo " 6. ROUTER PORT-FORWARD FOR PLEX"
+echo "    Plex is the only service with a public port. On your router:"
+echo "      TCP 32400 -> <this server's LAN IP>:32400"
+echo "    No UDP. No other ports. Everything else is Tailscale-only."
+echo ""
+echo " 7. SET USER SCRIPT SCHEDULES"
 echo "    Settings → User Scripts:"
+echo "      media_stack_up     → At Startup of Array"
 echo "      media_stack_update → Monthly (1st, 3am)"
 echo "      media_stack_backup → Weekly (Sunday, 4am)"
 echo ""
-echo " 6. (OPTIONAL) FAN CONTROL"
+echo " 8. (OPTIONAL) FAN CONTROL"
 echo "    Only if chassis fans stay at ~100% after boot with the GPU installed:"
 echo "      bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-fan-control.sh"
 echo ""
-echo " 7. DEPLOY THE STACK"
+echo " 9. DEPLOY THE STACK"
 echo "    git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver"
 echo "    cd /mnt/user/appdata/homeserver/homeserver"
 echo "    cp .env.example .env"
 echo "    python3 scripts/generate-configs.py"
 echo "    docker compose --env-file .env --env-file generated.env up -d"
 echo "    python3 scripts/bootstrap.py"
+echo ""
+echo "10. HARDEN UNRAID ACCESS (post-deploy)"
+echo "    Settings → Management Access → disable Telnet + SSH password auth."
+echo "    Use Tailscale SSH (the --ssh flag in step 5) instead."
+echo ""
+echo "11. DISABLE iDRAC"
+echo "    Once the server is stable, disable iDRAC entirely from either the"
+echo "    iDRAC webUI (iDRAC Settings → Network → disable NIC) or from the"
+echo "    Lifecycle Controller at next boot (F10 → Hardware Configuration →"
+echo "    iDRAC Settings → Network). Re-enable from BIOS F2 if ever needed"
+echo "    for hardware debugging. Closes the largest LAN-adjacent attack"
+echo "    surface at zero hardware cost."
 echo ""
 echo "========================================================"

@@ -30,20 +30,72 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
 2. **Plug in UPS data cable** (skip if UPS is not yet physically installed — safe to add later) — USB-B end → UPS, USB-A end → any rear R640 USB port. `setup-unraid.sh` has already written `/boot/config/plugins/dynamix/ups.cfg` with `SERVICE=enable`, `CABLE=usb`, `BATTERYLEVEL=20`, `MINUTES=5`. After the step-4 reboot, verify with `apcaccess status` — expect `STATUS : ONLINE` and a non-zero `BCHARGE` / `TIMELEFT`.
 3. **Start array and format** — Main → Start → check format boxes → Format
 4. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
-5. **Verify GPU**:
+5. **Verify GPU and container toolkit**:
    ```bash
    nvidia-smi
    docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+   nvidia-ctk --version   # must be >= 1.16.2 (closes CVE-2024-0132)
    ```
-   If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle)
+   If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle).
 6. **Set User Script schedules** — Settings → User Scripts:
+   - `media_stack_up` → At Startup of Array
    - `media_stack_update` → Monthly (1st, 3am)
-   - `media_stack_backup` → Weekly (Sunday, 4am, after CA Appdata Backup)
+   - `media_stack_backup` → Weekly (Sunday, 4am, after Appdata Backup)
    - `fan_control` → At Startup of Array *(only if you ran `setup-fan-control.sh`)*
 
 ---
 
-## Step 3 — Clone and configure
+## Step 3 — Network setup
+
+Two pieces of network plumbing must exist before the stack comes up: a Tailscale tailnet for admin access, and a single router port-forward for Plex.
+
+### 3a — Tailscale
+
+1. Create a tailnet at [login.tailscale.com](https://login.tailscale.com/) if you don't already have one.
+2. In the admin console → **Access controls**, add tags and an ACL roughly like:
+   ```json
+   {
+     "tagOwners": {
+       "tag:server": ["your-email@example.com"],
+       "tag:admin":  ["your-email@example.com"]
+     },
+     "acls": [
+       { "action": "accept",
+         "src": ["tag:admin"],
+         "dst": ["tag:server:80,443,5055,6767,7878,8080,8181,8686,8989,9696"] }
+     ],
+     "ssh": [
+       { "action": "accept",
+         "src": ["tag:admin"], "dst": ["tag:server"], "users": ["root"] }
+     ]
+   }
+   ```
+3. From the Unraid terminal:
+   ```bash
+   tailscale up --ssh --advertise-tags=tag:server
+   ```
+   Open the auth URL, sign in, confirm the tags. The Unraid host now has a stable `mediaserver.<tailnet>.ts.net` hostname (MagicDNS).
+4. Install Tailscale on every admin device (laptop, phone). In the admin console, edit each device → add `tag:admin`.
+
+After this, the *arr/SAB/Seerr/Unraid webUIs are reachable only from tagged admin devices.
+
+### 3b — Router port-forward for Plex
+
+On your home router:
+
+- **TCP 32400** → `<server LAN IP>:32400`
+
+That is the only forwarding rule. No UDP. No other ports. Everything else rides the tailnet.
+
+### 3c — Mullvad account
+
+1. Buy a Mullvad account at [mullvad.net](https://mullvad.net/) (Monero preferred). You'll receive a 16-digit account number — no email, no identifying info.
+2. Mullvad account page → **WireGuard configuration** → generate and download a `.conf`.
+3. Open the `.conf`. From `[Interface]`, copy `PrivateKey` and `Address` into `.env` as `VPN_PRIVATE_KEY` and `VPN_ADDRESS`. Set `VPN_CITY` to the city in the config filename (e.g., `Amsterdam`).
+
+---
+
+## Step 4 — Clone and configure
 
 ```bash
 git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver
@@ -52,11 +104,13 @@ cp .env.example .env
 python3 scripts/generate-configs.py
 ```
 
-`generate-configs.py` is interactive — prompts for any credentials not yet in `.env`, generates API keys, writes all app config files, and creates the data directory structure.
+`generate-configs.py` is interactive — prompts for any credentials not yet in `.env` (timezone, LAN IP, Mullvad keys, Usenet creds, indexer API keys), generates service API keys, writes all app config files, and creates the data directory structure.
+
+> **Register Usenet and indexer accounts from the Mullvad exit IP.** Bring Gluetun up first (the next step), verify `docker exec sabnzbd curl -s https://ifconfig.me` shows the Mullvad IP, then register. Accounts created from your home WAN IP are permanently tainted.
 
 ---
 
-## Step 4 — Start the stack
+## Step 5 — Start the stack
 
 Before running, grab a fresh claim token from `https://plex.tv/claim` and paste it into `.env` as `PLEX_CLAIM` — it expires in 4 minutes, so do this immediately before the command below.
 
@@ -66,11 +120,18 @@ docker compose --env-file .env --env-file generated.env up -d
 
 Plex uses the claim token on first start to link the server to your account, then ignores it. `restart: unless-stopped` means containers restart automatically on all subsequent reboots. This command runs once, ever.
 
-Wait ~60 seconds for all containers to initialise.
+Wait ~60 seconds for all containers to initialise. Before proceeding, verify Gluetun's kill-switch works:
+
+```bash
+docker exec sabnzbd curl -s https://ifconfig.me        # should print a Mullvad exit IP
+docker stop gluetun
+docker exec sabnzbd curl -m 5 https://example.com      # should time out (kill-switch engaged)
+docker start gluetun
+```
 
 ---
 
-## Step 5 — Bootstrap
+## Step 6 — Bootstrap
 
 ```bash
 python3 scripts/bootstrap.py
@@ -80,7 +141,18 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally, open Tautulli at `http://<server-ip>:8181` and complete its one-time wizard — point it at the Plex server (same LAN IP, port 32400) and paste the token from the previous step.
+Finally:
+
+1. Open **Tautulli** at `http://<server-ip>:8181` and complete its one-time wizard — point it at the Plex server (same LAN IP, port 32400) and paste the token from the previous step.
+2. Open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request.
+
+---
+
+## Step 7 — Post-deploy hardening
+
+1. **Unraid** → Settings → Management Access → disable Telnet and SSH password auth. Use Tailscale SSH (`tailscale up --ssh` from Step 3a) instead.
+2. **Plex** → plex.tv → Account → Sign-in & Security → enable 2FA. Repeat for every account your library is shared with; this is not optional.
+3. **iDRAC** → once the server has been stable for a few days, disable iDRAC entirely from the iDRAC webUI (Network → disable NIC) or next boot via Lifecycle Controller. Re-enable from BIOS F2 if ever needed.
 
 ---
 

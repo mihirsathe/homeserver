@@ -22,9 +22,17 @@ Config-as-code. The entire stack is one file that can be version-controlled, dif
 
 Consistent `PUID`/`PGID`/`UMASK` pattern across all containers, lean builds. Plex uses `plexinc/pms-docker` because only the official image supports `PLEX_PREFERENCE_*` env vars and the nvidia runtime properly.
 
-### Cloudflare Tunnel over a reverse proxy
+### Plex port-forward + Tailscale admin plane (no Cloudflare)
 
-No open ports on the router. Home IP never exposed. Cloudflare handles DDoS protection and SSL termination automatically. The tradeoff — Cloudflare sees the traffic — is acceptable for a family media server.
+One port open on the router — **TCP 32400 → Plex** — and nothing else. Plex ships its own wildcard TLS (`*.plex.direct`, provisioned per-server by Plex Inc.), so there's no cert to manage and no reverse proxy in the path. Native Plex clients negotiate direct-connect via `app.plex.tv`, so a public URL like `plex.yourdomain.com` buys nothing.
+
+Cloudflare Tunnel was considered and rejected:
+
+- Cloudflare's Service-Specific Terms §2.8 bar streaming video on free/pro plans; Plex through Tunnel is an enforceable ToS violation.
+- `plex.tv` already publishes the server's WAN IP for direct-connect regardless of what's in front of it — the tunnel doesn't hide the origin.
+- Third-party SaaS (account phish, pipeline compromise, Access-policy misconfig) becomes a single point of failure for all external access.
+
+Admin services (*arr, SAB, Prowlarr, Seerr, Bazarr, Tautulli, Unraid webUI) are reachable only via **Tailscale**. Admin devices join the tailnet, tag themselves `tag:admin`, and ACLs allow `tag:admin → tag:server` on the specific admin ports. Tailscale SSH replaces standalone SSH on the Unraid host. The admin plane is not reachable from the public internet at all.
 
 ### Prowlarr over Jackett
 
@@ -33,6 +41,36 @@ Same Servarr team as Radarr/Sonarr, native API integration that auto-syncs index
 ### SABnzbd over NZBGet
 
 Actively developed, better UI, better category handling. NZBGet development has significantly slowed. CPU headroom is not the constraint on this hardware.
+
+### SAB incomplete on cache-only share, complete on array
+
+`usenet-incomplete` is a cache-only Unraid share; `data/usenet/complete` lives on the array. Active downloads, par2 repair, and unrar thrash the incomplete dir — doing that on spinning 8 TB disks is 10–20× slower than SSD, and Unraid's `shareUseCache=yes` on the main data share only helps until mover moves things off. `shareUseCache=only` on the incomplete share guarantees mover never touches it.
+
+Completed files move cross-filesystem from SSD → array exactly once, then live alongside `data/media` (same array filesystem) where hardlinks from the *arr apps work normally. The only cost is one extra copy per download; the saving is the whole unpack/repair cycle.
+
+### Recyclarr for quality profiles + custom formats
+
+Radarr and Sonarr ship with generic quality rules. The community standard for anything beyond casual use is [TRaSH Guides](https://trash-guides.info/), which publishes tuned custom formats (release groups, HDR handling, x265 scoring, REMUX preference). Recyclarr is the official sync tool — it pulls TRaSH's YAML templates and applies them to Radarr/Sonarr via API.
+
+Runs as a headless container on a weekly cron (Monday 5am) and on an initial sync triggered by `bootstrap.py`. Without it, the *arrs grab whatever Prowlarr hands over; library quality degrades noticeably over time compared to a TRaSH-tuned setup.
+
+### Seerr over Overseerr
+
+Overseerr's upstream is unmaintained (last release 2023). **Seerr** is the actively-developed successor that merges the Overseerr and Jellyseerr lineages into one codebase. Its settings schema is a compatible superset of Overseerr's, so config artefacts and migration paths line up if we ever had to go back. New deployments take Seerr from day one — there is no Overseerr stage to migrate out of.
+
+Seerr runs as UID 1000 (hardcoded; ignores PUID/PGID) and requires `init: true` in compose. The appdata dir needs `chown 1000:1000` at first boot.
+
+### Plex Watchlist auto-request as the family interface
+
+Seerr's web UI is an admin tool, not a family-facing portal. Family members already have the Plex app; they use its built-in "Add to Watchlist" button. Seerr polls the Plex Watchlist API every two minutes and auto-submits matching entries as Radarr / Sonarr requests (the admin grants `AUTO_REQUEST` permission per user in Seerr). This removes the need to publish any request portal on the public internet — one less service to expose, one less auth boundary, one less public URL to keep family members from forgetting. 4K requests still require manual approval in Seerr by design.
+
+### Gluetun (Mullvad WireGuard) in front of SAB + Prowlarr
+
+SSL over Usenet encrypts **content**, not the connection's existence. The ISP sees a sustained multi-MB/s TLS flow to a Usenet ASN on port 563, with `news.<provider>.com` in the cleartext SNI of the TLS ClientHello. The Usenet provider's logs retain source IP regardless of what the payload looks like. Both endpoints of the evidentiary graph leak the home IP.
+
+`Gluetun` with Mullvad WireGuard (`FIREWALL=on` kill-switch) replaces the home-WAN egress for SAB and Prowlarr only: `network_mode: "service:gluetun"` puts them inside Gluetun's network namespace, so their outbound traffic has to go through the VPN or nowhere. The kill-switch blocks the "VPN drops → traffic leaks" failure mode. Mullvad accepts Monero and doesn't tie accounts to identity.
+
+This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis. For this threat model, both matter.
 
 ### Single parity (for now)
 
@@ -44,7 +82,7 @@ Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity be
 
 ### Absolute paths everywhere
 
-Compose Manager Plus on Unraid runs `docker compose` with a working directory of `/boot/config/plugins/...`. Relative `./configs/` paths would resolve to the wrong location. Every volume mount uses its full `/mnt/user/...` path.
+The stack is started by a User Script (`media_stack_up`) at array boot. Scripts invoked by Unraid's User Scripts plugin do not get a guaranteed working directory, so every volume mount uses its full `/mnt/user/...` path rather than relying on a relative `./configs/` resolving correctly.
 
 ### Networks defined in Compose, not `external: true`
 
@@ -109,5 +147,4 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 |--------|----------------|---------|
 | Plex → Jellyfin | Eliminate Plex account + data collection | Less polished clients, no Plex Pass features |
 | Add Ansible on top of Compose | Full server config-as-code including Unraid settings | Significant complexity for a single server |
-| Add Gluetun VPN container | Route SABnzbd through VPN | Unnecessary for Usenet (already SSL-encrypted); useful if adding torrents |
-| Add Tailscale alongside Cloudflare | Zero-install personal remote access | Complementary, not competing |
+| Add a second VPN exit or wire *arr through the tunnel too | Reduce traffic-analysis surface further | Breaks *arr → SAB container-to-container routing; unnecessary once SAB + Prowlarr are VPN'd |

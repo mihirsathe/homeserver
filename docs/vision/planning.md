@@ -61,7 +61,7 @@ These are rough targets, not commitments. **The system is useful at every interm
 | Single drive failure | Medium | Low (dual parity) | SMART monitoring, spare drive on hand |
 | Double drive failure during rebuild | Very Low | Critical | Dual parity eliminates this risk |
 | UPS battery degradation | Certain (2–3yr) | Medium | Monitor battery health, replace on schedule |
-| Cloudflare outage | Low | Medium | Tailscale as backup access method |
+| Tailscale control-plane outage | Low | Medium | LAN + Plex port-forward unaffected; direct SSH via LAN as fallback |
 | ISP outage | Medium | Low (local services OK) | LTE failover if desired |
 | iDRAC firmware update breaks fan control | Medium | Low (noise only) | Pin iDRAC firmware version, test updates first |
 | Unraid USB license failure | Low | High | Flash Backup after every config change; contact Limetech |
