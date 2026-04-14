@@ -497,6 +497,32 @@ enabled_codecs = ['utf-8']
     _write_secret(dest / "config.ini", content)
     print("  ✓ configs/bazarr/config.ini")
 
+def write_tautulli(env: dict):
+    """Pre-seed Tautulli config.ini with HTTP settings + API key.
+
+    PMS connection (server token, identifier) is left to Tautulli's first-run
+    wizard — it's a ~30-second flow and needs PLEX_TOKEN which may not be
+    captured until bootstrap.py runs interactively.
+    """
+    dest = CONFIGS / "tautulli"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    content = f"""[General]
+api_key = {env["TAUTULLI_API_KEY"]}
+http_host = 0.0.0.0
+http_port = 8181
+http_root = /
+launch_browser = 0
+check_github = 0
+enable_plex_update_notify = 0
+
+[Monitoring]
+refresh_libraries_on_startup = 0
+refresh_users_on_startup = 0
+"""
+    _write_secret(dest / "config.ini", content)
+    print("  ✓ configs/tautulli/config.ini")
+
 # ---------------------------------------------------------------------------
 # Data directory creation
 # ---------------------------------------------------------------------------
@@ -540,7 +566,7 @@ def main():
     # Step 2: Generate any missing machine values → generated.env
     api_key_fields = [
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
-        "LIDARR_API_KEY", "PROWLARR_API_KEY",
+        "LIDARR_API_KEY", "PROWLARR_API_KEY", "TAUTULLI_API_KEY",
     ]
     auto = {}
     if not env.get("STACK_DIR", "").strip():
@@ -584,6 +610,7 @@ def main():
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"],"/prowlarr")
     write_overseerr(env)
     write_bazarr(env)
+    write_tautulli(env)
 
     # Step 6: Create data directories.
     print("\nCreating data directories...")

@@ -43,13 +43,11 @@ All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/use
 | plex | `plexinc/pms-docker` | 32400 | Media server + GPU transcode |
 | overseerr | `hotio/overseerr` | 5055 | Content request portal |
 | bazarr | `hotio/bazarr` | 6767 | Subtitle automation |
+| tautulli | `hotio/tautulli` | 8181 | Plex analytics, stream history, notifications |
 
 ### Networks
 
-Two Docker networks, both defined in the Compose file (not `external: true` — see [decisions.md](decisions.md)):
-
-- `medianet` — all containers; internal communication by container name
-- `cloudflared` — cloudflared + plex + overseerr only (public-facing services)
+A single `medianet` bridge network — all containers reach each other by name (e.g. `http://sabnzbd:8080`). Defined inline in the Compose file rather than `external: true`, since Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate. See [decisions.md](decisions.md).
 
 ### Folder Structure on Server
 
@@ -65,7 +63,8 @@ Two Docker networks, both defined in the Compose file (not `external: true` — 
 │   ├── lidarr/
 │   ├── prowlarr/
 │   ├── overseerr/
-│   └── bazarr/
+│   ├── bazarr/
+│   └── tautulli/
 └── data/                             ← spinning array
     ├── usenet/
     │   ├── incomplete/               ← SABnzbd active downloads
@@ -86,6 +85,8 @@ All containers mount `/mnt/user/data` at `/data` inside the container. This shar
 ## External Access
 
 No ports are open on the router. Cloudflare Tunnel creates an outbound-only encrypted connection from the server to Cloudflare's edge. The server's home IP is never exposed.
+
+**Plex ports are LAN-only.** The 32400/8324/32469 TCP and 1900/32410–32414 UDP ports published in the Compose file serve Plex's own DLNA and autodiscovery traffic on the home network. They are **not** routed through the Cloudflare tunnel; external Plex clients go through `plex.yourdomain.com` and hit Plex's standard HTTPS interface over the tunnel.
 
 ### Domains and Subdomains
 

@@ -331,6 +331,38 @@ services:
           memory: 512M
 
   # ---------------------------------------------------------------------------
+  # TAUTULLI — Plex analytics, stream history, user activity, newsletters
+  # config.ini is pre-seeded with the API key; the rest (Plex server
+  # connection, notifications) is completed via the wizard on first open.
+  # ---------------------------------------------------------------------------
+  tautulli:
+    image: ghcr.io/hotio/tautulli:release
+    container_name: tautulli
+    networks:
+      - medianet
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=002
+      - TZ=${TZ}
+    volumes:
+      - /mnt/user/appdata/tautulli:/config
+      - ${STACK_DIR}/configs/tautulli/config.ini:/config/config.ini
+    ports:
+      - "8181:8181"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8181/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
   # BAZARR — subtitle automation
   # config.ini pre-generated with Sonarr + Radarr connections.
   # Same lazy-HTTP rationale as Overseerr: no runtime `depends_on` needed.
