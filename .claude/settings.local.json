@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:zensical.org)",
+      "Bash(py --version)",
+      "Bash(py -3 --version)",
+      "Bash(/c/Users/Mihir/AppData/Local/Programs/Python/Python*/python.exe --version)",
+      "Read(//c/Users/Mihir/AppData/Local/Programs/**)",
+      "Bash(where.exe python:*)",
+      "Bash(where.exe python3:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:forums.unraid.net)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:serverlabs.com.au)"
+    ]
+  }
+}

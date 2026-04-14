@@ -1,5 +1,18 @@
 # Operations
 
+## After a Reboot
+
+Nothing. The stack is fully self-recovering:
+
+- **Docker** starts automatically when the Unraid array starts
+- **Containers** restart automatically via `restart: unless-stopped` — no `docker compose up` needed
+- **Cloudflare tunnel** reconnects within seconds
+- **Fan control** User Script runs at array start and re-applies thermal settings
+
+The only thing that doesn't auto-recover is a Plex claim token becoming stale, which is only relevant on the very first boot. Once Plex is claimed, it stays claimed.
+
+---
+
 ## Maintenance Schedule
 
 | Task | Frequency | How |
@@ -18,7 +31,7 @@
 
 ```bash
 # Is everything running?
-cd /mnt/user/appdata/media-stack && docker compose ps
+cd /mnt/user/appdata/homeserver/homeserver && docker compose --env-file .env --env-file generated.env ps
 
 # Is GPU visible inside Plex?
 docker exec plex nvidia-smi

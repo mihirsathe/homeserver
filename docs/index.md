@@ -14,6 +14,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Overseerr for family 
 | [Software](software.md) | OS, Unraid plugins, Docker stack, folder structure, external access, Usenet |
 | [Deployment](deployment.md) | Step-by-step setup from a fresh Unraid install |
 | [Operations](operations.md) | Maintenance schedule, diagnostics commands, known limitations |
+| [Sources](sources.md) | Every image, plugin, package, and driver — where it comes from |
 | [Decisions](decisions.md) | Why things are the way they are, and expansion paths |
 | [Vision](vision/index.md) | Long-term infrastructure roadmap — 8 phases from media server to full home platform |
 

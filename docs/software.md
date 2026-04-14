@@ -30,7 +30,7 @@
 
 ## Docker Stack
 
-All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/media-stack/` on the server).
+All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/homeserver/homeserver/` on the server).
 
 | Container | Image | Port | Role |
 |-----------|-------|------|------|
@@ -56,7 +56,7 @@ Two Docker networks, both defined in the Compose file (not `external: true` — 
 ```
 /mnt/user/
 ├── appdata/                          ← cache pool (SSD)
-│   ├── media-stack/                  ← docker-compose.yml, .env, scripts
+│   ├── homeserver/                   ← docker-compose.yml, .env, scripts
 │   ├── plex/                         ← Plex database + metadata (can grow 50–200 GB)
 │   ├── plex-transcode/               ← active transcode temp (purged on restart)
 │   ├── sabnzbd/

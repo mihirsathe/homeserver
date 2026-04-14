@@ -1,186 +1,85 @@
 # Deployment
 
-Full stack deploys in three commands after prerequisites are met. Total hands-on time: ~15 minutes.
+Full stack deploys in a handful of commands after initial Unraid setup. Total hands-on time: ~15 minutes.
 
 ---
 
-## Prerequisites
+## Step 1 — Unraid setup
 
-Install these Unraid plugins before deploying (Community Applications → search by name):
+Run this from the Unraid terminal immediately after first boot:
 
-1. **Compose Manager Plus** — Docker Compose support
-2. **Nvidia-Driver** — reboot after installing
-3. **nvidia-container-toolkit** — reboot after installing
-4. **User Scripts** — for scheduled maintenance and fan control
-
-Verify the GPU is visible before continuing:
 ```bash
-docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+bash <(curl -s https://raw.githubusercontent.com/mihirsathe/homeserver/master/homeserver/scripts/setup-unraid.sh)
 ```
 
-Array must be started and `/mnt/user/data` and `/mnt/user/appdata` shares must exist.
-
----
-
-## Step 1 — Clone the repo onto the server
-
+Or if you've already cloned the repo:
 ```bash
-cd /mnt/user/appdata
-git clone https://github.com/YOUR_USERNAME/homeserver-repo.git
-cd homeserver-repo/homeserver
+bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-unraid.sh
 ```
 
+The script handles plugins, Docker settings, share settings, folder structure, and creates the fan control and monthly update User Scripts. It prompts for iDRAC credentials when creating the fan control script. When it finishes it prints the remaining manual steps.
+
 ---
 
-## Step 2 — Create your .env
+## Step 2 — Manual steps that require human judgment
+
+1. **Assign array disks** — verify drive serial numbers before assigning (Main tab)
+   - Parity: 16TB HDD · Disk 1–4: 8TB HDDs · Cache: both 480GB SSDs
+2. **Start array and format** — Main → Start → check format boxes → Format
+3. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
+4. **Verify GPU**:
+   ```bash
+   nvidia-smi
+   docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+   ```
+   If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle)
+5. **Set User Script schedules** — Settings → User Scripts:
+   - `fan_control` → At Startup of Array
+   - `media_stack_update` → Monthly (1st, 3am)
+
+---
+
+## Step 3 — Clone and configure
 
 ```bash
+git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver
+cd /mnt/user/appdata/homeserver/homeserver
 cp .env.example .env
-nano .env
-```
-
-Have ready before you start:
-- Five UUIDs for API keys: `cat /proc/sys/kernel/random/uuid` (run five times)
-- Usenet provider hostname, username, password
-- NZBGeek and NZBPlanet API keys (from each site's account page)
-- Cloudflare tunnel token (Zero Trust → Networks → Tunnels → your tunnel → Configure → Token)
-- Server LAN IP (shown in Unraid UI, top-right corner)
-- LAN subnet (`ip route | grep default` on any device on the network)
-
-**Get your Plex claim token last** — it expires in 4 minutes:
-`https://www.plex.tv/claim`
-
----
-
-## Step 3 — Generate config files
-
-```bash
 python3 scripts/generate-configs.py
 ```
 
-Reads `.env`, writes all app config files to `configs/`. Takes ~2 seconds. This pre-seeds each app's config so no setup wizard is required on first boot:
-
-| App | Config written | What it pre-configures |
-|-----|---------------|------------------------|
-| SABnzbd | `sabnzbd.ini` | Skips setup wizard entirely |
-| Radarr / Sonarr / Lidarr / Prowlarr | `config.xml` | API key, port, URL base, auth off |
-| Bazarr | `config.ini` | Sonarr + Radarr connections pre-wired |
-| Overseerr | `settings.json` | General settings pre-seeded |
+`generate-configs.py` is interactive — prompts for any credentials not yet in `.env`, generates API keys, writes all app config files, and creates the data directory structure.
 
 ---
 
-## Step 4 — Create data directory structure
+## Step 4 — Start the stack
+
+Before running, grab a fresh claim token from `https://plex.tv/claim` and paste it into `.env` as `PLEX_CLAIM` — it expires in 4 minutes, so do this immediately before the command below.
 
 ```bash
-mkdir -p /mnt/user/data/{usenet/{incomplete,complete/{movies,tv,music}},media/{movies,tv,music}}
-mkdir -p /mnt/user/appdata/plex-transcode
-chown -R nobody:users /mnt/user/data/
+docker compose --env-file .env --env-file generated.env up -d
 ```
 
----
-
-## Step 5 — Register the stack with Compose Manager Plus
-
-In the Unraid web UI:
-
-1. Docker tab → scroll to bottom → Compose section
-2. **Add Stack** → name it `media-stack`
-3. The plugin detects `docker-compose.yml` in the directory
-4. Set `.env` file path to `/mnt/user/appdata/homeserver-repo/homeserver/.env`
-5. Enable **Autostart**
-6. Click **Compose Up**
-
-Or from the terminal:
-```bash
-docker compose -f /mnt/user/appdata/homeserver-repo/homeserver/docker-compose.yml \
-  --env-file /mnt/user/appdata/homeserver-repo/homeserver/.env up -d
-```
+Plex uses the claim token on first start to link the server to your account, then ignores it. `restart: unless-stopped` means containers restart automatically on all subsequent reboots. This command runs once, ever.
 
 Wait ~60 seconds for all containers to initialise.
 
 ---
 
-## Step 6 — Bootstrap: wire everything together
+## Step 5 — Bootstrap
 
 ```bash
 python3 scripts/bootstrap.py
 ```
 
-This is idempotent — safe to re-run. It:
-- Waits for all services to respond
-- Sets root folders in Radarr, Sonarr, Lidarr
-- Connects SABnzbd as download client in each *arr
-- Enables hardlinks in media management settings
-- Adds NZBGeek and NZBPlanet indexers to Prowlarr
-- Connects Radarr, Sonarr, Lidarr to Prowlarr and triggers a full sync
-- Creates Plex libraries (requires `PLEX_TOKEN` — see Step 7)
-
-Note: `bootstrap.py` installs its Python dependencies (`requests`, `plexapi`) to `/tmp/bootstrap-deps` on every run. Unraid runs in RAM — pip-installed packages don't persist across reboots. This is intentional.
-
----
-
-## Step 7 — Add Plex token and re-run bootstrap
-
-After Plex first boots:
-
-1. Open `http://YOUR_SERVER_IP:32400/web`
-2. Sign in with your Plex account
-3. Settings → General → scroll to bottom → click **Show** next to "Plex Media Server"
-4. Copy the `X-Plex-Token` value
-5. Add `PLEX_TOKEN=<your_token>` to `.env`
-6. Re-run: `python3 scripts/bootstrap.py`
-
----
-
-## Step 8 — Enable hardware transcoding in Plex (manual only)
-
-This cannot be done via API. Requires Plex Pass.
-
-Settings → Transcoder → **Use hardware acceleration when available** → select **NVIDIA GeForce RTX 3050** → Save
-
----
-
-## Scheduled Maintenance (User Scripts)
-
-Create these in Unraid: Settings → User Scripts → Add New Script.
-
-### Fan control — runs at every array start
-
-Required because the R640 ramps fans to full speed when it detects the non-Dell RTX 3050. This script suppresses that.
-
-**Schedule:** At Startup of Array
-```bash
-#!/bin/bash
-IDRAC_IP="YOUR_IDRAC_IP"
-IDRAC_USER="YOUR_IDRAC_USER"
-IDRAC_PASS="YOUR_IDRAC_PASS"
-sleep 30
-racadm -r $IDRAC_IP -u $IDRAC_USER -p $IDRAC_PASS set system.thermalsettings.ThirdPartyPCIFanResponse 0
-racadm -r $IDRAC_IP -u $IDRAC_USER -p $IDRAC_PASS set system.thermalsettings.ThermalProfile 2
-racadm -r $IDRAC_IP -u $IDRAC_USER -p $IDRAC_PASS set system.thermalsettings.FanSpeedOffset 255
-```
-
-If an iDRAC firmware update resets these settings, the per-slot LFM approach (`System.PCIESlotLFM.N.LFMMode 2`) is the fallback.
-
-### Monthly stack update
-
-**Schedule:** Monthly, 1st, 3am
-```bash
-#!/bin/bash
-bash /mnt/user/appdata/homeserver-repo/homeserver/scripts/update-stack.sh
-```
-
-Note: `update-stack.sh` uses `/usr/bin/docker` explicitly (full path) because cron jobs on Unraid may not have the same `PATH` as an interactive shell.
+Waits for all services, wires the stack together via API, and creates Plex libraries. Prompts for a Plex token from Plex Web → Settings → General → Show. Hardware transcoding is pre-configured via environment variables in docker-compose.yml and activates automatically with an active Plex Pass.
 
 ---
 
 ## Rebuild From Scratch
 
-1. Clone repo to `/mnt/user/appdata/homeserver-repo`
-2. `cp .env.example .env` → fill in all values
+1. `git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver`
+2. `cd /mnt/user/appdata/homeserver/homeserver && cp .env.example .env`
 3. `python3 scripts/generate-configs.py`
-4. Create data directories (Step 4)
-5. Register and start stack in Compose Manager Plus (Step 5)
-6. `python3 scripts/bootstrap.py`
-7. Add `PLEX_TOKEN` to `.env` → re-run bootstrap
-8. Enable hardware transcoding in Plex UI (Step 8)
+4. Grab a claim token from `https://plex.tv/claim`, paste into `.env` as `PLEX_CLAIM`, then immediately: `docker compose --env-file .env --env-file generated.env up -d`
+5. `python3 scripts/bootstrap.py`

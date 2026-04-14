@@ -46,7 +46,7 @@ homeserver/
 
 | File | Server path |
 |------|-------------|
-| docker-compose.yml | `/mnt/user/appdata/homeserver-repo/homeserver/` |
+| docker-compose.yml | `/mnt/user/appdata/homeserver/homeserver/` |
 | App configs | `/mnt/user/appdata/<container-name>/` |
 | Downloads in-flight | `/mnt/user/data/usenet/incomplete/` |
 | Downloads complete | `/mnt/user/data/usenet/complete/{movies,tv,music}/` |

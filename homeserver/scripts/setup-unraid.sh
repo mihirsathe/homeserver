@@ -48,7 +48,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # STEP 1: Community Applications plugin
 # ---------------------------------------------------------------------------
-info "Step 1/6 — Installing Community Applications plugin..."
+info "Step 1/7 — Installing Community Applications plugin..."
 
 CA_PLG="https://raw.githubusercontent.com/Squidly271/community.applications/master/plugins/community.applications.plg"
 CA_DEST="/boot/config/plugins/community.applications.plg"
@@ -63,7 +63,7 @@ fi
 # ---------------------------------------------------------------------------
 # STEP 2: Install all required plugins
 # ---------------------------------------------------------------------------
-info "Step 2/6 — Installing required plugins..."
+info "Step 2/7 — Installing required plugins..."
 echo ""
 
 # Plugin URLs — all sourced from the official Unraid community repos.
@@ -75,30 +75,24 @@ declare -A PLUGINS=(
     ["User Scripts"]="https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
     ["Unassigned Devices"]="https://raw.githubusercontent.com/dlandon/unassigned.devices/master/unassigned.devices.plg"
     ["Compose Manager Plus"]="https://raw.githubusercontent.com/mstrhakr/compose_plugin/main/compose.manager.plus.plg"
-    ["Nvidia-Driver"]="https://raw.githubusercontent.com/ich777/unraid-nvidia-driver/master/nvidia-driver.plg"
+    ["Nvidia-Driver"]="https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
     ["Dynamix File Integrity"]="https://raw.githubusercontent.com/bergware/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
 )
 
-# nvidia-container-toolkit is installed differently — it's a CA template install
-# that Nvidia-Driver handles as a dependency. We note this for the user.
-NEEDS_REBOOT_PLUGINS=("Nvidia-Driver")
-
+# Modern ich777/unraid-nvidia-driver bundles the container toolkit — no separate
+# install needed. A single reboot after driver install is sufficient.
 for name in "${!PLUGINS[@]}"; do
     url="${PLUGINS[$name]}"
     info "  Installing: $name"
     installplg "$url" 2>/dev/null && ok "  $name installed" \
         || warn "  $name install returned non-zero (may already be installed)"
 done
-
-echo ""
-warn "Nvidia-Driver and nvidia-container-toolkit both require reboots to activate."
-warn "This script will continue — you will handle the reboots manually at the end."
 echo ""
 
 # ---------------------------------------------------------------------------
 # STEP 3: Docker settings
 # ---------------------------------------------------------------------------
-info "Step 3/6 — Writing Docker settings..."
+info "Step 3/7 — Writing Docker settings..."
 
 DOCKER_CFG="/boot/config/docker.cfg"
 
@@ -129,7 +123,7 @@ ok "Docker settings written to $DOCKER_CFG"
 # ---------------------------------------------------------------------------
 # STEP 4: Global share settings (hardlinks)
 # ---------------------------------------------------------------------------
-info "Step 4/6 — Writing global share settings..."
+info "Step 4/7 — Writing global share settings..."
 
 SHARE_CFG="/boot/config/share.cfg"
 touch "$SHARE_CFG"
@@ -154,7 +148,7 @@ ok "Share settings written to $SHARE_CFG"
 # ---------------------------------------------------------------------------
 # STEP 5: Create the data share config
 # ---------------------------------------------------------------------------
-info "Step 5/6 — Creating share configs..."
+info "Step 5/7 — Creating share configs..."
 
 SHARES_DIR="/boot/config/shares"
 mkdir -p "$SHARES_DIR"
@@ -208,7 +202,7 @@ ok "Share configs written"
 # ---------------------------------------------------------------------------
 # STEP 6: Folder structure and permissions
 # ---------------------------------------------------------------------------
-info "Step 6/6 — Creating folder structure..."
+info "Step 6/7 — Creating folder structure..."
 
 # Wait for the array to be available. If this script runs before array start,
 # /mnt/user won't exist yet. In that case, print the commands and exit.
@@ -234,6 +228,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# STEP 7: Create User Scripts
+# ---------------------------------------------------------------------------
+info "Step 7/7 — Creating User Scripts..."
+
+USER_SCRIPTS_DIR="/boot/config/plugins/user.scripts/scripts"
+mkdir -p "$USER_SCRIPTS_DIR"
+
+# Fan control — prompts for iDRAC credentials since they vary per server
+echo ""
+info "  Fan control script (suppresses R640 fan noise from non-Dell GPU)"
+read -rp "    iDRAC IP address: " IDRAC_IP
+read -rp "    iDRAC username [root]: " IDRAC_USER
+IDRAC_USER="${IDRAC_USER:-root}"
+read -rsp "    iDRAC password: " IDRAC_PASS
+echo ""
+
+mkdir -p "$USER_SCRIPTS_DIR/fan_control"
+cat > "$USER_SCRIPTS_DIR/fan_control/script" <<EOF
+#!/bin/bash
+IDRAC_IP="${IDRAC_IP}"
+IDRAC_USER="${IDRAC_USER}"
+IDRAC_PASS="${IDRAC_PASS}"
+sleep 30
+racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.ThirdPartyPCIFanResponse 0
+racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.ThermalProfile 2
+racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.FanSpeedOffset 255
+EOF
+chmod +x "$USER_SCRIPTS_DIR/fan_control/script"
+ok "  fan_control created"
+
+# Monthly stack update — no credentials needed
+mkdir -p "$USER_SCRIPTS_DIR/media_stack_update"
+cat > "$USER_SCRIPTS_DIR/media_stack_update/script" <<'EOF'
+#!/bin/bash
+bash /mnt/user/appdata/homeserver/homeserver/scripts/update-stack.sh
+EOF
+chmod +x "$USER_SCRIPTS_DIR/media_stack_update/script"
+ok "  media_stack_update created"
+
+echo ""
+warn "One manual step remaining for User Scripts:"
+warn "  Settings → User Scripts → set schedules:"
+warn "    fan_control        → At Startup of Array"
+warn "    media_stack_update → Monthly (1st, 3am)"
+
+# ---------------------------------------------------------------------------
 # Done — print what still needs human intervention
 # ---------------------------------------------------------------------------
 echo ""
@@ -253,21 +293,25 @@ echo " 2. START ARRAY AND FORMAT DISKS"
 echo "    Main → Start → check format boxes → Format"
 echo "    Parity sync will begin (~30-45 hours, array usable during sync)"
 echo ""
-echo " 3. REBOOT #1 — activate Nvidia-Driver"
+echo " 3. REBOOT — activate Nvidia-Driver"
 echo "    Main → Reboot"
-echo "    Verify after reboot: nvidia-smi"
+echo "    After reboot, verify:"
+echo "      nvidia-smi"
+echo "      docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi"
+echo "    If the container test fails: Apps → search 'nvidia container toolkit' → Install"
+echo "    Then restart Docker (Settings → Docker → toggle off/on)"
 echo ""
-echo " 4. INSTALL nvidia-container-toolkit"
-echo "    Apps → search 'nvidia container toolkit' → Install"
+echo " 4. SET USER SCRIPT SCHEDULES"
+echo "    Settings → User Scripts:"
+echo "      fan_control        → At Startup of Array"
+echo "      media_stack_update → Monthly (1st, 3am)"
 echo ""
-echo " 5. REBOOT #2 — activate nvidia-container-toolkit"
-echo "    Verify: docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi"
-echo ""
-echo " 6. DEPLOY THE STACK"
-echo "    cd /mnt/user/appdata/media-stack"
-echo "    cp .env.example .env && nano .env"
+echo " 5. DEPLOY THE STACK"
+echo "    git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver"
+echo "    cd /mnt/user/appdata/homeserver/homeserver"
+echo "    cp .env.example .env"
 echo "    python3 scripts/generate-configs.py"
-echo "    docker compose up -d"
+echo "    docker compose --env-file .env --env-file generated.env up -d"
 echo "    python3 scripts/bootstrap.py"
 echo ""
 echo "========================================================"
