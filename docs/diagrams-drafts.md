@@ -24,12 +24,27 @@ Source: [assets/storage.svg](assets/storage.svg)
 
 ---
 
-## 3–4. Pending
+## 3. Docker stack + request flow — mingrammer (candidate: `software.md`)
 
-Queued after #2 aesthetic sign-off:
+Flow graph per feedback lesson #7 — auto-layout tool with real product logos, not hand-SVG. Source: [assets/diagrams/docker-stack.py](assets/diagrams/docker-stack.py). Output: `assets/docker-stack.png` (user renders via `python docker-stack.py` after `pip install diagrams` + icon download).
 
-- **#3 docker stack + request flow** — mingrammer/diagrams with real product logos (Plex, Docker, *arr lineup, SABnzbd, Cloudflare). Lives in `software.md`.
-- **#4 home-network boundary** — mingrammer/diagrams. Inbound (Cloudflare tunnel → Plex/Overseerr) **and** outbound (SAB→Usenet NNTP, Prowlarr→indexers HTTPS). Lives in `software.md` external-access section.
+Structure: Viewer → Overseerr → *arr cluster → Prowlarr (search) / SABnzbd (NZB queue) → Usenet provider (dashed, external) → `/data/usenet` → hardlink into `/data/media` → Plex → back to Viewer. Numbered 1–7 matching the text flow in `software.md`.
+
+---
+
+## 4. External access boundary — mingrammer (candidate: `software.md` external-access section)
+
+Illustrates the zero-open-ports property **and** the outbound-only paths (NNTP to Usenet, HTTPS to indexers). Source: [assets/diagrams/external-access.py](assets/diagrams/external-access.py). Output: `assets/external-access.png`.
+
+Structure: Remote client → Cloudflare edge ↔ `cloudflared` (outbound persistent tunnel, dashed purple) → family-facing services (Plex, Overseerr, Tautulli). Admin-only subcluster (SAB, Prowlarr) reaches out independently to Usenet/indexers (dashed amber). Home router has a dashed red "No Inbound" arrow to nowhere, emphasising that no ingress passes through it.
+
+---
+
+## Icons
+
+Both mingrammer diagrams expect PNG icons at `docs/assets/diagrams/icons/`. Suggested source: [walkxcode/dashboard-icons](https://github.com/walkxcode/dashboard-icons/tree/main/png). Required filenames are listed in each script's header docstring.
+
+---
 
 The existing Mermaid drafts for 2–4 are below for reference only; do not land them.
 
