@@ -235,29 +235,6 @@ info "Step 7/7 — Creating User Scripts..."
 USER_SCRIPTS_DIR="/boot/config/plugins/user.scripts/scripts"
 mkdir -p "$USER_SCRIPTS_DIR"
 
-# Fan control — prompts for iDRAC credentials since they vary per server
-echo ""
-info "  Fan control script (suppresses R640 fan noise from non-Dell GPU)"
-read -rp "    iDRAC IP address: " IDRAC_IP
-read -rp "    iDRAC username [root]: " IDRAC_USER
-IDRAC_USER="${IDRAC_USER:-root}"
-read -rsp "    iDRAC password: " IDRAC_PASS
-echo ""
-
-mkdir -p "$USER_SCRIPTS_DIR/fan_control"
-cat > "$USER_SCRIPTS_DIR/fan_control/script" <<EOF
-#!/bin/bash
-IDRAC_IP="${IDRAC_IP}"
-IDRAC_USER="${IDRAC_USER}"
-IDRAC_PASS="${IDRAC_PASS}"
-sleep 30
-racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.ThirdPartyPCIFanResponse 0
-racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.ThermalProfile 2
-racadm -r \$IDRAC_IP -u \$IDRAC_USER -p \$IDRAC_PASS set system.thermalsettings.FanSpeedOffset 255
-EOF
-chmod +x "$USER_SCRIPTS_DIR/fan_control/script"
-ok "  fan_control created"
-
 # Monthly stack update — no credentials needed
 mkdir -p "$USER_SCRIPTS_DIR/media_stack_update"
 cat > "$USER_SCRIPTS_DIR/media_stack_update/script" <<'EOF'
@@ -267,10 +244,14 @@ EOF
 chmod +x "$USER_SCRIPTS_DIR/media_stack_update/script"
 ok "  media_stack_update created"
 
+# NOTE: Fan control (iDRAC throttling for non-Dell GPUs) is now a separate
+# opt-in script — scripts/setup-fan-control.sh — because it requires iDRAC
+# credentials and is only needed if your GPU choice causes fan issues. Run it
+# after the GPU is installed and you've confirmed fans are in fact loud.
+
 echo ""
 warn "One manual step remaining for User Scripts:"
 warn "  Settings → User Scripts → set schedules:"
-warn "    fan_control        → At Startup of Array"
 warn "    media_stack_update → Monthly (1st, 3am)"
 
 # ---------------------------------------------------------------------------
@@ -303,10 +284,13 @@ echo "    Then restart Docker (Settings → Docker → toggle off/on)"
 echo ""
 echo " 4. SET USER SCRIPT SCHEDULES"
 echo "    Settings → User Scripts:"
-echo "      fan_control        → At Startup of Array"
 echo "      media_stack_update → Monthly (1st, 3am)"
 echo ""
-echo " 5. DEPLOY THE STACK"
+echo " 5. (OPTIONAL) FAN CONTROL"
+echo "    Only if chassis fans stay at ~100% after boot with the GPU installed:"
+echo "      bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-fan-control.sh"
+echo ""
+echo " 6. DEPLOY THE STACK"
 echo "    git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver"
 echo "    cd /mnt/user/appdata/homeserver/homeserver"
 echo "    cp .env.example .env"
