@@ -152,19 +152,35 @@ def already_exists(base: str, key: str, list_path: str, name_field: str, name: s
     except Exception:
         return False
 
-def wait_for(url: str, label: str, timeout: int = 120):
+def wait_for(url: str, label: str, timeout: int = 180):
+    """Poll until `url` responds with a non-5xx, or bail after `timeout` seconds.
+
+    Exponential backoff with a 15s ceiling. A connection error means the
+    service hasn't bound its port yet (still starting — keep waiting).
+    A 5xx means the service bound a port but is broken (still transient
+    during first-boot DB migrations — keep waiting, but surface the detail).
+    """
     print(f"  Waiting for {label}...", end="", flush=True)
     deadline = time.time() + timeout
+    delay = 1.0
+    last_err = None
     while time.time() < deadline:
         try:
-            if requests.get(url, timeout=5).status_code < 500:
+            r = requests.get(url, timeout=5)
+            if r.status_code < 500:
                 print(" ready")
                 return
-        except Exception:
-            pass
+            last_err = f"HTTP {r.status_code}"
+        except requests.ConnectionError:
+            last_err = "connection refused"
+        except requests.Timeout:
+            last_err = "timeout"
+        except Exception as e:
+            last_err = type(e).__name__
         print(".", end="", flush=True)
-        time.sleep(3)
-    print(f"\nERROR: {label} did not come up within {timeout}s")
+        time.sleep(delay)
+        delay = min(delay * 1.5, 15.0)
+    print(f"\nERROR: {label} did not come up within {timeout}s (last: {last_err})")
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
@@ -388,6 +404,13 @@ def main():
 
     if plex_token:
         configure_plex(plex_token, lan_ip)
+        # PLEX_CLAIM tokens are single-use and expire after ~4 minutes.
+        # Once we've got a PLEX_TOKEN the claim is spent — blank it so a later
+        # redeploy doesn't feed a dead claim into a freshly-recreated Plex.
+        if get(env, "PLEX_CLAIM"):
+            write_generated({"PLEX_CLAIM": ""})
+            refresh_docker_env()
+            print("  ✓ PLEX_CLAIM cleared (one-time-use, already consumed)")
     else:
         print("  ⚠ Skipped — re-run this script after signing into Plex")
 
