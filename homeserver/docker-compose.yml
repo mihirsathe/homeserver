@@ -46,7 +46,9 @@ services:
   # CLOUDFLARE TUNNEL — fully configured by TUNNEL_TOKEN env var
   # ---------------------------------------------------------------------------
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # cloudflared doesn't publish a float-tag channel; bump manually on updates.
+    # Check https://github.com/cloudflare/cloudflared/releases for the current stable.
+    image: cloudflare/cloudflared:2024.12.2
     container_name: cloudflared
     command: tunnel --no-autoupdate run
     environment:
@@ -62,7 +64,8 @@ services:
   # into the config directory. SABnzbd reads it on startup — no wizard.
   # ---------------------------------------------------------------------------
   sabnzbd:
-    image: ghcr.io/hotio/sabnzbd:latest
+    # hotio :release = stable channel, auto-absorbs patch-level updates
+    image: ghcr.io/hotio/sabnzbd:release
     container_name: sabnzbd
     networks:
       - medianet
@@ -83,7 +86,7 @@ services:
   # PROWLARR — config.xml pre-generated, indexers wired by bootstrap.py
   # ---------------------------------------------------------------------------
   prowlarr:
-    image: ghcr.io/hotio/prowlarr:latest
+    image: ghcr.io/hotio/prowlarr:release
     container_name: prowlarr
     networks:
       - medianet
@@ -103,7 +106,7 @@ services:
   # RADARR — config.xml pre-generated, root folder + download client via bootstrap.py
   # ---------------------------------------------------------------------------
   radarr:
-    image: ghcr.io/hotio/radarr:latest
+    image: ghcr.io/hotio/radarr:release
     container_name: radarr
     networks:
       - medianet
@@ -127,7 +130,7 @@ services:
   # SONARR
   # ---------------------------------------------------------------------------
   sonarr:
-    image: ghcr.io/hotio/sonarr:latest
+    image: ghcr.io/hotio/sonarr:release
     container_name: sonarr
     networks:
       - medianet
@@ -151,7 +154,7 @@ services:
   # LIDARR
   # ---------------------------------------------------------------------------
   lidarr:
-    image: ghcr.io/hotio/lidarr:latest
+    image: ghcr.io/hotio/lidarr:release
     container_name: lidarr
     networks:
       - medianet
@@ -179,7 +182,8 @@ services:
   # directly if you need to change them.
   # ---------------------------------------------------------------------------
   plex:
-    image: plexinc/pms-docker:latest
+    # :public = Plex's stable public release channel
+    image: plexinc/pms-docker:public
     container_name: plex
     runtime: nvidia
     privileged: true
@@ -228,7 +232,7 @@ services:
   # settings.json pre-generated, Plex + arr connections via bootstrap.py
   # ---------------------------------------------------------------------------
   overseerr:
-    image: ghcr.io/hotio/overseerr:latest
+    image: ghcr.io/hotio/overseerr:release
     container_name: overseerr
     networks:
       - medianet
@@ -254,7 +258,7 @@ services:
   # config.ini pre-generated with Sonarr + Radarr connections
   # ---------------------------------------------------------------------------
   bazarr:
-    image: ghcr.io/hotio/bazarr:latest
+    image: ghcr.io/hotio/bazarr:release
     container_name: bazarr
     networks:
       - medianet
