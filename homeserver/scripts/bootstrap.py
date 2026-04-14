@@ -95,6 +95,7 @@ def write_generated(updates: dict):
     for k, v in existing.items():
         lines.append(f"{k}={v}\n")
     GENERATED_FILE.write_text("".join(lines))
+    GENERATED_FILE.chmod(0o600)
 
 def refresh_docker_env():
     """Rewrite .env.docker after generated.env changes."""
@@ -106,6 +107,7 @@ def refresh_docker_env():
     for k, v in merged.items():
         lines.append(f"{k}={v}\n")
     DOCKER_ENV.write_text("".join(lines))
+    DOCKER_ENV.chmod(0o600)
 
 def require(env: dict, key: str) -> str:
     val = env.get(key, "").strip()

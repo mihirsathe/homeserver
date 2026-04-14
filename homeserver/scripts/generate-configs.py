@@ -87,6 +87,7 @@ def write_back_to_env(path: Path, updates: dict):
         if key not in found:
             out.append(f"{key}={val}\n")
     path.write_text("".join(out))
+    path.chmod(0o600)
 
 def write_generated(updates: dict):
     """Write (or update) generated.env with machine-generated values."""
@@ -96,6 +97,7 @@ def write_generated(updates: dict):
     for k, v in existing.items():
         lines.append(f"{k}={v}\n")
     GENERATED_FILE.write_text("".join(lines))
+    GENERATED_FILE.chmod(0o600)
 
 def write_merged_docker_env():
     """Write .env.docker = .env + generated.env merged, for Compose Manager Plus."""
@@ -107,6 +109,7 @@ def write_merged_docker_env():
     for k, v in merged.items():
         lines.append(f"{k}={v}\n")
     DOCKER_ENV.write_text("".join(lines))
+    DOCKER_ENV.chmod(0o600)
 
 # ---------------------------------------------------------------------------
 # Interactive prompts
@@ -221,6 +224,12 @@ def prompt_for_missing(env: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Config writers
 # ---------------------------------------------------------------------------
+def _write_secret(path: Path, content: str):
+    """Write a config file that contains credentials or API keys. Mode 0600
+    so only the owner (nobody on Unraid, after chown) can read it."""
+    path.write_text(content)
+    path.chmod(0o600)
+
 def write_sabnzbd(env: dict):
     dest = CONFIGS / "sabnzbd"
     dest.mkdir(parents=True, exist_ok=True)
@@ -353,7 +362,7 @@ ntf_enable = 0
     req_completion_rate = 100.0
     newzbin =
 """
-    (dest / "sabnzbd.ini").write_text(content)
+    _write_secret(dest / "sabnzbd.ini", content)
     print("  ✓ configs/sabnzbd/sabnzbd.ini")
 
 def write_arr_config(name: str, port: int, api_key: str, url_base: str):
@@ -375,7 +384,7 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
   <UpdateMechanism>Docker</UpdateMechanism>
 </Config>
 """
-    (dest / "config.xml").write_text(content)
+    _write_secret(dest / "config.xml", content)
     print(f"  ✓ configs/{name}/config.xml")
 
 def write_overseerr(env: dict):
@@ -431,7 +440,7 @@ def write_overseerr(env: dict):
         "jobs": {}
     }
 
-    (dest / "settings.json").write_text(json.dumps(settings, indent=2))
+    _write_secret(dest / "settings.json", json.dumps(settings, indent=2))
     print("  ✓ configs/overseerr/settings.json")
 
 def write_bazarr(env: dict):
@@ -485,7 +494,7 @@ single = False
 subtitles_languages = ['en']
 enabled_codecs = ['utf-8']
 """
-    (dest / "config.ini").write_text(content)
+    _write_secret(dest / "config.ini", content)
     print("  ✓ configs/bazarr/config.ini")
 
 # ---------------------------------------------------------------------------
