@@ -244,15 +244,26 @@ EOF
 chmod +x "$USER_SCRIPTS_DIR/media_stack_update/script"
 ok "  media_stack_update created"
 
+# Weekly appdata backup verification + optional offsite copy. Runs after the
+# CA Appdata Backup plugin's own schedule; see backup-appdata.sh for details.
+mkdir -p "$USER_SCRIPTS_DIR/media_stack_backup"
+cat > "$USER_SCRIPTS_DIR/media_stack_backup/script" <<'EOF'
+#!/bin/bash
+bash /mnt/user/appdata/homeserver/homeserver/scripts/backup-appdata.sh
+EOF
+chmod +x "$USER_SCRIPTS_DIR/media_stack_backup/script"
+ok "  media_stack_backup created"
+
 # NOTE: Fan control (iDRAC throttling for non-Dell GPUs) is now a separate
 # opt-in script — scripts/setup-fan-control.sh — because it requires iDRAC
 # credentials and is only needed if your GPU choice causes fan issues. Run it
 # after the GPU is installed and you've confirmed fans are in fact loud.
 
 echo ""
-warn "One manual step remaining for User Scripts:"
+warn "Manual steps remaining for User Scripts:"
 warn "  Settings → User Scripts → set schedules:"
 warn "    media_stack_update → Monthly (1st, 3am)"
+warn "    media_stack_backup → Weekly (Sunday, 4am — after CA Appdata Backup)"
 
 # ---------------------------------------------------------------------------
 # Done — print what still needs human intervention
@@ -285,6 +296,7 @@ echo ""
 echo " 4. SET USER SCRIPT SCHEDULES"
 echo "    Settings → User Scripts:"
 echo "      media_stack_update → Monthly (1st, 3am)"
+echo "      media_stack_backup → Weekly (Sunday, 4am)"
 echo ""
 echo " 5. (OPTIONAL) FAN CONTROL"
 echo "    Only if chassis fans stay at ~100% after boot with the GPU installed:"
