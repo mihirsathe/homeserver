@@ -1,14 +1,32 @@
-# Diagram drafts
+# Diagram drafts (revision 3)
 
-**Not linked from nav.** Four candidate diagrams for the doc site. Pick which to keep; rejected drafts and this file get deleted afterward.
-
-Destination notes for each diagram appear above it; change if a different home makes more sense.
+**Not linked from nav.** Pivoted off Mermaid — moving to hand-crafted SVG (rack) + mingrammer/diagrams (flows, real product icons). One diagram landed for review; the other three are queued behind your aesthetic sign-off on #1.
 
 ---
 
-## 1. Physical topology (candidate: top of `hardware.md`)
+## 1. Physical topology — SVG (candidate: top of `hardware.md`)
 
-Rack contents + every cable that leaves the rack. Zooms out one level from the rack-layout table further down the page.
+Rack faceplate detail (R640 8-bay, MD1400 12-bay grid with parity/data/empty color-coded, UPS LCD), single uplink with shared-LOM iDRAC, color-coded power/data/SAS lines, external home router.
+
+![Rack diagram](assets/rack.svg)
+
+Source: [assets/rack.svg](assets/rack.svg)
+
+---
+
+## 2–4. Pending re-do
+
+Holding on these until #1 aesthetic is signed off. Plan once approved:
+
+- **#2 storage pool** — same SVG style as the rack (mini drive-bay grid + array/pool boxes), or mingrammer if real Unraid icons help. Lives in `hardware.md` storage section.
+- **#3 docker stack + request flow** — mingrammer/diagrams with real product logos (Plex, Docker, *arr lineup, SABnzbd, Cloudflare). Lives in `software.md`.
+- **#4 home-network boundary** — mingrammer/diagrams. Inbound (Cloudflare tunnel → Plex/Overseerr) **and** outbound (SAB→Usenet NNTP, Prowlarr→indexers HTTPS). Lives in `software.md` external-access section.
+
+The existing Mermaid drafts for 2–4 are below for reference only; do not land them.
+
+---
+
+## (reference, do not land) ~~1. Physical topology — Mermaid r1~~
 
 ```mermaid
 flowchart LR

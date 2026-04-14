@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <pattern id="vent" x="0" y="0" width="6" height="4" patternUnits="userSpaceOnUse">
+      <rect width="6" height="4" fill="#f1f5f9"/>
+      <rect x="1" y="1.5" width="4" height="1" fill="#cbd5e1"/>
+    </pattern>
+  </defs>
+
+  <rect width="820" height="600" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="80" y="38" font-size="18" font-weight="700" fill="#0f172a">15U rack &#xb7; garage</text>
+  <text x="80" y="56" font-size="11" fill="#64748b">Compute-only. One uplink to the home router (1 GbE direct, shared-LOM iDRAC).</text>
+
+  <!-- ===== RACK ===== -->
+  <g transform="translate(80, 80)">
+    <!-- Frame -->
+    <rect x="0" y="0" width="300" height="470" fill="#fafbfc" stroke="#0f172a" stroke-width="2" rx="3"/>
+    <rect x="0" y="0" width="300" height="10" fill="#0f172a"/>
+    <rect x="0" y="460" width="300" height="10" fill="#0f172a"/>
+
+    <!-- Inner rails -->
+    <line x1="20" y1="10" x2="20" y2="460" stroke="#cbd5e1" stroke-width="0.5"/>
+    <line x1="280" y1="10" x2="280" y2="460" stroke="#cbd5e1" stroke-width="0.5"/>
+
+    <!-- U numbers (left) -->
+    <g font-size="9" fill="#94a3b8" text-anchor="end">
+      <text x="-6" y="28">15</text>
+      <text x="-6" y="58">14</text>
+      <text x="-6" y="88">13</text>
+      <text x="-6" y="118">12</text>
+      <text x="-6" y="148">11</text>
+      <text x="-6" y="178">10</text>
+      <text x="-6" y="208">9</text>
+      <text x="-6" y="238">8</text>
+      <text x="-6" y="268">7</text>
+      <text x="-6" y="298">6</text>
+      <text x="-6" y="328">5</text>
+      <text x="-6" y="358">4</text>
+      <text x="-6" y="388">3</text>
+      <text x="-6" y="418">2</text>
+      <text x="-6" y="448">1</text>
+    </g>
+
+    <!-- U15-U12: blanks (reserved switch) -->
+    <g transform="translate(20, 10)">
+      <rect width="260" height="120" fill="url(#vent)" stroke="#e2e8f0" stroke-width="0.5"/>
+      <text x="130" y="65" font-size="9" fill="#94a3b8" text-anchor="middle" font-style="italic">reserved &#xb7; future managed switch</text>
+    </g>
+
+    <!-- U11: thermal break -->
+    <g transform="translate(20, 130)">
+      <rect width="260" height="30" fill="url(#vent)" stroke="#e2e8f0" stroke-width="0.5"/>
+      <text x="130" y="19" font-size="8" fill="#94a3b8" text-anchor="middle" font-style="italic">thermal break</text>
+    </g>
+
+    <!-- U10: R640 -->
+    <g transform="translate(20, 160)">
+      <rect width="260" height="30" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+      <!-- 8 drive bays -->
+      <g transform="translate(8, 4)">
+        <!-- 2 cache SSDs (active) -->
+        <rect x="0"   y="0" width="14" height="22" fill="#1d4ed8" stroke="#0b1d4d" stroke-width="0.5"/>
+        <rect x="16"  y="0" width="14" height="22" fill="#1d4ed8" stroke="#0b1d4d" stroke-width="0.5"/>
+        <!-- 6 empty bays -->
+        <rect x="32"  y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="48"  y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="64"  y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="80"  y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="96"  y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="112" y="0" width="14" height="22" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <!-- LED dots on populated bays -->
+        <circle cx="11" cy="19" r="1" fill="#22c55e"/>
+        <circle cx="27" cy="19" r="1" fill="#22c55e"/>
+      </g>
+      <!-- Label -->
+      <text x="148" y="13" fill="#f1f5f9" font-size="10" font-weight="600">Dell PowerEdge R640</text>
+      <text x="148" y="24" fill="#94a3b8" font-size="8">1U &#xb7; 2&#xd7; Xeon Gold &#xb7; 32 GB ECC &#xb7; RTX 3050</text>
+      <!-- Status LED -->
+      <circle cx="248" cy="15" r="2" fill="#22c55e"/>
+    </g>
+
+    <!-- U9: thermal break -->
+    <g transform="translate(20, 190)">
+      <rect width="260" height="30" fill="url(#vent)" stroke="#e2e8f0" stroke-width="0.5"/>
+      <text x="130" y="19" font-size="8" fill="#94a3b8" text-anchor="middle" font-style="italic">thermal break</text>
+    </g>
+
+    <!-- U7-U8: MD1400 -->
+    <g transform="translate(20, 220)">
+      <rect width="260" height="60" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+      <!-- 12 bays in 3 rows x 4 cols, each ~36w x 14h -->
+      <g transform="translate(8, 6)">
+        <!-- Row 1: parity + 3 data -->
+        <rect x="0"   y="0"  width="36" height="14" fill="#b45309" stroke="#7c2d12" stroke-width="0.5"/>
+        <rect x="38"  y="0"  width="36" height="14" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+        <rect x="76"  y="0"  width="36" height="14" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+        <rect x="114" y="0"  width="36" height="14" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+        <!-- Row 2: 1 data + 3 empty -->
+        <rect x="0"   y="16" width="36" height="14" fill="#6d28d9" stroke="#4c1d95" stroke-width="0.5"/>
+        <rect x="38"  y="16" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="76"  y="16" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="114" y="16" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <!-- Row 3: 4 empty -->
+        <rect x="0"   y="32" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="38"  y="32" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="76"  y="32" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <rect x="114" y="32" width="36" height="14" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <!-- Active LEDs on populated drives -->
+        <circle cx="33" cy="11" r="1" fill="#22c55e"/>
+        <circle cx="71" cy="11" r="1" fill="#22c55e"/>
+        <circle cx="109" cy="11" r="1" fill="#22c55e"/>
+        <circle cx="147" cy="11" r="1" fill="#22c55e"/>
+        <circle cx="33" cy="27" r="1" fill="#22c55e"/>
+      </g>
+      <!-- Label -->
+      <text x="178" y="20" fill="#f1f5f9" font-size="10" font-weight="600">Dell MD1400</text>
+      <text x="178" y="32" fill="#94a3b8" font-size="8">12-bay DAS &#xb7; 2U</text>
+      <text x="178" y="44" fill="#94a3b8" font-size="8">5 of 12 populated</text>
+      <text x="178" y="56" fill="#94a3b8" font-size="8">parity + 4&#xd7; 8 TB data</text>
+      <!-- Enclosure status LEDs -->
+      <circle cx="248" cy="12" r="2" fill="#22c55e"/>
+      <circle cx="248" cy="50" r="2" fill="#22c55e"/>
+    </g>
+
+    <!-- U5-U6: blanks (reserved 2nd DAS) -->
+    <g transform="translate(20, 280)">
+      <rect width="260" height="60" fill="url(#vent)" stroke="#e2e8f0" stroke-width="0.5"/>
+      <text x="130" y="34" font-size="9" fill="#94a3b8" text-anchor="middle" font-style="italic">reserved &#xb7; second MD1400 (daisy-chain)</text>
+    </g>
+
+    <!-- U3-U4: UPS -->
+    <g transform="translate(20, 340)">
+      <rect width="260" height="60" fill="#0f172a" stroke="#1e293b" stroke-width="0.5"/>
+      <!-- LCD panel -->
+      <rect x="10" y="10" width="64" height="40" fill="#082f49" stroke="#0c4a6e" stroke-width="0.5" rx="1"/>
+      <text x="42" y="28" fill="#22d3ee" font-size="10" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Consolas, monospace" font-weight="600">93%</text>
+      <text x="42" y="42" fill="#22d3ee" font-size="6" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Consolas, monospace">120V 48m</text>
+      <!-- Faceplate buttons -->
+      <circle cx="92" cy="22" r="3" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <circle cx="92" cy="38" r="3" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+      <!-- Label -->
+      <text x="178" y="20" fill="#f1f5f9" font-size="10" font-weight="600">APC SMT1500RM2U</text>
+      <text x="178" y="32" fill="#94a3b8" font-size="8">2U &#xb7; pure sine &#xb7; 1500 VA</text>
+      <text x="178" y="44" fill="#94a3b8" font-size="8">heaviest item: bottom of rack</text>
+      <!-- On LED -->
+      <circle cx="248" cy="50" r="2" fill="#22c55e"/>
+    </g>
+
+    <!-- U1-U2: blanks (battery expansion) -->
+    <g transform="translate(20, 400)">
+      <rect width="260" height="60" fill="url(#vent)" stroke="#e2e8f0" stroke-width="0.5"/>
+      <text x="130" y="34" font-size="9" fill="#94a3b8" text-anchor="middle" font-style="italic">reserved &#xb7; UPS battery expansion</text>
+    </g>
+  </g>
+
+  <!-- ===== HOME ROUTER ===== -->
+  <g transform="translate(560, 130)">
+    <rect width="160" height="58" fill="#ffffff" stroke="#0f172a" stroke-width="1.5" rx="4"/>
+    <text x="80" y="22" fill="#0f172a" font-size="12" font-weight="600" text-anchor="middle">Home router</text>
+    <text x="80" y="38" fill="#64748b" font-size="9" text-anchor="middle">1 GbE LAN port</text>
+    <!-- Wifi arc icon -->
+    <g transform="translate(72, 44)" fill="none" stroke="#94a3b8" stroke-width="1" stroke-linecap="round">
+      <path d="M 0 8 Q 8 -2 16 8"/>
+      <path d="M 3 8 Q 8 2 13 8"/>
+      <circle cx="8" cy="8" r="1" fill="#64748b" stroke="none"/>
+    </g>
+  </g>
+
+  <!-- ===== CABLES ===== -->
+  <!-- Cat6A: R640 -> Router (single uplink, shared LOM) -->
+  <g>
+    <path d="M 380 255 L 405 255 L 405 159 L 560 159"
+          fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="380" cy="255" r="3" fill="#3b82f6"/>
+    <circle cx="560" cy="159" r="3" fill="#3b82f6"/>
+    <text x="412" y="120" fill="#1e40af" font-size="9" font-weight="600">Cat6A &#xb7; 1 GbE</text>
+    <text x="412" y="132" fill="#1e40af" font-size="8">LAN + iDRAC (shared LOM)</text>
+  </g>
+
+  <!-- SAS: R640 -> MD1400 (tight loop just outside rack) -->
+  <g>
+    <path d="M 380 265 L 432 265 L 432 320 L 380 320"
+          fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="380" cy="265" r="3" fill="#ea580c"/>
+    <circle cx="380" cy="320" r="3" fill="#ea580c"/>
+    <text x="442" y="290" fill="#9a3412" font-size="9" font-weight="600">SFF-8644 SAS</text>
+    <text x="442" y="302" fill="#9a3412" font-size="8">12 Gb/s</text>
+  </g>
+
+  <!-- Power: UPS -> R640 (x2) -->
+  <g>
+    <path d="M 380 423 L 470 423 L 470 250 L 380 250"
+          fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" stroke-dasharray="5 4"/>
+    <circle cx="380" cy="423" r="3" fill="#dc2626"/>
+    <circle cx="380" cy="250" r="3" fill="#dc2626"/>
+    <text x="478" y="338" fill="#991b1b" font-size="9" font-weight="600">&#xd7;2 IEC C13</text>
+    <text x="478" y="350" fill="#991b1b" font-size="8">UPS &#x2192; R640 PSUs</text>
+  </g>
+
+  <!-- Power: UPS -> MD1400 (x2) -->
+  <g>
+    <path d="M 380 433 L 510 433 L 510 310 L 380 310"
+          fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" stroke-dasharray="5 4"/>
+    <circle cx="380" cy="433" r="3" fill="#dc2626"/>
+    <circle cx="380" cy="310" r="3" fill="#dc2626"/>
+    <text x="518" y="378" fill="#991b1b" font-size="9" font-weight="600">&#xd7;2 IEC C13</text>
+    <text x="518" y="390" fill="#991b1b" font-size="8">UPS &#x2192; MD1400 PSUs</text>
+  </g>
+
+  <!-- ===== LEGEND ===== -->
+  <g transform="translate(80, 575)">
+    <text x="0" y="0" font-size="10" font-weight="700" fill="#475569">CABLING</text>
+    <line x1="78"  y1="-3" x2="118" y2="-3" stroke="#3b82f6" stroke-width="2.5"/>
+    <text x="124" y="0" font-size="10" fill="#334155">Ethernet (Cat6A)</text>
+    <line x1="240" y1="-3" x2="280" y2="-3" stroke="#ea580c" stroke-width="2.5"/>
+    <text x="286" y="0" font-size="10" fill="#334155">SAS (SFF-8644)</text>
+    <line x1="392" y1="-3" x2="432" y2="-3" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 4"/>
+    <text x="438" y="0" font-size="10" fill="#334155">Power (IEC C13/C14)</text>
+    <rect x="572" y="-7" width="14" height="8" fill="#b45309"/>
+    <text x="590" y="0" font-size="10" fill="#334155">parity</text>
+    <rect x="630" y="-7" width="14" height="8" fill="#6d28d9"/>
+    <text x="648" y="0" font-size="10" fill="#334155">data</text>
+    <rect x="680" y="-7" width="14" height="8" fill="#1d4ed8"/>
+    <text x="698" y="0" font-size="10" fill="#334155">cache</text>
+  </g>
+</svg>
