@@ -45,7 +45,7 @@ All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/use
 | seerr | `ghcr.io/seerr-team/seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | 6767 | Subtitle automation |
 | tautulli | `hotio/tautulli` | 8181 | Plex analytics, stream history, notifications |
-| recyclarr | `ghcr.io/recyclarr/recyclarr` | — | Weekly TRaSH-Guides sync of quality profiles + custom formats into Radarr/Sonarr |
+| profilarr | `ghcr.io/dictionarry-hub/profilarr` | 6868 | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 
 ### Networks
 
@@ -54,7 +54,7 @@ Three bridge networks carve the stack into blast-radius zones so a compromised c
 | Network | Members | Purpose |
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
-| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `recyclarr` | *arr ↔ Bazarr traffic + Recyclarr's weekly quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
+| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
@@ -76,7 +76,7 @@ Networks are defined inline in the Compose file rather than `external: true` —
 │   ├── seerr/
 │   ├── bazarr/
 │   ├── tautulli/
-│   └── recyclarr/                    ← recyclarr.yml (TRaSH template includes)
+│   └── profilarr/                    ← SQLite DB (subscribed databases + selected profiles)
 ├── usenet-incomplete/                ← cache pool (SSD), shareUseCache=only
 │                                        SABnzbd active downloads + par2/unrar
 └── data/                             ← spinning array, shareUseCache=yes

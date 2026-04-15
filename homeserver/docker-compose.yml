@@ -423,31 +423,42 @@ services:
           memory: 512M
 
   # ---------------------------------------------------------------------------
-  # RECYCLARR — sync TRaSH-Guides quality profiles + custom formats into
-  # Radarr/Sonarr on a schedule. Headless CLI; runs once per CRON_SCHEDULE
-  # then sleeps. No UI, no published ports.
+  # PROFILARR — web UI for managing quality profiles + custom formats in
+  # Radarr/Sonarr. Subscribes to one or more "databases" (Dictionarry DB,
+  # TRaSH Guides, others) and syncs selected profiles/formats via each
+  # *arr's REST API. Replaces Recyclarr.
   #
-  # recyclarr.yml is pre-written by generate-configs.py into
-  # /mnt/user/appdata/recyclarr/recyclarr.yml and reads API keys from env.
+  # Unlike the rest of the stack, Profilarr is not pre-seeded — its
+  # subscription state lives in a SQLite DB at /config. First-run setup
+  # is a manual UI flow (documented in docs/deployment.md). Appdata is
+  # backed up with everything else so the state survives rebuild.
+  #
+  # Reachable only via Tailscale to the Unraid host's LAN IP at :6868.
+  # No public exposure.
   # ---------------------------------------------------------------------------
-  recyclarr:
-    image: ghcr.io/recyclarr/recyclarr:latest
-    container_name: recyclarr
-    user: "${PUID}:${PGID}"
+  profilarr:
+    image: ghcr.io/dictionarry-hub/profilarr:latest
+    container_name: profilarr
     networks:
       - automation
     environment:
       - TZ=${TZ}
-      - CRON_SCHEDULE=0 5 * * MON
-      - RADARR_API_KEY=${RADARR_API_KEY}
-      - SONARR_API_KEY=${SONARR_API_KEY}
+      - PUID=${PUID}
+      - PGID=${PGID}
     volumes:
-      - /mnt/user/appdata/recyclarr:/config
+      - /mnt/user/appdata/profilarr:/config
+    ports:
+      - "6868:6868"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6868/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
 
   # ---------------------------------------------------------------------------
   # BAZARR — subtitle automation

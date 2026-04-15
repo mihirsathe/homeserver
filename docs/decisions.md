@@ -48,11 +48,17 @@ Actively developed, better UI, better category handling. NZBGet development has 
 
 Completed files move cross-filesystem from SSD → array exactly once, then live alongside `data/media` (same array filesystem) where hardlinks from the *arr apps work normally. The only cost is one extra copy per download; the saving is the whole unpack/repair cycle.
 
-### Recyclarr for quality profiles + custom formats
+### Profilarr for quality profiles + custom formats
 
-Radarr and Sonarr ship with generic quality rules. The community standard for anything beyond casual use is [TRaSH Guides](https://trash-guides.info/), which publishes tuned custom formats (release groups, HDR handling, x265 scoring, REMUX preference). Recyclarr is the official sync tool — it pulls TRaSH's YAML templates and applies them to Radarr/Sonarr via API.
+Radarr and Sonarr ship with generic quality rules. Out of the box they grab the first release that clears a size/resolution filter — no scoring for release-group pedigree, HDR/DV handling, x265 cost, REMUX vs WEB-DL preference, etc.
 
-Runs as a headless container on a weekly cron (Monday 5am) and on an initial sync triggered by `bootstrap.py`. Without it, the *arrs grab whatever Prowlarr hands over; library quality degrades noticeably over time compared to a TRaSH-tuned setup.
+Two tools cover this gap:
+- **Recyclarr** — a headless CLI that pulls [TRaSH Guides](https://trash-guides.info/) YAML templates and pushes them to the *arrs via API. Single data source (TRaSH), YAML-declarative, no UI.
+- **Profilarr** — a web app from the [Dictionarry-Hub](https://github.com/Dictionarry-Hub/profilarr) project that subscribes to one or more curated databases (its own Dictionarry DB, TRaSH, others), previews diffs in a GUI, and syncs selected profiles/formats to the *arrs.
+
+The stack uses Profilarr. The deciding factors: the GUI gives a diff preview before each sync instead of pushing blind, Profilarr can blend multiple curated sources (not just TRaSH) if the Dictionarry DB keeps ahead of a particular format, and it cleanly handles a future 4K-vs-1080p split if one is ever added. Cost: Profilarr is not declarative — its subscription state lives in a SQLite DB configured through the web UI, which makes it the one piece of the stack that isn't fully bootstrap-scripted. The initial setup step is documented in [deployment.md](deployment.md) and the appdata directory is covered by the weekly Appdata Backup so the state survives a rebuild.
+
+Do **not** run Profilarr alongside Recyclarr: they will overwrite each other's scores on every sync cycle.
 
 ### Seerr over Overseerr
 

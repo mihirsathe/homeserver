@@ -18,7 +18,7 @@ You have an Ubuntu LTS desktop with an NVIDIA GPU. Before racking the R640 you c
 | backup-appdata.sh + restore-appdata.sh | setup-unraid.sh (plugin install/config) |
 | update-stack.sh (incl. health gate + rollback) | |
 | Gluetun + Mullvad WireGuard kill-switch behaviour | |
-| Recyclarr initial sync against Radarr/Sonarr | Tailscale mesh VPN to the live tailnet |
+| Profilarr UI reachability on :6868 and auth to Radarr/Sonarr | Tailscale mesh VPN to the live tailnet |
 | Diagram rendering (SVG + mingrammer PNG) | |
 | Zensical doc site build | |
 
@@ -111,7 +111,7 @@ ls -l ../docker-stack.png ../external-access.png
 
 Open both PNGs. Confirm:
 
-- **docker-stack.png**: Viewer → Seerr → *arr cluster → Prowlarr / SABnzbd → Gluetun → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All product logos render (plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, gluetun, bazarr, tautulli, recyclarr; Seerr + Usenet may fall back to a generic icon).
+- **docker-stack.png**: Viewer → Seerr → *arr cluster → Prowlarr / SABnzbd → Gluetun → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All product logos render (plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, gluetun, bazarr, tautulli; Seerr, Profilarr + Usenet may fall back to a generic icon).
 - **external-access.png**: single open port (TCP 32400 → Plex) on the router. Tailscale mesh reaches `tag:server` with all admin UIs behind it. Gluetun has a dashed outbound arrow to Mullvad; SAB and Prowlarr share Gluetun's netns. Home WAN IP is explicitly annotated as published to `plex.tv` for direct-connect.
 
 If the mingrammer output has layout weirdness, tweak `ranksep`/`nodesep` in the graph_attr dict at the top of each script.
@@ -177,7 +177,7 @@ Then generate the config files:
 python3 scripts/generate-configs.py
 ```
 
-**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `recyclarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
+**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `profilarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
 
 ---
 

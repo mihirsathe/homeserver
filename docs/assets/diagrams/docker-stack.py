@@ -2,7 +2,7 @@
 """
 Diagram #3 — Docker stack + media-request flow.
 
-Scoped to the request-to-stream path. Bazarr, Tautulli, and Recyclarr are part
+Scoped to the request-to-stream path. Bazarr, Tautulli, and Profilarr are part
 of the stack but sit outside this flow (subs, analytics, profile sync) and are
 omitted for legibility; see docs/software.md for the full container list.
 

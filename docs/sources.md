@@ -20,7 +20,7 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
-| recyclarr | `ghcr.io/recyclarr/recyclarr` | `:latest` | GitHub Container Registry | Recyclarr team (official) |
+| profilarr | `ghcr.io/dictionarry-hub/profilarr` | `:latest` | GitHub Container Registry | Dictionarry-Hub ([GitHub](https://github.com/Dictionarry-Hub/profilarr)) |
 
 **hotio** (`ghcr.io/hotio`) is the de facto standard for *arr app images — tightly maintained, consistent `PUID`/`PGID`/`UMASK` environment model, fast to release updates. Source: [hotio.dev](https://hotio.dev).
 

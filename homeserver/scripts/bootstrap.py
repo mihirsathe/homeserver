@@ -516,19 +516,6 @@ def main() -> None:
     else:
         print("  ⚠ Skipped — needs a working Plex connection from the previous step")
 
-    print("\n=== Recyclarr ===\n")
-    print("  Triggering initial TRaSH-Guides sync...")
-    result = subprocess.run(
-        ["docker", "exec", "recyclarr", "recyclarr", "sync"],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        print("  ✓ quality profiles + custom formats synced to Radarr/Sonarr")
-        print("  Next scheduled sync: Monday 5am (CRON_SCHEDULE in compose)")
-    else:
-        print("  ⚠ Sync failed. Check: docker logs recyclarr")
-        print(f"    stderr: {result.stderr.strip()[:200]}")
-
     print("\n=== Done ===\n")
     print("Stack is fully configured. Access points:")
     print(f"  SABnzbd:   http://{lan_ip}:8080/sabnzbd")
@@ -550,6 +537,10 @@ def main() -> None:
     print("     edit each family member → grant 'Auto-Request' so their Plex")
     print("     Watchlist additions become Radarr/Sonarr requests automatically.")
     print("     (Per-user grant; Seerr ties it to each Plex SSO identity.)")
+    print(f"  3. Profilarr → http://{lan_ip}:6868 → add Radarr + Sonarr as sync")
+    print("     targets (paste URLs + API keys from generated.env), subscribe to")
+    print("     the Dictionarry DB and/or TRaSH Guides, select profiles, sync.")
+    print("     Profilarr has no API-driven bootstrap path.")
 
 if __name__ == "__main__":
     main()

@@ -140,6 +140,16 @@ Finally, open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex acc
 
 Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://<server-ip>:8181` and it's already bound to the Plex server with full history access.
 
+### Profilarr first-run
+
+Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://<server-ip>:6868` and:
+
+1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878/radarr`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989/sonarr`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name.
+2. **Link a database** — Databases → Add. The Dictionarry DB is the default curated source; TRaSH Guides can be linked alongside it. Do not also run Recyclarr against these *arrs — they will fight.
+3. **Select profiles and custom formats**, review the diff preview, and sync. Subsequent syncs are initiated from the same UI whenever upstream updates.
+
+Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscriptions and selections survive a rebuild.
+
 ---
 
 ## Step 7 — Post-deploy hardening
