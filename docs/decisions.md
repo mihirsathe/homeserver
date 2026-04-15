@@ -58,7 +58,7 @@ Runs as a headless container on a weekly cron (Monday 5am) and on an initial syn
 
 Overseerr's upstream is unmaintained (last release 2023). **Seerr** is the actively-developed successor that merges the Overseerr and Jellyseerr lineages into one codebase. Its settings schema is a compatible superset of Overseerr's, so config artefacts and migration paths line up if we ever had to go back. New deployments take Seerr from day one — there is no Overseerr stage to migrate out of.
 
-Seerr runs as UID 1000 (hardcoded; ignores PUID/PGID) and requires `init: true` in compose. The appdata dir needs `chown 1000:1000` at first boot.
+Seerr's image runs as the `node` user (UID 1000) by default and doesn't read `PUID`/`PGID`, but Docker's `user:` directive overrides it cleanly — the stack runs Seerr as `${PUID}:${PGID}` (99:100, Unraid's `nobody:users`) so its appdata ownership matches every other container. `init: true` is set in compose to reap Node's zombie children. No post-boot `chown` is required; `generate-configs.py` creates `/mnt/user/appdata/seerr` owned by `nobody:users` before first start.
 
 ### Plex Watchlist auto-request as the family interface
 

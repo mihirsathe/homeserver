@@ -351,9 +351,6 @@ services:
   # SEERR — family request portal + Plex Watchlist auto-request
   # settings.json pre-generated, Plex + arr connections via bootstrap.py
   #
-  # Runs as UID 1000 (node user) — PUID/PGID are ignored. Appdata is chowned
-  # to 1000:1000 by bootstrap.py on first run.
-  #
   # No public exposure — reachable only via Tailscale to the Unraid host's
   # LAN IP at :5055. Family never visits a Seerr URL; they add titles to
   # their Plex Watchlist and Seerr auto-requests within ~5–15 min.
