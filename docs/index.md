@@ -2,7 +2,7 @@
 
 Self-hosted media automation stack on a Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro.
 
-Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting from Plex Watchlist. Plex port-forwarded (TCP 32400); all admin UIs reachable only via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Almost every app is pre-configured before first boot via API — Tautulli's first-run wizard is the one remaining click-through.
+Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting from Plex Watchlist. Plex port-forwarded (TCP 32400); all admin UIs reachable only via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Every app is pre-configured before first boot — no UI wizards (the only remaining click is granting per-user Auto-Request in Seerr, which is tied to each family member's Plex SSO identity).
 
 ---
 

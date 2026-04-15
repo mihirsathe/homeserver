@@ -141,10 +141,9 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally:
+Finally, open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
-1. Open **Tautulli** at `http://<server-ip>:8181` and complete its one-time wizard — point it at the Plex server (same LAN IP, port 32400) and paste the token from the previous step.
-2. Open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request.
+Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://<server-ip>:8181` and it's already bound to the Plex server with full history access.
 
 ---
 

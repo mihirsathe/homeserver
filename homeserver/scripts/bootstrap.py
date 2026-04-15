@@ -316,20 +316,22 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
 # ---------------------------------------------------------------------------
 # Configure Plex: create libraries, trigger scan
 # ---------------------------------------------------------------------------
-def configure_plex(token: str, lan_ip: str) -> None:
+def configure_plex(token: str, lan_ip: str):
+    """Create libraries + trigger scan. Returns the connected PlexServer so
+    downstream steps (Tautulli pre-seed) can reuse it, or None on failure."""
     try:
         from plexapi.server import PlexServer
         from plexapi.exceptions import BadRequest
     except ImportError:
         print("  ⚠ Plex: plexapi import failed after install — try re-running")
-        return
+        return None
 
     try:
         plex = PlexServer(f"http://{lan_ip}:32400", token)
     except Exception as e:
         print(f"  ⚠ Plex: could not connect: {e}")
         print("    Check PLEX_LAN_IP and PLEX_TOKEN in .env")
-        return
+        return None
 
     existing = {s.title for s in plex.library.sections()}
 
@@ -351,6 +353,71 @@ def configure_plex(token: str, lan_ip: str) -> None:
     for section in plex.library.sections():
         section.update()
     print("  ✓ Plex: library scan triggered")
+    return plex
+
+# ---------------------------------------------------------------------------
+# Configure Tautulli: skip its first-run wizard by pre-seeding PMS fields
+# ---------------------------------------------------------------------------
+def configure_tautulli(plex, token: str) -> None:
+    """Pre-seed Tautulli's PMS connection so the first-run wizard is skipped.
+
+    config.ini is bind-mounted from ${STACK_DIR}/configs/tautulli/config.ini
+    to /config/config.ini inside the container (see docker-compose.yml).
+    Rewriting the host file in-place preserves the inode so the bind mount
+    stays pointed at the right content. A docker restart picks it up.
+
+    `plex` is a connected plexapi.PlexServer; we pull machineIdentifier and
+    friendlyName straight off it. `token` is passed explicitly because
+    plexapi stores it as a private attribute and we'd rather not rely on
+    that stability.
+    """
+    import configparser
+
+    config_path = STACK_DIR / "configs" / "tautulli" / "config.ini"
+    if not config_path.exists():
+        print(f"  ⚠ Tautulli: {config_path} missing — run generate-configs.py first")
+        return
+
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    if cfg.has_option("General", "first_run_complete") and \
+       cfg.get("General", "first_run_complete") == "1":
+        print("  ✓ Tautulli: first-run already complete")
+        return
+
+    if not cfg.has_section("General"):
+        cfg.add_section("General")
+    if not cfg.has_section("PMS"):
+        cfg.add_section("PMS")
+
+    cfg.set("General", "first_run_complete", "1")
+    # Tautulli talks to Plex over the frontend docker network — container DNS
+    # name "plex" resolves to the PMS container's IP on that bridge.
+    cfg.set("PMS", "pms_ip",         "plex")
+    cfg.set("PMS", "pms_port",       "32400")
+    cfg.set("PMS", "pms_ssl",        "0")
+    cfg.set("PMS", "pms_is_cloud",   "0")
+    cfg.set("PMS", "pms_is_remote",  "0")
+    cfg.set("PMS", "pms_url_manual", "0")
+    cfg.set("PMS", "pms_identifier", plex.machineIdentifier)
+    cfg.set("PMS", "pms_name",       plex.friendlyName)
+    cfg.set("PMS", "pms_token",      token)
+
+    # Truncate-in-place so the bind-mounted inode survives.
+    with open(config_path, "w") as f:
+        cfg.write(f)
+    config_path.chmod(0o600)
+    print(f"  ✓ Tautulli: seeded PMS connection → {plex.friendlyName}")
+
+    try:
+        subprocess.run(
+            ["docker", "restart", "tautulli"],
+            check=True, capture_output=True, text=True,
+        )
+        print("  ✓ Tautulli: restarted to pick up new config")
+    except subprocess.CalledProcessError as e:
+        print(f"  ⚠ Tautulli: restart failed: {e.stderr.strip()[:200]}")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -430,8 +497,9 @@ def main() -> None:
             refresh_docker_env()
             print("  ✓ PLEX_TOKEN saved to generated.env\n")
 
+    plex = None
     if plex_token:
-        configure_plex(plex_token, lan_ip)
+        plex = configure_plex(plex_token, lan_ip)
         # PLEX_CLAIM tokens are single-use and expire after ~4 minutes.
         # Once we've got a PLEX_TOKEN the claim is spent — blank it so a later
         # redeploy doesn't feed a dead claim into a freshly-recreated Plex.
@@ -441,6 +509,12 @@ def main() -> None:
             print("  ✓ PLEX_CLAIM cleared (one-time-use, already consumed)")
     else:
         print("  ⚠ Skipped — re-run this script after signing into Plex")
+
+    print("\n=== Tautulli ===\n")
+    if plex is not None:
+        configure_tautulli(plex, plex_token)
+    else:
+        print("  ⚠ Skipped — needs a working Plex connection from the previous step")
 
     print("\n=== Recyclarr ===\n")
     print("  Triggering initial TRaSH-Guides sync...")
@@ -475,6 +549,7 @@ def main() -> None:
     print("  2. Seerr → sign in with your Plex account, then Settings → Users →")
     print("     edit each family member → grant 'Auto-Request' so their Plex")
     print("     Watchlist additions become Radarr/Sonarr requests automatically.")
+    print("     (Per-user grant; Seerr ties it to each Plex SSO identity.)")
 
 if __name__ == "__main__":
     main()

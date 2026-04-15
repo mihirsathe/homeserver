@@ -658,9 +658,11 @@ enabled_codecs = ['utf-8']
 def write_tautulli(env: dict):
     """Pre-seed Tautulli config.ini with HTTP settings + API key.
 
-    PMS connection (server token, identifier) is left to Tautulli's first-run
-    wizard — it's a ~30-second flow and needs PLEX_TOKEN which may not be
-    captured until bootstrap.py runs interactively.
+    PMS connection (machineIdentifier, token, friendlyName) is filled in by
+    bootstrap.py once PLEX_TOKEN is in hand and a PlexServer session can
+    resolve the identity. That step also sets first_run_complete=1 to skip
+    the wizard entirely. Keeping the two stages split here keeps this file
+    pure-static and avoids a chicken-and-egg with the Plex token.
     """
     dest = CONFIGS / "tautulli"
     dest.mkdir(parents=True, exist_ok=True)
