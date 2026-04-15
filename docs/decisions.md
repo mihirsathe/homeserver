@@ -66,11 +66,11 @@ Seerr's web UI is an admin tool, not a family-facing portal. Family members alre
 
 ### Gluetun (Mullvad WireGuard) in front of SAB + Prowlarr
 
-SSL over Usenet encrypts **content**, not the connection's existence. The ISP sees a sustained multi-MB/s TLS flow to a Usenet ASN on port 563, with `news.<provider>.com` in the cleartext SNI of the TLS ClientHello. The Usenet provider's logs retain source IP regardless of what the payload looks like. Both endpoints of the evidentiary graph leak the home IP.
+SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustained multi-MB/s TLS flow to a Usenet provider's ASN on port 563, and the provider's SNI is plaintext in the TLS ClientHello. Usenet providers keep connection logs regardless.
 
-`Gluetun` with Mullvad WireGuard (`FIREWALL=on` kill-switch) replaces the home-WAN egress for SAB and Prowlarr only: `network_mode: "service:gluetun"` puts them inside Gluetun's network namespace, so their outbound traffic has to go through the VPN or nowhere. The kill-switch blocks the "VPN drops → traffic leaks" failure mode. Mullvad accepts Monero and doesn't tie accounts to identity.
+`Gluetun` with Mullvad WireGuard (`FIREWALL=on` kill-switch) replaces the home-WAN egress for SAB and Prowlarr only: `network_mode: "service:gluetun"` puts them inside Gluetun's network namespace, so their outbound traffic has to go through the VPN or nowhere. The kill-switch blocks the "VPN drops → traffic leaks" failure mode. Mullvad accepts Monero and doesn't require identifying information for an account.
 
-This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis. For this threat model, both matter.
+This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
 ### Single parity (for now)
 

@@ -101,7 +101,7 @@ python3 scripts/generate-configs.py
 
 `generate-configs.py` is interactive — prompts for any credentials not yet in `.env` (timezone, LAN IP, Mullvad keys, Usenet creds, indexer API keys), generates service API keys, writes all app config files, and creates the data directory structure.
 
-> **Register Usenet and indexer accounts over Mullvad, not your home WAN.** Easiest path: install the Mullvad app on your laptop/phone, connect to any Mullvad exit, then sign up for the Usenet provider and indexers in a normal browser and save the credentials/API keys. Paste them into `.env` when `generate-configs.py` prompts. Accounts ever touched by your home IP are permanently tainted on the provider's side, so do this before the stack is up — not after.
+> **Register Usenet and indexer accounts over Mullvad, not your home WAN.** Easiest path: install the Mullvad app on your laptop/phone, connect to any Mullvad exit, then sign up for the Usenet provider and indexers in a normal browser and save the credentials/API keys. Paste them into `.env` when `generate-configs.py` prompts. Once the provider has logged a home-IP connection against an account, that association can't be undone — do this before the stack is up, not after.
 
 ---
 

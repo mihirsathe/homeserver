@@ -126,9 +126,9 @@ No-one other than the admin ever needs to touch Seerr directly. Seerr's web UI e
 
 ## Usenet Setup
 
-SABnzbd and Prowlarr ride through **Gluetun** (Mullvad WireGuard) via `network_mode: "service:gluetun"`. Gluetun's `FIREWALL=on` kill-switch means if the VPN tunnel drops, SAB + Prowlarr lose all network connectivity until it reconnects — there is no path for their traffic to ever reach the internet on the home WAN IP. SSL alone isn't enough for this threat model: SSL encrypts content but not the fact of a connection to a Usenet ASN on port 563, or the destination SNI in the TLS handshake.
+SABnzbd and Prowlarr ride through **Gluetun** (Mullvad WireGuard) via `network_mode: "service:gluetun"`. Gluetun's `FIREWALL=on` kill-switch means if the VPN tunnel drops, SAB + Prowlarr lose all network connectivity until it reconnects — there is no path for their traffic to ever reach the internet on the home WAN IP. SSL alone isn't sufficient: it encrypts payload content but not the fact of the connection, the destination SNI in the TLS handshake, or the peer ASN visible to the ISP.
 
-Register Usenet and indexer accounts **from the Mullvad exit IP**, after Gluetun is up. Any account registered from the home IP is permanently tainted in the provider's logs. Monero is preferred for payment where the provider accepts it.
+Register Usenet and indexer accounts **from a Mullvad exit IP** — easiest via the Mullvad app on a laptop/phone before the stack is up. Once the provider has logged a home-IP session on an account, that association can't be undone. Monero is preferred for payment where the provider accepts it.
 
 ### Providers
 
