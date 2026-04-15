@@ -6,15 +6,10 @@ Full stack deploys in a handful of commands after initial Unraid setup. Total ha
 
 ## Step 1 — Unraid setup
 
-Run this from the Unraid terminal immediately after first boot:
+Run this from the Unraid terminal immediately after first boot — the array isn't started yet, so `/mnt/user/appdata` doesn't exist and there's nowhere to clone the repo yet. `setup-unraid.sh` bootstraps the shares and folder structure that make the later clone possible:
 
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/mihirsathe/homeserver/master/homeserver/scripts/setup-unraid.sh)
-```
-
-Or if you've already cloned the repo:
-```bash
-bash /mnt/user/appdata/homeserver/homeserver/scripts/setup-unraid.sh
 ```
 
 The script handles plugins, Docker settings, share settings, folder structure, and creates the `media_stack_update` + `media_stack_backup` User Scripts. When it finishes it prints the remaining manual steps.
