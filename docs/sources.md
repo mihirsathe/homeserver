@@ -20,9 +20,11 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
-| profilarr | `ghcr.io/dictionarry-hub/profilarr` | `:latest` | GitHub Container Registry | Dictionarry-Hub ([GitHub](https://github.com/Dictionarry-Hub/profilarr)) |
+| profilarr | `santiagosayshey/profilarr` | `:latest` | Docker Hub | Santiago ([GitHub org Dictionarry-Hub](https://github.com/Dictionarry-Hub/profilarr) · [Docker Hub](https://hub.docker.com/r/santiagosayshey/profilarr)) |
 
 **hotio** (`ghcr.io/hotio`) is the de facto standard for *arr app images — tightly maintained, consistent `PUID`/`PGID`/`UMASK` environment model, fast to release updates. Source: [hotio.dev](https://hotio.dev).
+
+**santiagosayshey/profilarr** is the upstream-blessed image for Profilarr — despite the personal-looking Docker Hub namespace, Santiago is the maintainer of the Dictionarry-Hub GitHub org and the image is linked directly from the official README. There is no `ghcr.io/dictionarry-hub` mirror; Docker Hub is the canonical distribution.
 
 **plexinc/pms-docker** is the official Plex image; used instead of a hotio Plex image because the official image's `PLEX_PREFERENCE_*` environment variable mechanism is how hardware transcoding preferences are pre-configured at first boot.
 

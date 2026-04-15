@@ -45,7 +45,7 @@ All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/use
 | seerr | `ghcr.io/seerr-team/seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | 6767 | Subtitle automation |
 | tautulli | `hotio/tautulli` | 8181 | Plex analytics, stream history, notifications |
-| profilarr | `ghcr.io/dictionarry-hub/profilarr` | 6868 | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+| profilarr | `santiagosayshey/profilarr` | 6868 | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 
 ### Networks
 
