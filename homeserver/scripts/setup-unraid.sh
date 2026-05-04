@@ -42,9 +42,8 @@ die()     { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 [[ $EUID -ne 0 ]] && die "Run as root"
 [[ ! -d /boot/config ]] && die "/boot/config not found — is this Unraid?"
 
-# installplg lives in /usr/local/sbin which isn't always in PATH
 export PATH="/usr/local/sbin:$PATH"
-[[ ! -x /usr/local/sbin/installplg ]] && die "installplg not found — is this Unraid 6.x?"
+[[ ! -x /usr/local/sbin/plugin ]] && die "/usr/local/sbin/plugin not found — is this Unraid 6.x?"
 
 info "Starting Unraid automated setup..."
 echo ""
@@ -52,45 +51,34 @@ echo ""
 # ---------------------------------------------------------------------------
 # STEP 1 & 2: Plugins
 # ---------------------------------------------------------------------------
-info "Step 1/8 — Checking plugins..."
+info "Step 1/8 — Installing plugins..."
 echo ""
 
-# Map of plugin name -> installed check (directory under /usr/local/emhttp/plugins/)
-declare -A PLUGIN_CHECKS=(
-    ["Community Applications"]="community.applications"
-    ["Fix Common Problems"]="fix.common.problems"
-    ["Appdata Backup"]="appdata.backup"
-    ["User Scripts"]="user.scripts"
-    ["Unassigned Devices"]="unassigned.devices"
-    ["Nvidia-Driver"]="nvidia-driver"
-    ["Dynamix File Integrity"]="dynamix.file.integrity"
-    ["Tailscale"]="tailscale"
+# plugin name -> "installed-dir|plg-url"
+declare -A PLUGINS=(
+    ["Community Applications"]="community.applications|https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
+    ["Fix Common Problems"]="fix.common.problems|https://raw.githubusercontent.com/unraid/fix.common.problems/master/plugins/fix.common.problems.plg"
+    ["Appdata Backup"]="appdata.backup|https://raw.githubusercontent.com/Commifreak/unraid-appdata.backup/master/appdata.backup.plg"
+    ["User Scripts"]="user.scripts|https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
+    ["Unassigned Devices"]="unassigned.devices|https://raw.githubusercontent.com/unraid/unassigned.devices/master/unassigned.devices.plg"
+    ["Nvidia-Driver"]="nvidia-driver|https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
+    ["Dynamix File Integrity"]="dynamix.file.integrity|https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
+    ["Tailscale"]="tailscale|https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
 )
 
-MISSING_PLUGINS=()
-for name in "${!PLUGIN_CHECKS[@]}"; do
-    dir="${PLUGIN_CHECKS[$name]}"
+for name in "${!PLUGINS[@]}"; do
+    IFS='|' read -r dir url <<< "${PLUGINS[$name]}"
     if [[ -d /usr/local/emhttp/plugins/$dir ]]; then
         ok "  $name — already installed"
     else
-        warn "  $name — NOT installed"
-        MISSING_PLUGINS+=("$name")
+        info "  Installing $name..."
+        plugin install "$url" && ok "  $name installed" \
+            || warn "  $name install failed — install manually via Apps tab"
     fi
 done
 echo ""
 
-if [[ ${#MISSING_PLUGINS[@]} -gt 0 ]]; then
-    warn "The following plugins must be installed manually via Apps before continuing:"
-    for p in "${MISSING_PLUGINS[@]}"; do
-        warn "  • $p"
-    done
-    warn "Apps tab → search by name → Install → then re-run this script."
-    warn "For Nvidia-Driver: search 'Nvidia-Driver' in Apps."
-    warn "For Appdata Backup: search 'Appdata Backup' (Commifreak's fork)."
-    die "Install missing plugins and re-run."
-fi
-
-info "Step 2/8 — All plugins present, skipping install."
+info "Step 2/8 — Plugin installation complete."
 echo ""
 
 # ---------------------------------------------------------------------------
