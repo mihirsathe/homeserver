@@ -50,54 +50,47 @@ info "Starting Unraid automated setup..."
 echo ""
 
 # ---------------------------------------------------------------------------
-# STEP 1: Community Applications plugin
+# STEP 1 & 2: Plugins
 # ---------------------------------------------------------------------------
-info "Step 1/8 — Installing Community Applications plugin..."
-
-CA_PLG="https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
-CA_DEST="/boot/config/plugins/community.applications.plg"
-
-if [[ -d /usr/local/emhttp/plugins/community.applications ]]; then
-    ok "Community Applications already installed"
-else
-    installplg "$CA_PLG" && ok "Community Applications installed" \
-        || die "Failed to install Community Applications"
-fi
-
-# ---------------------------------------------------------------------------
-# STEP 2: Install all required plugins
-# ---------------------------------------------------------------------------
-info "Step 2/8 — Installing required plugins..."
+info "Step 1/8 — Checking plugins..."
 echo ""
 
-# Plugin URLs — sourced from the official Unraid org (github.com/unraid) where
-# possible. User Scripts stays on Squidly271 — still actively maintained.
-# Appdata Backup is Commifreak/unraid-appdata.backup, the modern replacement
-# for ca.backup2 (deprecated as of Unraid 6.12).
-# Docker Compose is NOT installed via a plugin — we run `docker compose` (built
-# into Unraid) directly from a User Script at array start. Drops a dependency
-# on Compose Manager Plus.
-declare -A PLUGINS=(
-    ["Fix Common Problems"]="https://raw.githubusercontent.com/unraid/fix.common.problems/master/plugins/fix.common.problems.plg"
-    ["Appdata Backup"]="https://raw.githubusercontent.com/Commifreak/unraid-appdata.backup/master/appdata.backup.plg"
-    ["User Scripts"]="https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
-    ["Unassigned Devices"]="https://raw.githubusercontent.com/unraid/unassigned.devices/master/unassigned.devices.plg"
-    ["Nvidia-Driver"]="https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
-    ["Dynamix File Integrity"]="https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
-    # Tailscale — admin plane for every non-Plex service. After install, run
-    # `tailscale up --ssh --advertise-tags=tag:server` from the Unraid terminal
-    # to join the tailnet (interactive auth URL).
-    ["Tailscale"]="https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
+# Map of plugin name -> installed check (directory under /usr/local/emhttp/plugins/)
+declare -A PLUGIN_CHECKS=(
+    ["Community Applications"]="community.applications"
+    ["Fix Common Problems"]="fix.common.problems"
+    ["Appdata Backup"]="appdata.backup"
+    ["User Scripts"]="user.scripts"
+    ["Unassigned Devices"]="unassigned.devices"
+    ["Nvidia-Driver"]="nvidia-driver"
+    ["Dynamix File Integrity"]="dynamix.file.integrity"
+    ["Tailscale"]="tailscale"
 )
 
-# The Nvidia-Driver plugin bundles nvidia-container-toolkit — no separate
-# install needed. A single reboot after driver install is sufficient.
-for name in "${!PLUGINS[@]}"; do
-    url="${PLUGINS[$name]}"
-    info "  Installing: $name"
-    installplg "$url" 2>/dev/null && ok "  $name installed" \
-        || warn "  $name install returned non-zero (may already be installed)"
+MISSING_PLUGINS=()
+for name in "${!PLUGIN_CHECKS[@]}"; do
+    dir="${PLUGIN_CHECKS[$name]}"
+    if [[ -d /usr/local/emhttp/plugins/$dir ]]; then
+        ok "  $name — already installed"
+    else
+        warn "  $name — NOT installed"
+        MISSING_PLUGINS+=("$name")
+    fi
 done
+echo ""
+
+if [[ ${#MISSING_PLUGINS[@]} -gt 0 ]]; then
+    warn "The following plugins must be installed manually via Apps before continuing:"
+    for p in "${MISSING_PLUGINS[@]}"; do
+        warn "  • $p"
+    done
+    warn "Apps tab → search by name → Install → then re-run this script."
+    warn "For Nvidia-Driver: search 'Nvidia-Driver' in Apps."
+    warn "For Appdata Backup: search 'Appdata Backup' (Commifreak's fork)."
+    die "Install missing plugins and re-run."
+fi
+
+info "Step 2/8 — All plugins present, skipping install."
 echo ""
 
 # ---------------------------------------------------------------------------
