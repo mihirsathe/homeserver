@@ -42,6 +42,10 @@ die()     { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 [[ $EUID -ne 0 ]] && die "Run as root"
 [[ ! -d /boot/config ]] && die "/boot/config not found — is this Unraid?"
 
+# installplg lives in /usr/local/sbin which isn't always in PATH
+export PATH="/usr/local/sbin:$PATH"
+[[ ! -x /usr/local/sbin/installplg ]] && die "installplg not found — is this Unraid 6.x?"
+
 info "Starting Unraid automated setup..."
 echo ""
 
