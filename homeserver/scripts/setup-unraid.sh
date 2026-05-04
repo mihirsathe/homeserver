@@ -57,7 +57,7 @@ info "Step 1/8 — Installing Community Applications plugin..."
 CA_PLG="https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
 CA_DEST="/boot/config/plugins/community.applications.plg"
 
-if [[ -f /usr/local/emhttp/plugins/community.applications/plugin ]]; then
+if [[ -d /usr/local/emhttp/plugins/community.applications ]]; then
     ok "Community Applications already installed"
 else
     installplg "$CA_PLG" && ok "Community Applications installed" \
