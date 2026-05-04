@@ -42,58 +42,43 @@ die()     { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 [[ $EUID -ne 0 ]] && die "Run as root"
 [[ ! -d /boot/config ]] && die "/boot/config not found — is this Unraid?"
 
+export PATH="/usr/local/sbin:$PATH"
+[[ ! -x /usr/local/sbin/plugin ]] && die "/usr/local/sbin/plugin not found — is this Unraid 6.x?"
+
 info "Starting Unraid automated setup..."
 echo ""
 
 # ---------------------------------------------------------------------------
-# STEP 1: Community Applications plugin
+# STEP 1 & 2: Plugins
 # ---------------------------------------------------------------------------
-info "Step 1/8 — Installing Community Applications plugin..."
-
-CA_PLG="https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
-CA_DEST="/boot/config/plugins/community.applications.plg"
-
-if [[ -f /usr/local/emhttp/plugins/community.applications/plugin ]]; then
-    ok "Community Applications already installed"
-else
-    installplg "$CA_PLG" && ok "Community Applications installed" \
-        || die "Failed to install Community Applications"
-fi
-
-# ---------------------------------------------------------------------------
-# STEP 2: Install all required plugins
-# ---------------------------------------------------------------------------
-info "Step 2/8 — Installing required plugins..."
+info "Step 1/8 — Installing plugins..."
 echo ""
 
-# Plugin URLs — sourced from the official Unraid org (github.com/unraid) where
-# possible. User Scripts stays on Squidly271 — still actively maintained.
-# Appdata Backup is Commifreak/unraid-appdata.backup, the modern replacement
-# for ca.backup2 (deprecated as of Unraid 6.12).
-# Docker Compose is NOT installed via a plugin — we run `docker compose` (built
-# into Unraid) directly from a User Script at array start. Drops a dependency
-# on Compose Manager Plus.
+# plugin name -> "installed-dir|plg-url"
 declare -A PLUGINS=(
-    ["Fix Common Problems"]="https://raw.githubusercontent.com/unraid/fix.common.problems/master/plugins/fix.common.problems.plg"
-    ["Appdata Backup"]="https://raw.githubusercontent.com/Commifreak/unraid-appdata.backup/master/appdata.backup.plg"
-    ["User Scripts"]="https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
-    ["Unassigned Devices"]="https://raw.githubusercontent.com/unraid/unassigned.devices/master/unassigned.devices.plg"
-    ["Nvidia-Driver"]="https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
-    ["Dynamix File Integrity"]="https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
-    # Tailscale — admin plane for every non-Plex service. After install, run
-    # `tailscale up --ssh --advertise-tags=tag:server` from the Unraid terminal
-    # to join the tailnet (interactive auth URL).
-    ["Tailscale"]="https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
+    ["Community Applications"]="community.applications|https://raw.githubusercontent.com/unraid/community.applications/master/plugins/community.applications.plg"
+    ["Fix Common Problems"]="fix.common.problems|https://raw.githubusercontent.com/unraid/fix.common.problems/master/plugins/fix.common.problems.plg"
+    ["Appdata Backup"]="appdata.backup|https://raw.githubusercontent.com/Commifreak/unraid-appdata.backup/master/appdata.backup.plg"
+    ["User Scripts"]="user.scripts|https://raw.githubusercontent.com/Squidly271/user.scripts/master/plugins/user.scripts.plg"
+    ["Unassigned Devices"]="unassigned.devices|https://raw.githubusercontent.com/unraid/unassigned.devices/master/unassigned.devices.plg"
+    ["Nvidia-Driver"]="nvidia-driver|https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
+    ["Dynamix File Integrity"]="dynamix.file.integrity|https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
+    ["Tailscale"]="tailscale|https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
 )
 
-# The Nvidia-Driver plugin bundles nvidia-container-toolkit — no separate
-# install needed. A single reboot after driver install is sufficient.
 for name in "${!PLUGINS[@]}"; do
-    url="${PLUGINS[$name]}"
-    info "  Installing: $name"
-    installplg "$url" 2>/dev/null && ok "  $name installed" \
-        || warn "  $name install returned non-zero (may already be installed)"
+    IFS='|' read -r dir url <<< "${PLUGINS[$name]}"
+    if [[ -d /usr/local/emhttp/plugins/$dir ]]; then
+        ok "  $name — already installed"
+    else
+        info "  Installing $name..."
+        plugin install "$url" && ok "  $name installed" \
+            || warn "  $name install failed — install manually via Apps tab"
+    fi
 done
+echo ""
+
+info "Step 2/8 — Plugin installation complete."
 echo ""
 
 # ---------------------------------------------------------------------------
