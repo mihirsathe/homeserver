@@ -28,7 +28,7 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
 5. **Verify GPU and container toolkit**:
    ```bash
    nvidia-smi
-   docker run --rm --runtime=nvidia nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+   docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
    nvidia-ctk --version   # must be >= 1.16.2 (closes CVE-2024-0132)
    ```
    If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle).
