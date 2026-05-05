@@ -47,24 +47,31 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
 ### 3a — Tailscale
 
 1. Create a tailnet at [login.tailscale.com](https://login.tailscale.com/) if you don't already have one.
-2. In the admin console → **Access controls**, add tags and an ACL roughly like:
+2. In the admin console → **Access controls**, paste this into the JSON editor (replaces the default):
    ```json
    {
      "tagOwners": {
        "tag:server": ["your-email@example.com"],
        "tag:admin":  ["your-email@example.com"]
      },
-     "acls": [
-       { "action": "accept",
+     "grants": [
+       {
          "src": ["tag:admin"],
-         "dst": ["tag:server:80,443,5055,6767,7878,8080,8181,8686,8989,9696"] }
+         "dst": ["tag:server"],
+         "ip":  ["*"]
+       }
      ],
      "ssh": [
-       { "action": "accept",
-         "src": ["tag:admin"], "dst": ["tag:server"], "users": ["root"] }
+       {
+         "action": "accept",
+         "src":    ["tag:admin"],
+         "dst":    ["tag:server"],
+         "users":  ["root"]
+       }
      ]
    }
    ```
+   Replace `your-email@example.com` with your Tailscale account email. Uses the grants syntax (current recommended format; old `acls` syntax still works but gets no new features).
 3. From the Unraid terminal:
    ```bash
    tailscale up --ssh --advertise-tags=tag:server
