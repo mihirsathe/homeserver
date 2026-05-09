@@ -283,9 +283,21 @@ def prompt_for_missing(env: dict) -> dict:
 _PRESERVE_USER_EDITS = True
 _PENDING_NEW_FILES: list[Path] = []
 
+def _lock_down(path: Path) -> None:
+    """Mode 0600 + chown nobody:users (99:100 on Unraid).
+
+    Containers run as PUID/PGID = 99/100. These files are bind-mounted into
+    /config; if they stay root-owned, the container gets 'Permission denied'
+    on open. Hotio's *arr images and SABnzbd both fail-fast on this and
+    crash-loop. chown is best-effort so the script still works on dev
+    machines without a 'users' group at GID 100.
+    """
+    path.chmod(0o600)
+    subprocess.run(["chown", "nobody:users", str(path)], check=False)
+
 def _write_secret(path: Path, content: str) -> None:
     """Write a config file that contains credentials or API keys. Mode 0600
-    so only the owner (nobody on Unraid, after chown) can read it.
+    + owned by nobody:users so the bind-mounting container can read it.
 
     If the target file already exists and its content differs from what we
     want to write, the new template is written alongside as <path>.new and
@@ -300,16 +312,16 @@ def _write_secret(path: Path, content: str) -> None:
     """
     if path.exists() and _PRESERVE_USER_EDITS:
         if path.read_text() == content:
-            path.chmod(0o600)
+            _lock_down(path)
             return
         new_path = path.with_suffix(path.suffix + ".new")
         new_path.write_text(content)
-        new_path.chmod(0o600)
+        _lock_down(new_path)
         _PENDING_NEW_FILES.append(path)
         print(f"    ! existing file preserved; new template at {new_path.name}")
         return
     path.write_text(content)
-    path.chmod(0o600)
+    _lock_down(path)
 
 def write_sabnzbd(env: dict):
     dest = CONFIGS / "sabnzbd"
