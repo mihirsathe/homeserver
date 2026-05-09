@@ -185,7 +185,7 @@ python3 scripts/generate-configs.py
 
 ```bash
 cd ~/homeserver/homeserver
-docker compose --env-file .env --env-file generated.env up -d
+docker compose --env-file .env.docker up -d
 watch -n 2 'docker compose ps'
 ```
 
@@ -405,7 +405,7 @@ Simulate a rollback path: pin one image to a broken tag (`sabnzbd: image: ghcr.i
 
 ```bash
 cd ~/homeserver/homeserver
-docker compose --env-file .env --env-file generated.env down -v
+docker compose --env-file .env.docker down -v
 docker volume prune -f
 sudo rm -rf /mnt/user  # destroys the sandbox; do not run on the real Unraid box
 ```

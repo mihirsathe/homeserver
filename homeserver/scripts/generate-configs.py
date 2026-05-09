@@ -786,7 +786,7 @@ Done.
 
 Next steps:
   1. Start the stack:
-       docker compose --env-file .env --env-file generated.env up -d
+       docker compose --env-file .env.docker up -d
   2. Wait ~60s for containers to initialise.
   3. python3 scripts/bootstrap.py
 """)

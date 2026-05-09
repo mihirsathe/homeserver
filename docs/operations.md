@@ -33,7 +33,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 ```bash
 # Is everything running?
-cd /mnt/user/appdata/homeserver/homeserver && docker compose --env-file .env --env-file generated.env ps
+cd /mnt/user/appdata/homeserver/homeserver && docker compose --env-file .env.docker ps
 
 # Is GPU visible inside Plex?
 docker exec plex nvidia-smi

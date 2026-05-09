@@ -16,8 +16,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
-ENV_FILE="$STACK_DIR/.env"
-GENERATED_ENV="$STACK_DIR/generated.env"
+# Single merged env-file written by generate-configs.py — see update-stack.sh
+# for rationale (avoids --env-file precedence quirks).
+DOCKER_ENV="$STACK_DIR/.env.docker"
 BACKUP_DIR="/mnt/user/backups/appdata"
 APPDATA_DIR="/mnt/user/appdata"
 
@@ -28,8 +29,7 @@ die()  { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 [[ $EUID -eq 0 ]] || die "Run as root (needs to chown extracted files)."
 
 compose() {
-    /usr/bin/docker compose -f "$COMPOSE_FILE" \
-        --env-file "$ENV_FILE" --env-file "$GENERATED_ENV" "$@"
+    /usr/bin/docker compose -f "$COMPOSE_FILE" --env-file "$DOCKER_ENV" "$@"
 }
 
 echo "=== restore-appdata.sh ==="
