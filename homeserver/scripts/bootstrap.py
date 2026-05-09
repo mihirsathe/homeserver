@@ -194,7 +194,7 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
                   extra_mm: Optional[dict] = None) -> None:
 
     # Each *arr names the SABnzbd category field differently.
-    # Source of truth: /api/v3/downloadclient/schema → fields[].name where
+    # Source of truth: /api/<ver>/downloadclient/schema → fields[].name where
     # implementation == "Sabnzbd". Passing the wrong name 400s the request.
     category_field = {
         "Radarr": "movieCategory",
@@ -202,19 +202,24 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
         "Lidarr": "musicCategory",
     }[label]
 
+    # Lidarr 2.x is still on the v1 API; Radarr v5 / Sonarr v4 are on v3.
+    # The wait_for() check uses sub-500 = "ready", so a 404 on the wrong
+    # version still passes the up-check — but real config calls 404 here.
+    api_ver = "v1" if label == "Lidarr" else "v3"
+
     # Root folder
-    existing_roots = arr_get(base, key, "/api/v3/rootfolder")
+    existing_roots = arr_get(base, key, f"/api/{api_ver}/rootfolder")
     if any(f["path"] == root_folder for f in existing_roots):
         print(f"  ✓ {label}: root folder already set")
     else:
-        arr_post(base, key, "/api/v3/rootfolder", {"path": root_folder})
+        arr_post(base, key, f"/api/{api_ver}/rootfolder", {"path": root_folder})
         print(f"  ✓ {label}: root folder → {root_folder}")
 
     # SABnzbd download client
-    if already_exists(base, key, "/api/v3/downloadclient", "name", "SABnzbd"):
+    if already_exists(base, key, f"/api/{api_ver}/downloadclient", "name", "SABnzbd"):
         print(f"  ✓ {label}: SABnzbd already connected")
     else:
-        arr_post(base, key, "/api/v3/downloadclient", {
+        arr_post(base, key, f"/api/{api_ver}/downloadclient", {
             "enable": True,
             "protocol": "usenet",
             "priority": 1,
@@ -239,13 +244,13 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
 
     # Media management: enable hardlinks, import extra files
     try:
-        current = arr_get(base, key, "/api/v3/config/mediamanagement")
+        current = arr_get(base, key, f"/api/{api_ver}/config/mediamanagement")
         updated = {**current,
                    "copyUsingHardlinks": True,
                    "deleteEmptyFolders": True,
                    "importExtraFiles": True,
                    **(extra_mm or {})}
-        arr_put(base, key, "/api/v3/config/mediamanagement", updated)
+        arr_put(base, key, f"/api/{api_ver}/config/mediamanagement", updated)
         print(f"  ✓ {label}: hardlinks enabled")
     except Exception as e:
         print(f"  ⚠ {label}: media management update failed: {e}")
