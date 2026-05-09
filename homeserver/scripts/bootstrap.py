@@ -193,6 +193,15 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
                   sabnzbd_category: str, sabnzbd_key: str,
                   extra_mm: Optional[dict] = None) -> None:
 
+    # Each *arr names the SABnzbd category field differently.
+    # Source of truth: /api/v3/downloadclient/schema → fields[].name where
+    # implementation == "Sabnzbd". Passing the wrong name 400s the request.
+    category_field = {
+        "Radarr": "movieCategory",
+        "Sonarr": "tvCategory",
+        "Lidarr": "musicCategory",
+    }[label]
+
     # Root folder
     existing_roots = arr_get(base, key, "/api/v3/rootfolder")
     if any(f["path"] == root_folder for f in existing_roots):
@@ -211,12 +220,15 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
             "priority": 1,
             "name": "SABnzbd",
             "fields": [
-                {"name": "host",         "value": "sabnzbd"},
-                {"name": "port",         "value": 8080},
-                {"name": "apiKey",       "value": sabnzbd_key},
-                {"name": "urlBase",      "value": "/sabnzbd"},
-                {"name": "categories",   "value": sabnzbd_category},
-                {"name": "useSsl",       "value": False},
+                # SAB shares gluetun's netns and has no bridge endpoint of
+                # its own, so from any other container's POV its UI lives at
+                # gluetun:8080. Resolving "sabnzbd" via docker DNS fails.
+                {"name": "host",           "value": "gluetun"},
+                {"name": "port",           "value": 8080},
+                {"name": "apiKey",         "value": sabnzbd_key},
+                {"name": "urlBase",        "value": "/sabnzbd"},
+                {"name": category_field,   "value": sabnzbd_category},
+                {"name": "useSsl",         "value": False},
             ],
             "implementationName": "SABnzbd",
             "implementation": "Sabnzbd",
@@ -280,7 +292,9 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
                 "name": name,
                 "syncLevel": "fullSync",
                 "fields": [
-                    {"name": "prowlarrUrl", "value": "http://prowlarr:9696/prowlarr"},
+                    # Prowlarr shares gluetun's netns; from each *arr's POV
+                    # its API is reachable at gluetun:9696, not prowlarr:9696.
+                    {"name": "prowlarrUrl", "value": "http://gluetun:9696/prowlarr"},
                     {"name": "baseUrl",     "value": app_url},
                     {"name": "apiKey",      "value": app_key},
                     {"name": "syncCategories",
