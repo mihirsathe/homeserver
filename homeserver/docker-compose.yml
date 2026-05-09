@@ -379,6 +379,12 @@ services:
     user: "${PUID}:${PGID}"
     networks:
       - frontend
+      # Dual-homed onto automation so seerr can resolve radarr/sonarr/lidarr
+      # by container name (they live only on automation+downloaders, not
+      # frontend). Without this, Seerr's *arr server config has to use the
+      # host LAN IP and bounce through the published port — works, but
+      # routes traffic out of the bridge and back in for no reason.
+      - automation
     environment:
       - TZ=${TZ}
     volumes:
