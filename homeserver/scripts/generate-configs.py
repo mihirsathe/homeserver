@@ -91,6 +91,28 @@ def write_back_to_env(path: Path, updates: dict):
     path.write_text("".join(out))
     path.chmod(0o600)
 
+def strip_keys_from_env(path: Path, keys: set[str]) -> list[str]:
+    """Remove any line in path that defines one of the named keys.
+    Returns the list of keys actually removed (so callers can warn the user).
+    """
+    if not path.exists():
+        return []
+    lines = path.read_text().splitlines(keepends=True)
+    removed = []
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if "=" in stripped and not stripped.startswith("#"):
+            key = stripped.partition("=")[0].strip()
+            if key in keys:
+                removed.append(key)
+                continue
+        out.append(line)
+    if removed:
+        path.write_text("".join(out))
+        path.chmod(0o600)
+    return removed
+
 def write_generated(updates: dict):
     """Write (or update) generated.env with machine-generated values."""
     existing = _parse_env_file(GENERATED_FILE) if GENERATED_FILE.exists() else {}
@@ -708,6 +730,17 @@ def main() -> None:
 
     print(f"Stack directory: {STACK_DIR}\n")
 
+    # Defensive: STACK_DIR must only live in generated.env. If it leaked into
+    # .env (e.g. a user copy-pasted it from generated.env, or an old version
+    # of this script wrote it there), strip it out — otherwise docker compose's
+    # --env-file precedence can blank ${STACK_DIR} in compose, breaking every
+    # bind mount under configs/. .env.docker (the merged file actually fed to
+    # compose) is regenerated below regardless, so this is belt-and-braces.
+    stripped = strip_keys_from_env(ENV_FILE, {"STACK_DIR"})
+    if stripped:
+        print(f"  Removed stray {','.join(stripped)} from {ENV_FILE.name} "
+              f"(only belongs in {GENERATED_FILE.name}).\n")
+
     # Load both files — generated.env may not exist yet on first run
     env = load_env(ENV_FILE, GENERATED_FILE)
 
@@ -786,7 +819,7 @@ Done.
 
 Next steps:
   1. Start the stack:
-       docker compose --env-file .env --env-file generated.env up -d
+       docker compose --env-file .env.docker up -d
   2. Wait ~60s for containers to initialise.
   3. python3 scripts/bootstrap.py
 """)

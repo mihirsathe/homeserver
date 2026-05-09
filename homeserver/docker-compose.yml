@@ -9,7 +9,14 @@
 #   `media_stack_up` User Script (installed by setup-unraid.sh) runs at
 #   array start and issues:
 #     cd /mnt/user/appdata/homeserver/homeserver
-#     docker compose --env-file .env --env-file generated.env up -d
+#     docker compose --env-file .env.docker up -d
+#
+#   .env.docker is the merged result of .env + generated.env, written by
+#   generate-configs.py. We use a single env-file (not two --env-file flags)
+#   because docker compose's precedence between multiple --env-file files
+#   has historically been brittle — a stale STACK_DIR= line in .env could
+#   blank out the value generated.env provides, breaking every bind mount
+#   below that uses ${STACK_DIR}.
 #
 # UNRAID-SPECIFIC DECISIONS IN THIS FILE:
 #

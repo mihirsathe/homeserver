@@ -172,7 +172,7 @@ A service's healthcheck isn't passing or port isn't bound. `wait_for` reports th
 
 `.env` is read by two layers:
 
-- **`generate-configs.py`** reads `.env` at run time and writes per-service config files. If you changed anything that's baked into a config (Usenet password, API key, URL base), you must re-run it.
-- **Docker Compose** reads `.env` + `generated.env` at `docker compose up`. If you changed anything that's injected as an env var (TZ, `PLEX_LAN_IP`, VPN key), re-run `docker compose up -d`.
+- **`generate-configs.py`** reads `.env` at run time, writes per-service config files, and regenerates `.env.docker` (the merged `.env` + `generated.env` that Compose actually consumes). If you changed anything that's baked into a config (Usenet password, API key, URL base), or anything Compose substitutes in (TZ, `PLEX_LAN_IP`, VPN key), you must re-run it.
+- **Docker Compose** reads `.env.docker` at `docker compose up`. After re-running `generate-configs.py`, follow up with `docker compose --env-file .env.docker up -d`.
 
-Rule of thumb: any `.env` change that matters needs both `python3 scripts/generate-configs.py` and `docker compose up -d` to fully propagate.
+Rule of thumb: any `.env` change that matters needs both `python3 scripts/generate-configs.py` and `docker compose --env-file .env.docker up -d` to fully propagate.

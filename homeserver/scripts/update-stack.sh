@@ -16,8 +16,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
-ENV_FILE="$STACK_DIR/.env"
-GENERATED_ENV="$STACK_DIR/generated.env"
+# Single merged env-file written by generate-configs.py from .env + generated.env.
+# Avoids --env-file precedence quirks where a stale STACK_DIR= entry in .env
+# could blank out the value generated.env provides.
+DOCKER_ENV="$STACK_DIR/.env.docker"
 LOCK_FILE="/var/lock/homeserver-update.lock"
 LOG_FILE="/var/log/homeserver-update.log"
 MIN_FREE_MB=5120  # 5 GB free required on appdata before pulling
@@ -51,7 +53,7 @@ if ! flock -n 9; then
 fi
 
 # Pre-flight: verify the files we need actually exist before touching Docker.
-for f in "$COMPOSE_FILE" "$ENV_FILE" "$GENERATED_ENV"; do
+for f in "$COMPOSE_FILE" "$DOCKER_ENV"; do
     [[ -f "$f" ]] || { echo "[$(ts)] ERROR: required file not found: $f"; exit 1; }
 done
 
@@ -69,8 +71,7 @@ else
 fi
 
 compose() {
-    /usr/bin/docker compose -f "$COMPOSE_FILE" \
-        --env-file "$ENV_FILE" --env-file "$GENERATED_ENV" "$@"
+    /usr/bin/docker compose -f "$COMPOSE_FILE" --env-file "$DOCKER_ENV" "$@"
 }
 
 if (( DRY_RUN )); then

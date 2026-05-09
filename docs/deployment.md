@@ -110,8 +110,10 @@ python3 scripts/generate-configs.py
 Before running, grab a fresh claim token from `https://plex.tv/claim` and paste it into `.env` as `PLEX_CLAIM` — it expires in 4 minutes, so do this immediately before the command below.
 
 ```bash
-docker compose --env-file .env --env-file generated.env up -d
+docker compose --env-file .env.docker up -d
 ```
+
+`.env.docker` is the merged file (`.env` + `generated.env`) that `generate-configs.py` writes — using it as a single env-file avoids `--env-file` precedence quirks that can blank out `${STACK_DIR}` and break every config bind mount.
 
 Plex uses the claim token on first start to link the server to your account, then ignores it. `restart: unless-stopped` means containers restart automatically on all subsequent reboots. This command runs once, ever.
 
@@ -165,5 +167,5 @@ Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscripti
 1. `git clone https://github.com/mihirsathe/homeserver /mnt/user/appdata/homeserver`
 2. `cd /mnt/user/appdata/homeserver/homeserver && cp .env.example .env`
 3. `python3 scripts/generate-configs.py`
-4. Grab a claim token from `https://plex.tv/claim`, paste into `.env` as `PLEX_CLAIM`, then immediately: `docker compose --env-file .env --env-file generated.env up -d`
+4. Grab a claim token from `https://plex.tv/claim`, paste into `.env` as `PLEX_CLAIM`, then immediately: `docker compose --env-file .env.docker up -d`
 5. `python3 scripts/bootstrap.py`

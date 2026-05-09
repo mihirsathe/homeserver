@@ -11,7 +11,7 @@ One open router port (TCP 32400 → Plex); all admin UIs reachable only via Tail
 ```bash
 cp .env.example .env                                       # fill in credentials
 python3 scripts/generate-configs.py                        # interactive — prompts for anything missing
-docker compose --env-file .env --env-file generated.env up -d
+docker compose --env-file .env.docker up -d                # .env.docker = .env + generated.env, written above
 python3 scripts/bootstrap.py                               # wire everything together
 ```
 
