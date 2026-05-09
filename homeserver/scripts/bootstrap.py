@@ -239,14 +239,27 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
         arr_post(base, key, f"/api/{api_ver}/rootfolder", payload)
         print(f"  ✓ {label}: root folder → {root_folder}")
 
-    # SABnzbd download client
-    if already_exists(base, key, f"/api/{api_ver}/downloadclient", "name", "SABnzbd"):
-        print(f"  ✓ {label}: SABnzbd already connected")
+    # SABnzbd download client. removeCompletedDownloads=False so the *arr
+    # leaves the SAB queue/history entry in place after import — Radarr's
+    # own health check warns when this is True (the default), because the
+    # *arr can race SAB's post-processing and remove the entry before
+    # import finishes, leaving downloads orphaned. SAB's history_retention
+    # in sabnzbd.ini handles cleanup independently.
+    existing_clients = arr_get(base, key, f"/api/{api_ver}/downloadclient")
+    sab_client = next((c for c in existing_clients if c.get("name") == "SABnzbd"), None)
+    if sab_client is not None:
+        if sab_client.get("removeCompletedDownloads") is not False:
+            sab_client["removeCompletedDownloads"] = False
+            arr_put(base, key, f"/api/{api_ver}/downloadclient/{sab_client['id']}", sab_client)
+            print(f"  ✓ {label}: SABnzbd reconciled (removeCompletedDownloads=False)")
+        else:
+            print(f"  ✓ {label}: SABnzbd already connected")
     else:
         arr_post(base, key, f"/api/{api_ver}/downloadclient", {
             "enable": True,
             "protocol": "usenet",
             "priority": 1,
+            "removeCompletedDownloads": False,
             "name": "SABnzbd",
             "fields": [
                 # SAB shares gluetun's netns and has no bridge endpoint of
