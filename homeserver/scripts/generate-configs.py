@@ -469,8 +469,15 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
   <EnableSsl>False</EnableSsl>
   <LaunchBrowser>False</LaunchBrowser>
   <ApiKey>{api_key}</ApiKey>
-  <AuthenticationMethod>Forms</AuthenticationMethod>
-  <AuthenticationRequired>Enabled</AuthenticationRequired>
+  <!-- The whole stack is admin-only and reachable only via Tailscale (the
+       Unraid host enforces that — no public listener for these ports). The
+       *arrs sit behind that perimeter, so internal auth would only force
+       another credential prompt on every UI visit. The new-style 'None'
+       option is still honored when set via config.xml on startup; it's only
+       hidden from the UI dropdown to discourage exposing arrs to the open
+       internet. AuthenticationRequired is ignored when method is None. -->
+  <AuthenticationMethod>None</AuthenticationMethod>
+  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
   <Branch>main</Branch>
   <LogLevel>info</LogLevel>
   <UrlBase>{url_base}</UrlBase>
