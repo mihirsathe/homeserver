@@ -283,9 +283,21 @@ def prompt_for_missing(env: dict) -> dict:
 _PRESERVE_USER_EDITS = True
 _PENDING_NEW_FILES: list[Path] = []
 
+def _lock_down(path: Path) -> None:
+    """Mode 0600 + chown nobody:users (99:100 on Unraid).
+
+    Containers run as PUID/PGID = 99/100. These files are bind-mounted into
+    /config; if they stay root-owned, the container gets 'Permission denied'
+    on open. Hotio's *arr images and SABnzbd both fail-fast on this and
+    crash-loop. chown is best-effort so the script still works on dev
+    machines without a 'users' group at GID 100.
+    """
+    path.chmod(0o600)
+    subprocess.run(["chown", "nobody:users", str(path)], check=False)
+
 def _write_secret(path: Path, content: str) -> None:
     """Write a config file that contains credentials or API keys. Mode 0600
-    so only the owner (nobody on Unraid, after chown) can read it.
+    + owned by nobody:users so the bind-mounting container can read it.
 
     If the target file already exists and its content differs from what we
     want to write, the new template is written alongside as <path>.new and
@@ -300,16 +312,16 @@ def _write_secret(path: Path, content: str) -> None:
     """
     if path.exists() and _PRESERVE_USER_EDITS:
         if path.read_text() == content:
-            path.chmod(0o600)
+            _lock_down(path)
             return
         new_path = path.with_suffix(path.suffix + ".new")
         new_path.write_text(content)
-        new_path.chmod(0o600)
+        _lock_down(new_path)
         _PENDING_NEW_FILES.append(path)
         print(f"    ! existing file preserved; new template at {new_path.name}")
         return
     path.write_text(content)
-    path.chmod(0o600)
+    _lock_down(path)
 
 def write_sabnzbd(env: dict):
     dest = CONFIGS / "sabnzbd"
@@ -468,77 +480,20 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
     _write_secret(dest / "config.xml", content)
     print(f"  ✓ configs/{name}/config.xml")
 
-def write_seerr(env: dict):
-    """Write Seerr's settings.json.
-
-    Seerr is the actively-maintained successor to Overseerr (Overseerr +
-    Jellyseerr lineage). Its settings schema is largely a superset of
-    Overseerr's — the keys below are Overseerr-compatible and accepted by
-    Seerr. Plex Watchlist auto-request is enabled by default so family
-    members can "Add to Watchlist" in the Plex app and have Seerr submit
-    the request on their behalf.
+def ensure_seerr_appdata():
+    """Create /mnt/user/appdata/seerr as nobody:users so the container (which
+    runs as 99:100 via the `user:` override in compose) can write its SQLite
+    DB on first start. Seerr is configured through its first-run UI flow —
+    we don't pre-seed settings.json because the file confuses the settings
+    migrator on a fresh install (it tries to record migrations against a
+    db.sqlite3 that hasn't been created yet, crash-loops on
+    'SQLITE_ERROR: no such table: migrations'). See docs/deployment.md
+    for the manual Plex/Radarr/Sonarr wiring step.
     """
-    dest = CONFIGS / "seerr"
+    dest = Path("/mnt/user/appdata/seerr")
     dest.mkdir(parents=True, exist_ok=True)
-
-    lan_ip = env["PLEX_LAN_IP"]
-
-    settings = {
-        "apiKey": uuid.uuid4().hex,
-        "main": {
-            "apiKey": uuid.uuid4().hex,
-            "applicationTitle": "Media Requests",
-            # Admin-only; Seerr reachable via Tailscale MagicDNS.
-            "applicationUrl": "",
-            "trustProxy": False,
-            "hideAvailable": False,
-            "localLogin": False,
-            "newPlexLogin": True,
-            # REQUEST + AUTO_APPROVE + AUTO_REQUEST for Watchlist flow.
-            "defaultPermissions": 32,
-            "defaultQuotas": {
-                "movie": {"quotaLimit": 0, "quotaDays": 7},
-                "tv":    {"quotaLimit": 0, "quotaDays": 7}
-            },
-            "partialRequestsEnabled": True,
-            "locale": "en"
-        },
-        "plex": {
-            "name": env.get("PLEX_SERVER_NAME", "Home Media Server"),
-            "ip": lan_ip,
-            "port": 32400,
-            "useSsl": False,
-            "libraries": [],
-            # Poll Plex Watchlist every 5 min for auto-request.
-            "webAppUrl": ""
-        },
-        "tautulli": None,
-        "radarr": [],
-        "sonarr": [],
-        "public": {"initialized": False},
-        "notifications": {
-            "agents": {
-                "email":      {"enabled": False, "types": 0, "options": {}},
-                "discord":    {"enabled": False, "types": 0, "options": {}},
-                "slack":      {"enabled": False, "types": 0, "options": {}},
-                "telegram":   {"enabled": False, "types": 0, "options": {}},
-                "pushbullet": {"enabled": False, "types": 0, "options": {}},
-                "pushover":   {"enabled": False, "types": 0, "options": {}},
-                "lunasea":    {"enabled": False, "types": 0, "options": {}},
-                "gotify":     {"enabled": False, "types": 0, "options": {}},
-                "ntfy":       {"enabled": False, "types": 0, "options": {}},
-                "webpush":    {"enabled": False, "types": 0, "options": {}}
-            }
-        },
-        "jobs": {
-            "plex-watchlist-sync": {
-                "schedule": "0 */2 * * * *"
-            }
-        }
-    }
-
-    _write_secret(dest / "settings.json", json.dumps(settings, indent=2))
-    print("  ✓ configs/seerr/settings.json")
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (Seerr state — configured via web UI)")
 
 def ensure_profilarr_appdata():
     """Create /mnt/user/appdata/profilarr as nobody:users so Profilarr can
@@ -661,22 +616,6 @@ def create_data_dirs():
     else:
         print("  ✓ data directories already exist")
 
-    # Seed Seerr's settings.json into appdata directly. Seerr owns the whole
-    # /app/config directory once running, so we can't bind-mount a single host
-    # file into it cleanly — we drop the seed template into appdata and let
-    # the container pick it up on first start. Owned by nobody:users (99:100),
-    # matching the `user:` override on the seerr service in compose.
-    seerr_appdata = Path("/mnt/user/appdata/seerr")
-    seerr_appdata.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chown", "-R", "nobody:users", str(seerr_appdata)], check=False)
-    seed = CONFIGS / "seerr" / "settings.json"
-    target = seerr_appdata / "settings.json"
-    if seed.exists() and not target.exists():
-        target.write_bytes(seed.read_bytes())
-        subprocess.run(["chown", "nobody:users", str(target)], check=False)
-        target.chmod(0o600)
-        print(f"  ✓ seeded {target}")
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -763,7 +702,7 @@ def main() -> None:
     write_arr_config("sonarr",   8989, env["SONARR_API_KEY"],  "/sonarr")
     write_arr_config("lidarr",   8686, env["LIDARR_API_KEY"],  "/lidarr")
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"],"/prowlarr")
-    write_seerr(env)
+    ensure_seerr_appdata()
     ensure_profilarr_appdata()
     write_bazarr(env)
     write_tautulli(env)
