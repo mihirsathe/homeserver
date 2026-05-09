@@ -387,8 +387,11 @@ def configure_plex(token: str, lan_ip: str):
             print(f"  ✓ Plex: '{name}' already exists")
             continue
         try:
+            # The new tv.plex.agents.* agents require BCP-47 locale tags
+            # (en-US, en-GB, …); the legacy two-letter form ("en") returns
+            # 400 'language' is invalid.
             plex.library.add(name=name, type=ltype, agent=agent,
-                             scanner=scanner, location=path, language="en")
+                             scanner=scanner, location=path, language="en-US")
             print(f"  ✓ Plex: created library '{name}'")
         except BadRequest as e:
             print(f"  ⚠ Plex: could not create '{name}': {e}")
