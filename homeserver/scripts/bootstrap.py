@@ -284,7 +284,7 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
 # ---------------------------------------------------------------------------
 def configure_prowlarr(base: str, key: str, env: dict) -> None:
 
-    def add_indexer(name: str, defn: str, api_key_value: str) -> None:
+    def add_indexer(name: str, schema_name: str, api_key_value: str) -> None:
         if already_exists(base, key, "/api/v1/indexer", "name", name):
             print(f"  ✓ Prowlarr: {name} already added")
             return
@@ -293,12 +293,18 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
         except Exception as e:
             print(f"  ⚠ Prowlarr: could not fetch schemas: {e}")
             return
+        # Match on schema 'name' (e.g. "NZBgeek", "NzbPlanet") — not on
+        # 'definitionName', which is the protocol family ("Newznab",
+        # "Torznab"). Every Newznab-based indexer shares the same
+        # definitionName, so matching that can't disambiguate. Compare
+        # case-insensitively to tolerate upstream casing shifts (NZBgeek
+        # vs NZBGeek, etc.).
         schema = next(
-            (s for s in schemas if s.get("definitionName", "").lower() == defn.lower()),
+            (s for s in schemas if (s.get("name") or "").lower() == schema_name.lower()),
             None
         )
         if not schema:
-            print(f"  ⚠ Prowlarr: schema not found for '{defn}' — check indexer name")
+            print(f"  ⚠ Prowlarr: schema not found for '{schema_name}' — check indexer name")
             return
         for field in schema.get("fields", []):
             if field.get("name") == "apiKey":
