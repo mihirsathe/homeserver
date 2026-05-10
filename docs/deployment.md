@@ -57,7 +57,7 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
      "acls": [
        { "action": "accept",
          "src": ["tag:admin"],
-         "dst": ["tag:server:80,443,5055,6767,7878,8080,8181,8686,8989,9696"] }
+         "dst": ["tag:server:80,32400,53"] }
      ],
      "ssh": [
        { "action": "accept",
@@ -138,19 +138,80 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally, open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
+Finally, open **Seerr** at `http://seerr.lan/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
-Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://<server-ip>:8181` and it's already bound to the Plex server with full history access.
+Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan/` and it's already bound to the Plex server with full history access.
 
 ### Profilarr first-run
 
-Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://<server-ip>:6868` and:
+Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan/` and:
 
-1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878/radarr`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989/sonarr`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name.
+1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name. Note: these are *internal* container-to-container URLs, not the Caddy-fronted `radarr.lan` form — Caddy doesn't sit between containers on the same docker network.
 2. **Link a database** — Databases → Add. The Dictionarry DB is the default curated source; TRaSH Guides can be linked alongside it. Do not also run Recyclarr against these *arrs — they will fight.
 3. **Select profiles and custom formats**, review the diff preview, and sync. Subsequent syncs are initiated from the same UI whenever upstream updates.
 
 Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscriptions and selections survive a rebuild.
+
+---
+
+## Step 6.5 — Tailscale split DNS
+
+The stack ships **AdGuard Home** as the tailnet DNS resolver. With one rule
+in the Tailscale admin console, every device on your tailnet automatically
+resolves `*.lan` (radarr.lan, sonarr.lan, sab.lan, …) without per-device
+config — no `/etc/hosts` editing, works on iOS/Android, scales to as many
+devices as you add later.
+
+### One-time setup
+
+1. **Get the Unraid host's tailnet IP** (run on the Unraid terminal):
+   ```bash
+   tailscale ip -4
+   # e.g. 100.64.1.7
+   ```
+   Put this in `homeserver/.env` as `TAILNET_HOST_IP`. If you didn't fill it
+   in before running `generate-configs.py`, do it now and re-run with
+   `--force-overwrite` so the AdGuard rewrite rule has the right answer.
+
+2. **Tailscale admin console** → DNS:
+   - Under "Nameservers" → "Add nameserver" → "Custom..." → enter
+     `<TAILNET_HOST_IP>`.
+   - Toggle "Restrict to domain" on, set the domain to `lan`. (This is
+     called "split DNS" — Tailscale only sends `*.lan` queries to AdGuard;
+     everything else continues to use the device's normal resolver.)
+   - Save.
+
+3. **Verify on any tailnet device**:
+   ```
+   nslookup radarr.lan        # should return TAILNET_HOST_IP
+   curl -I http://radarr.lan  # should return a 200 / 302 from Caddy
+   ```
+
+That's it. Adding new admin services later is a one-row edit to
+`CADDY_SERVICES` in `generate-configs.py` and a re-run; the new hostname
+inherits the same wildcard rule, no DNS work required.
+
+### AdGuard admin login
+
+`generate-configs.py` auto-generates `ADGUARD_ADMIN_PASS` (a UUID) and
+pre-seeds it into `AdGuardHome.yaml` as the admin user. Read it from
+`generated.env` when you want to log into `http://adguard.lan/`:
+
+```bash
+grep ^ADGUARD_ADMIN_PASS generated.env | cut -d= -f2
+```
+
+User is `admin`. AdGuard's UI gives you a queries dashboard, blocklist
+management, and tailnet-wide ad-blocking (the AdGuard DNS Filter is
+enabled by default — disable it in the UI if undesired).
+
+### Long-term aside
+
+Other patterns can replace the AdGuard-in-stack approach later — running
+Pi-hole on a Raspberry Pi as the tailnet's primary DNS, or owning a real
+domain and using Cloudflare DNS-01 for proper HTTPS — but neither is
+required. The stack-internal AdGuard covers the actual need (zero per-
+device config) without external dependencies.
 
 ---
 

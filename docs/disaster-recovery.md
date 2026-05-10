@@ -128,7 +128,7 @@ Tailscale-side outages (rare) resolve without intervention. During an outage you
 
 ## Gluetun tunnel down (SAB + Prowlarr offline)
 
-**Symptom**: SAB UI (`:8080`) and Prowlarr UI (`:9696`) unreachable. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
+**Symptom**: SAB UI (`sab.lan`) and Prowlarr UI (`prowlarr.lan`) return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
 
 This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
 
@@ -138,6 +138,57 @@ This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress f
 4. Verify egress: `docker exec sabnzbd curl -s https://ifconfig.me` — must be a Mullvad exit IP, never your home WAN IP.
 
 Mullvad-side outages (rare) resolve without intervention. SAB/Prowlarr stay offline until the provider is back — that's intended.
+
+---
+
+## AdGuard / Caddy down — admin URLs stop resolving
+
+**Symptom**: `radarr.lan`, `sonarr.lan`, etc. don't resolve or 502 from
+admin devices. Plex (port 32400) and SSH still work. The stack itself is
+running — the admin ingress layer broke.
+
+Two failure modes; check both quickly via `docker compose ps`:
+
+1. **AdGuard `(unhealthy)` or stopped** → DNS layer broken; `*.lan`
+   resolution fails everywhere on the tailnet.
+2. **Caddy `(unhealthy)` or stopped** → DNS still resolves to
+   `TAILNET_HOST_IP` but :80 doesn't answer or doesn't proxy.
+
+**Fallback path (works regardless of AdGuard/Caddy state)** — every
+backend is still bound to host loopback. From an SSH session on the host:
+
+```bash
+# Direct API hits while admin ingress is broken:
+curl http://localhost:7878/ping             # radarr
+curl http://localhost:8989/ping             # sonarr
+curl 'http://localhost:8080/api?mode=version'  # sab
+# etc.
+```
+
+For UI access during an outage, you can also bypass DNS by sending the
+Host header to the host directly from any tailnet device:
+
+```bash
+curl -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+```
+
+**Recovery**:
+
+```bash
+docker compose restart adguard caddy
+```
+
+If AdGuard's config got corrupted, restore from appdata backup
+([Appdata corruption (single service)](#appdata-corruption-single-service))
+or regenerate from the templated YAML:
+
+```bash
+python3 scripts/generate-configs.py --force-overwrite
+docker compose restart adguard
+```
+
+The YAML is templated from `CADDY_SERVICES` in `generate-configs.py`, so
+re-running the generator always rebuilds a known-good config.
 
 ---
 

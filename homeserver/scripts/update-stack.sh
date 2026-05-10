@@ -20,6 +20,7 @@ COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 # Avoids --env-file precedence quirks where a stale STACK_DIR= entry in .env
 # could blank out the value generated.env provides.
 DOCKER_ENV="$STACK_DIR/.env.docker"
+CADDYFILE="$STACK_DIR/configs/caddy/Caddyfile"
 LOCK_FILE="/var/lock/homeserver-update.lock"
 LOG_FILE="/var/log/homeserver-update.log"
 MIN_FREE_MB=5120  # 5 GB free required on appdata before pulling
@@ -53,9 +54,27 @@ if ! flock -n 9; then
 fi
 
 # Pre-flight: verify the files we need actually exist before touching Docker.
-for f in "$COMPOSE_FILE" "$DOCKER_ENV"; do
+for f in "$COMPOSE_FILE" "$DOCKER_ENV" "$CADDYFILE"; do
     [[ -f "$f" ]] || { echo "[$(ts)] ERROR: required file not found: $f"; exit 1; }
 done
+
+# Pre-flight: Caddyfile must parse. A broken Caddyfile would take down the
+# admin ingress on `compose up`, so validate before pulling. Run via
+# `docker run --rm` against the existing caddy:2-alpine image (already on
+# disk because the stack is up) so the check works whether or not the live
+# caddy container is currently running. This deliberately runs before the
+# dry-run branch — a syntax error should fail in dry-run too.
+echo "[$(ts)] Pre-flight: validating Caddyfile..."
+if ! /usr/bin/docker run --rm \
+        -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
+        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    echo "[$(ts)] ERROR: Caddyfile failed to validate. Output:"
+    /usr/bin/docker run --rm \
+        -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
+        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile 2>&1 | sed 's/^/    /'
+    exit 1
+fi
+echo "[$(ts)] Pre-flight: Caddyfile OK"
 
 # Pre-flight: appdata must have room for fresh image layers.
 # df reports 1K blocks; convert to MB. /mnt/user/appdata is a share, not a

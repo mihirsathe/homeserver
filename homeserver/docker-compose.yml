@@ -37,11 +37,22 @@
 #   downloaders  — gluetun, sabnzbd, prowlarr. SAB and Prowlarr share
 #                  gluetun's netns so all their outbound traffic exits via
 #                  Mullvad with a kill-switch. Only gluetun publishes ports.
-#   frontend     — plex, seerr, tautulli, bazarr. Family-facing services.
+#   frontend     — plex, seerr, tautulli, bazarr, adguard. Family-facing
+#                  services + the tailnet DNS resolver.
 #   automation   — sonarr, radarr, lidarr. Dual-homed to frontend (for
 #                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
 #                  Prowlarr via gluetun). Blocks a popped frontend container
 #                  from pivoting straight into the downloader plane.
+#   caddy        — joined to all three planes so the reverse proxy can
+#                  reach every backend by docker-DNS name.
+#
+# ADMIN INGRESS (the only way into admin UIs from the tailnet):
+#   tailnet device → tailscale → host:80 → caddy → backend by name.
+#   Backend ports are bound to 127.0.0.1 only (loopback) — they exist for
+#   bootstrap.py + host-side debugging, never for direct LAN/Tailscale
+#   access. AdGuard Home (in the stack) answers *.lan DNS queries via a
+#   wildcard rewrite to TAILNET_HOST_IP, configured as a Tailscale
+#   restricted nameserver in the admin console.
 #
 # PUBLIC-FACING:
 #   Only plex is reachable from the internet — TCP 32400 is port-forwarded
@@ -93,9 +104,13 @@ services:
     networks:
       - downloaders
     ports:
-      # SAB and Prowlarr are owned by gluetun's netns; their UIs are published here.
-      - "8080:8080"   # sabnzbd
-      - "9696:9696"   # prowlarr
+      # SAB and Prowlarr are owned by gluetun's netns; their UIs are
+      # published only on host loopback. Caddy reaches them via docker DNS
+      # (gluetun:8080 / gluetun:9696) on the downloaders network — these
+      # publishes are kept for bootstrap.py's localhost:* probes and
+      # host-side debugging, not for direct LAN/Tailscale access.
+      - "127.0.0.1:8080:8080"   # sabnzbd
+      - "127.0.0.1:9696:9696"   # prowlarr
     restart: unless-stopped
     healthcheck:
       # Gluetun exposes its own health endpoint on 9999 (localhost-only).
@@ -140,7 +155,8 @@ services:
     restart: unless-stopped
     healthcheck:
       # Runs inside gluetun's netns, so localhost:8080 is SAB's own port.
-      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/sabnzbd/api?mode=version' || exit 1"]
+      # SAB serves at root (UrlBase stripped); Caddy fronts it at sab.lan.
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/api?mode=version' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -170,7 +186,7 @@ services:
       - ${STACK_DIR}/configs/prowlarr/config.xml:/config/config.xml
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9696/prowlarr/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9696/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -201,13 +217,15 @@ services:
       - ${STACK_DIR}/configs/radarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      - "7878:7878"
+      # Loopback only — fronted by caddy at radarr.lan. Direct port access
+      # exists for bootstrap.py + host debugging, not LAN/Tailscale.
+      - "127.0.0.1:7878:7878"
     restart: unless-stopped
     depends_on:
       sabnzbd:  { condition: service_healthy }
       prowlarr: { condition: service_healthy }
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/radarr/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -236,13 +254,14 @@ services:
       - ${STACK_DIR}/configs/sonarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      - "8989:8989"
+      # Loopback only — fronted by caddy at sonarr.lan.
+      - "127.0.0.1:8989:8989"
     restart: unless-stopped
     depends_on:
       sabnzbd:  { condition: service_healthy }
       prowlarr: { condition: service_healthy }
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/sonarr/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -271,13 +290,14 @@ services:
       - ${STACK_DIR}/configs/lidarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      - "8686:8686"
+      # Loopback only — fronted by caddy at lidarr.lan.
+      - "127.0.0.1:8686:8686"
     restart: unless-stopped
     depends_on:
       sabnzbd:  { condition: service_healthy }
       prowlarr: { condition: service_healthy }
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8686/lidarr/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8686/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -422,7 +442,8 @@ services:
       - /mnt/user/appdata/tautulli:/config
       - ${STACK_DIR}/configs/tautulli/config.ini:/config/config.ini
     ports:
-      - "8181:8181"
+      # Loopback only — fronted by caddy at tautulli.lan.
+      - "127.0.0.1:8181:8181"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8181/status || exit 1"]
@@ -461,7 +482,8 @@ services:
     volumes:
       - /mnt/user/appdata/profilarr:/config
     ports:
-      - "6868:6868"
+      # Loopback only — fronted by caddy at profilarr.lan.
+      - "127.0.0.1:6868:6868"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:6868/ || exit 1"]
@@ -495,10 +517,11 @@ services:
       - ${STACK_DIR}/configs/bazarr/config.ini:/config/config.ini
       - /mnt/user/data/media:/data/media
     ports:
-      - "6767:6767"
+      # Loopback only — fronted by caddy at bazarr.lan.
+      - "127.0.0.1:6767:6767"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:6767/bazarr/ || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6767/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -507,3 +530,94 @@ services:
       resources:
         limits:
           memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # ADGUARD HOME — tailnet split-DNS resolver
+  #
+  # Tailscale's admin console points the `lan` domain at TAILNET_HOST_IP:53;
+  # this container answers with TAILNET_HOST_IP for any *.lan query via a
+  # wildcard rewrite pre-seeded into AdGuardHome.yaml. That makes
+  # radarr.lan / sonarr.lan / etc. resolve automatically on every tailnet
+  # device with zero per-device config — no /etc/hosts edits, works on
+  # iOS/Android.
+  #
+  # Port 53 is published on 0.0.0.0 because tailnet clients query the host
+  # over the tailscale interface; loopback wouldn't reach them. Unraid
+  # itself doesn't bind 53 by default, so this should be conflict-free —
+  # `ss -tlnp | grep :53` on the host before deploying confirms.
+  #
+  # The admin UI lives on container :80 and is fronted by caddy at
+  # adguard.lan, so it's not separately published — same Caddy ingress as
+  # every other admin service.
+  # ---------------------------------------------------------------------------
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguard
+    networks:
+      - frontend
+    volumes:
+      - ${STACK_DIR}/configs/adguard/AdGuardHome.yaml:/opt/adguardhome/conf/AdGuardHome.yaml
+      - /mnt/user/appdata/adguard/work:/opt/adguardhome/work
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    restart: unless-stopped
+    healthcheck:
+      # adguard image ships wget. /control/status returns JSON when the
+      # daemon is up post-init; before init it returns 403 which is also
+      # "up enough" — both count as healthy.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:80/control/status >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:80/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # CADDY — single ingress for every admin UI
+  #
+  # Each backend is reachable at http://<name>.lan/ — Caddy routes by Host
+  # header to the docker-DNS name of the right backend. Joined to all three
+  # networks so it can resolve every service. SAB and Prowlarr live in
+  # gluetun's netns and have no bridge alias of their own, so the Caddyfile
+  # points sab.lan / prowlarr.lan at gluetun:8080 / gluetun:9696 directly.
+  #
+  # auto_https off — HTTP only inside the tailnet. Tailscale already
+  # provides authenticated, encrypted, end-to-end transport between every
+  # device. Layering TLS on top would require either a public domain or
+  # installing Caddy's internal CA root on every admin device — both poor
+  # trade-offs vs the actual threat (which is "tailnet membership," not
+  # network-level eavesdropping).
+  #
+  # admin off — there's nothing pushing config dynamically, the localhost
+  # admin API on :2019 is dead weight + a small attack surface.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    networks:
+      - frontend
+      - automation
+      - downloaders
+    ports:
+      - "80:80"
+    volumes:
+      - ${STACK_DIR}/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/user/appdata/caddy:/data
+    restart: unless-stopped
+    healthcheck:
+      # caddy:2-alpine ships busybox nc but no curl/wget. nc -z is enough
+      # to confirm the listener is up; per-backend liveness lives on each
+      # backend's own healthcheck.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
