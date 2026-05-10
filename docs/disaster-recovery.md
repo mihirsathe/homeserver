@@ -128,7 +128,7 @@ Tailscale-side outages (rare) resolve without intervention. During an outage you
 
 ## Gluetun tunnel down (SAB + Prowlarr offline)
 
-**Symptom**: SAB UI (`:8080`) and Prowlarr UI (`:9696`) unreachable. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
+**Symptom**: SAB UI (`sab.lan`) and Prowlarr UI (`prowlarr.lan`) return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
 
 This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
 

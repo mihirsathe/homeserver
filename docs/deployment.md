@@ -57,7 +57,7 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
      "acls": [
        { "action": "accept",
          "src": ["tag:admin"],
-         "dst": ["tag:server:80,443,5055,6767,7878,8080,8181,8686,8989,9696"] }
+         "dst": ["tag:server:80,32400"] }
      ],
      "ssh": [
        { "action": "accept",
@@ -138,19 +138,39 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally, open **Seerr** at `http://<server-ip>:5055`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
+Finally, open **Seerr** at `http://seerr.lan/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
-Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://<server-ip>:8181` and it's already bound to the Plex server with full history access.
+Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan/` and it's already bound to the Plex server with full history access.
 
 ### Profilarr first-run
 
-Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://<server-ip>:6868` and:
+Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan/` and:
 
-1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878/radarr`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989/sonarr`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name.
+1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name. Note: these are *internal* container-to-container URLs (Profilarr → *arr direct), not the Caddy-fronted `radarr.lan` form — Caddy doesn't sit between containers on the same docker network.
 2. **Link a database** — Databases → Add. The Dictionarry DB is the default curated source; TRaSH Guides can be linked alongside it. Do not also run Recyclarr against these *arrs — they will fight.
 3. **Select profiles and custom formats**, review the diff preview, and sync. Subsequent syncs are initiated from the same UI whenever upstream updates.
 
 Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscriptions and selections survive a rebuild.
+
+---
+
+## Step 6.5 — Admin device hosts entries
+
+Caddy fronts every admin UI at `http://<name>.${HOSTNAME_SUFFIX}/` (default suffix `lan`), but those names won't resolve until each admin device knows where to find them. `generate-configs.py` writes a copy-pasteable block to `docs/CADDY_HOSTS.txt`:
+
+```
+cat docs/CADDY_HOSTS.txt
+```
+
+Replace `100.x.x.x` with the Unraid host's tailnet IP (`tailscale ip -4` on the host) and paste into `/etc/hosts` on each admin device:
+
+- **Linux/macOS**: `sudo $EDITOR /etc/hosts` and append the block.
+- **Windows**: edit `C:\Windows\System32\drivers\etc\hosts` as Administrator.
+- **iOS/Android**: stock OSes don't honor a hosts file — you'll either need a per-device DNS app, or jump to the long-term DNS option below.
+
+After that, `http://radarr.lan/` and friends just work over Tailscale.
+
+**Long-term DNS** (when /etc/hosts gets tedious across many devices): run a small DNS resolver on the tailnet — Pi-hole, AdGuard Home, or `dnsmasq` — with a wildcard A record for `*.lan` pointing at the host's tailnet IP. Then in the Tailscale admin console → Settings → DNS, add a Split DNS entry for `lan` pointing at that resolver. New admin devices need zero per-device config after that.
 
 ---
 

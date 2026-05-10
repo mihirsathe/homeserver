@@ -193,23 +193,38 @@ Wait until every service reaches `(healthy)`. Allow up to 3 minutes — Plex hea
 
 **Per-service sanity**
 
+All backend ports are bound to host loopback (`127.0.0.1:`) — direct probes
+must run *on the Unraid host*, not from a tailnet device. UrlBases are
+stripped so each app serves at root.
+
 ```bash
-curl -fsS http://localhost:8080/sabnzbd/api?mode=version
-curl -fsS http://localhost:9696/prowlarr/ping
-curl -fsS http://localhost:7878/radarr/ping
-curl -fsS http://localhost:8989/sonarr/ping
-curl -fsS http://localhost:8686/lidarr/ping
+curl -fsS http://localhost:8080/api?mode=version
+curl -fsS http://localhost:9696/ping
+curl -fsS http://localhost:7878/ping
+curl -fsS http://localhost:8989/ping
+curl -fsS http://localhost:8686/ping
 curl -fsS http://localhost:5055/api/v1/status | jq .
 curl -fsS http://localhost:8181/status
-curl -fsS http://localhost:6767/bazarr/
+curl -fsS http://localhost:6767/
 curl -fsS http://localhost:32400/identity | head -c 200
+```
+
+**Through Caddy** (from any device with the `docs/CADDY_HOSTS.txt` entries
+pasted into `/etc/hosts`)
+
+```bash
+for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr; do
+  printf "%-12s " "$svc"
+  curl -fsS -o /dev/null -w "%{http_code}\n" "http://${svc}.lan/"
+done
 ```
 
 **Inter-container DNS** (across the `downloaders` / `automation` / `frontend` networks)
 
 ```bash
-# radarr shares `downloaders` with sabnzbd (via gluetun's netns)
-docker exec radarr curl -fsS http://sabnzbd:8080/sabnzbd/api?mode=version
+# radarr shares `downloaders` with gluetun (which owns SAB's netns —
+# 'sabnzbd' as a docker DNS name does not resolve, only 'gluetun' does).
+docker exec radarr curl -fsS http://gluetun:8080/api?mode=version
 
 # seerr shares `frontend` with plex
 docker exec seerr wget -qO- http://plex:32400/identity | head -c 200
@@ -291,27 +306,39 @@ curl -fsS https://<wan-ip>:32400/identity | head -c 200
 
 Expected: a `MediaContainer` XML identity blob. If it times out, the router port-forward 32400 → R640 LAN IP isn't in place (or the ISP is blocking inbound 32400).
 
-**(b) Tailscale admin plane.** On an admin device on the tailnet (and *only* on the tailnet):
+**(b) Tailscale admin plane.** On an admin device on the tailnet (and *only* on the tailnet), with `docs/CADDY_HOSTS.txt` entries pasted into `/etc/hosts`:
 
 ```bash
-# Each admin UI should respond over the tailnet hostname
-curl -fsS http://mediaserver:7878/radarr/ping
-curl -fsS http://mediaserver:8989/sonarr/ping
-curl -fsS http://mediaserver:9696/prowlarr/ping
-curl -fsS http://mediaserver:8080/sabnzbd/api?mode=version
-curl -fsS http://mediaserver:5055/api/v1/status | jq .
+# Each admin UI should respond through Caddy on :80
+curl -fsS http://radarr.lan/ping
+curl -fsS http://sonarr.lan/ping
+curl -fsS http://prowlarr.lan/ping
+curl -fsS http://sab.lan/api?mode=version
+curl -fsS http://seerr.lan/api/v1/status | jq .
 ```
 
-All should succeed. Then drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin ports are LAN-only, never reached over the WAN.
+All should succeed. Then drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin services are tailnet-only.
 
-**Boundary property check** — on the Unraid host:
+**Boundary property check** — backend ports must NOT be externally reachable. From a tailnet device that is *not* the Unraid host:
 
 ```bash
-# Nothing other than 32400 (Plex) should be WAN-reachable.
+# Direct backend ports must time out / refuse — only :80 (Caddy) and :32400 (Plex) listen on a non-loopback interface.
+for p in 5055 6767 6868 7878 8080 8181 8686 8989 9696; do
+  printf "%-5s " "$p"
+  timeout 3 bash -c "</dev/tcp/<unraid-tailnet-ip>/$p" 2>&1 | head -c 60
+  echo
+done
+# Expect every line to say "Connection refused" or hang+timeout.
+```
+
+On the Unraid host itself:
+
+```bash
+# Only :80 and :32400 should be bound to non-loopback addresses.
 sudo ss -tlnp | grep -v 127.0.0.1
 ```
 
-Expect every published port from compose to appear, but only 32400 is mapped through the router. Tailscale's socket appears here too (via the kernel module/container); its listener binds to the tailnet interface, not WAN.
+Expect to see `:80` (caddy) and `:32400` (plex) on `0.0.0.0` or `*`; everything else should be either absent or bound to `127.0.0.1`. Tailscale's socket appears too; its listener binds to the tailnet interface.
 
 ---
 
@@ -328,13 +355,13 @@ Expected post-run state, checked via each app's API:
 ```bash
 # Radarr has a root folder at /data/media/movies and SABnzbd as a download client
 curl -fsS -H "X-Api-Key: $(grep RADARR_API_KEY generated.env | cut -d= -f2)" \
-  http://localhost:7878/radarr/api/v3/rootfolder | jq '.[].path'
+  http://localhost:7878/api/v3/rootfolder | jq '.[].path'
 curl -fsS -H "X-Api-Key: $(grep RADARR_API_KEY generated.env | cut -d= -f2)" \
-  http://localhost:7878/radarr/api/v3/downloadclient | jq '.[] | {name, host}'
+  http://localhost:7878/api/v3/downloadclient | jq '.[] | {name, host}'
 
 # Prowlarr has the two indexers (will show connection errors with stub API keys — expected)
 curl -fsS -H "X-Api-Key: $(grep PROWLARR_API_KEY generated.env | cut -d= -f2)" \
-  http://localhost:9696/prowlarr/api/v1/indexer | jq '.[].name'
+  http://localhost:9696/api/v1/indexer | jq '.[].name'
 
 # Plex has Movies/TV/Music libraries
 curl -fsS "http://localhost:32400/library/sections?X-Plex-Token=$(grep PLEX_TOKEN generated.env | cut -d= -f2)" \

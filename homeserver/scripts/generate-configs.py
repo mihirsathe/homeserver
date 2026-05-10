@@ -359,15 +359,17 @@ def write_sabnzbd(env: dict):
     optional = 1
     enabled = 1"""
 
+    suffix = env.get("HOSTNAME_SUFFIX", "lan")
     content = f"""[misc]
 host = 0.0.0.0
 port = 8080
-url_base = /sabnzbd
-# host_whitelist blocks requests from hostnames not listed here. SAB is
-# reachable only via Tailscale (no public URL) — localhost + service name
-# covers Gluetun-internal health checks and admin access. Add more comma-
-# separated entries (e.g. your Tailscale MagicDNS hostname) as needed.
-host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local
+url_base =
+# host_whitelist blocks requests from hostnames not listed here. SAB rejects
+# any request whose Host header isn't in this list — the Caddy-fronted
+# sab.{suffix} hostname must be present or every reverse-proxied request
+# returns 403. Localhost + service name cover gluetun-internal health checks
+# and host-loopback access; mediaserver.local is the legacy mDNS alias.
+host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local,sab.{suffix}
 api_key = {api_key}
 nzo_ids = {api_key}
 wizard_step = 10
@@ -458,7 +460,7 @@ ntf_enable = 0
     _write_secret(dest / "sabnzbd.ini", content)
     print("  ✓ configs/sabnzbd/sabnzbd.ini")
 
-def write_arr_config(name: str, port: int, api_key: str, url_base: str):
+def write_arr_config(name: str, port: int, api_key: str):
     dest = CONFIGS / name
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -480,7 +482,9 @@ def write_arr_config(name: str, port: int, api_key: str, url_base: str):
   <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
   <Branch>main</Branch>
   <LogLevel>info</LogLevel>
-  <UrlBase>{url_base}</UrlBase>
+  <!-- UrlBase is empty so each *arr serves at root. Caddy fronts them at
+       <name>.${{HOSTNAME_SUFFIX}}/ (e.g. radarr.lan). -->
+  <UrlBase></UrlBase>
   <UpdateMechanism>Docker</UpdateMechanism>
 </Config>
 """
@@ -518,10 +522,14 @@ def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
     dest.mkdir(parents=True, exist_ok=True)
 
+    # base_url = (empty) — Bazarr and the *arrs all serve at root now; Caddy
+    # fronts them at <name>.${HOSTNAME_SUFFIX}/. Keep the keys present so
+    # Bazarr's loader doesn't fall back to the legacy default values that
+    # exist in some upstream revs.
     content = f"""[general]
 ip = 0.0.0.0
 port = 6767
-base_url = /bazarr
+base_url =
 launch_browser = False
 update_upgrade = False
 timezone = {env.get("TZ", "UTC")}
@@ -532,7 +540,7 @@ type = None
 [sonarr]
 ip = sonarr
 port = 8989
-base_url = /sonarr
+base_url =
 ssl = False
 apikey = {env["SONARR_API_KEY"]}
 full_update = Weekly
@@ -543,7 +551,7 @@ enabled = True
 [radarr]
 ip = radarr
 port = 7878
-base_url = /radarr
+base_url =
 ssl = False
 apikey = {env["RADARR_API_KEY"]}
 full_update = Weekly
@@ -595,6 +603,90 @@ refresh_users_on_startup = 0
 """
     _write_secret(dest / "config.ini", content)
     print("  ✓ configs/tautulli/config.ini")
+
+# ---------------------------------------------------------------------------
+# Caddy reverse proxy
+# Single source of truth for "which subdomain hits which backend." Adding a
+# new admin service is one row in CADDY_SERVICES and re-running this script.
+# write_caddy emits the Caddyfile; write_caddy_hosts_doc emits the
+# copy-pasteable hosts block for admin devices. Both iterate the same dict
+# so the docs and the proxy can never drift.
+#
+# Notes on the upstream targets:
+#   sab + prowlarr point at gluetun:* because they share gluetun's netns and
+#   have no bridge alias of their own. Don't change to sabnzbd:8080 — it
+#   NXDOMAINs from Caddy's container.
+# ---------------------------------------------------------------------------
+CADDY_SERVICES: dict[str, tuple[str, int]] = {
+    "radarr":    ("radarr",    7878),
+    "sonarr":    ("sonarr",    8989),
+    "lidarr":    ("lidarr",    8686),
+    "prowlarr":  ("gluetun",   9696),
+    "sab":       ("gluetun",   8080),
+    "seerr":     ("seerr",     5055),
+    "bazarr":    ("bazarr",    6767),
+    "tautulli":  ("tautulli",  8181),
+    "profilarr": ("profilarr", 6868),
+}
+
+def write_caddy(env: dict):
+    dest = CONFIGS / "caddy"
+    dest.mkdir(parents=True, exist_ok=True)
+    suffix = env.get("HOSTNAME_SUFFIX", "lan")
+
+    # auto_https off: serve plain HTTP. Tailscale encrypts the transport;
+    # getting real certs would mean a public domain or installing Caddy's
+    # internal CA root on every admin device.
+    # admin off: nothing in this stack pushes config dynamically, so the
+    # localhost :2019 admin API is dead weight + a small attack surface.
+    lines = [
+        "{",
+        "    auto_https off",
+        "    admin off",
+        "}",
+        "",
+        "(common) {",
+        "    encode zstd gzip",
+        "}",
+        "",
+    ]
+    pad = max(len(name) for name in CADDY_SERVICES)
+    for name, (upstream_host, upstream_port) in CADDY_SERVICES.items():
+        host = f"{name}.{suffix}".ljust(pad + len(suffix) + 1)
+        lines.append(
+            f"http://{host}  {{ import common; reverse_proxy {upstream_host}:{upstream_port} }}"
+        )
+    lines.append("")
+
+    _write_secret(dest / "Caddyfile", "\n".join(lines))
+    print("  ✓ configs/caddy/Caddyfile")
+
+def write_caddy_hosts_doc(env: dict):
+    """Emit a copy-pasteable /etc/hosts block listing every Caddy hostname.
+    Lives in docs/ (not configs/) because it's documentation, not runtime
+    state. Regenerated on every run of this script so it never drifts from
+    CADDY_SERVICES.
+    """
+    suffix = env.get("HOSTNAME_SUFFIX", "lan")
+    docs_dir = STACK_DIR.parent / "docs"
+    if not docs_dir.exists():
+        # Repo layout has docs/ at the top level. If running from a different
+        # checkout, just skip — the Caddyfile is the source of truth anyway.
+        return
+    target = docs_dir / "CADDY_HOSTS.txt"
+    hosts = " ".join(f"{name}.{suffix}" for name in CADDY_SERVICES)
+    content = f"""# Add to /etc/hosts on each admin device that wants short hostnames.
+# Replace 100.x.x.x with the Unraid host's tailnet IP:
+#   tailscale ip -4    (run on the Unraid host)
+#
+# All admin services are reachable at http://<name>.{suffix}/ once these
+# entries are in place. Generated by scripts/generate-configs.py — re-run
+# after adding services or changing HOSTNAME_SUFFIX.
+
+100.x.x.x  {hosts}
+"""
+    target.write_text(content)
+    print(f"  ✓ {target.relative_to(STACK_DIR.parent)}")
 
 # ---------------------------------------------------------------------------
 # Data directory creation
@@ -705,14 +797,16 @@ def main() -> None:
     # Step 5: Write app configs.
     print("\nWriting config files...")
     write_sabnzbd(env)
-    write_arr_config("radarr",   7878, env["RADARR_API_KEY"],  "/radarr")
-    write_arr_config("sonarr",   8989, env["SONARR_API_KEY"],  "/sonarr")
-    write_arr_config("lidarr",   8686, env["LIDARR_API_KEY"],  "/lidarr")
-    write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"],"/prowlarr")
+    write_arr_config("radarr",   7878, env["RADARR_API_KEY"])
+    write_arr_config("sonarr",   8989, env["SONARR_API_KEY"])
+    write_arr_config("lidarr",   8686, env["LIDARR_API_KEY"])
+    write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"])
     ensure_seerr_appdata()
     ensure_profilarr_appdata()
     write_bazarr(env)
     write_tautulli(env)
+    write_caddy(env)
+    write_caddy_hosts_doc(env)
 
     # Step 6: Create data directories.
     print("\nCreating data directories...")

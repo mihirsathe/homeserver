@@ -109,7 +109,7 @@ Plex (port 32400) doesn't ride Tailscale — it's the only service on the router
 
 ## Gluetun kill-switch engaged (SAB / Prowlarr offline)
 
-SAB UI doesn't load, Prowlarr UI doesn't load, both via `http://<server-ip>:8080` and `:9696`. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan/` and `http://prowlarr.lan/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
 This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 

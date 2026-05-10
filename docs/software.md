@@ -33,19 +33,26 @@
 
 All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/homeserver/homeserver/` on the server).
 
-| Container | Image | Port | Role |
-|-----------|-------|------|------|
-| gluetun | `qmcgaw/gluetun` | 8080, 9696 | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
-| sabnzbd | `hotio/sabnzbd` | (via gluetun) | Usenet downloader |
-| prowlarr | `hotio/prowlarr` | (via gluetun) | Indexer manager |
-| radarr | `hotio/radarr` | 7878 | Movie automation |
-| sonarr | `hotio/sonarr` | 8989 | TV automation |
-| lidarr | `hotio/lidarr` | 8686 | Music automation |
-| plex | `plexinc/pms-docker` | 32400 | Media server + GPU transcode (the one public service) |
-| seerr | `ghcr.io/seerr-team/seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
-| bazarr | `hotio/bazarr` | 6767 | Subtitle automation |
-| tautulli | `hotio/tautulli` | 8181 | Plex analytics, stream history, notifications |
-| profilarr | `santiagosayshey/profilarr` | 6868 | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+All admin services are reached at `http://<name>.${HOSTNAME_SUFFIX}/` (default
+suffix `lan`) through Caddy on `:80`. Backend ports are loopback-only on the
+host (`127.0.0.1:*`) — they exist for `bootstrap.py` and host-side debugging.
+Plex is the exception: it bypasses Caddy and is the one publicly-forwarded
+service.
+
+| Container | Image | Admin URL | Backend port (loopback) | Role |
+|-----------|-------|-----------|-------------------------|------|
+| caddy | `caddy:2-alpine` | — | `:80` (LAN/Tailscale ingress) | Reverse proxy: Host-header routes `<name>.lan` to each backend |
+| gluetun | `qmcgaw/gluetun` | — | 8080, 9696 (loopback) | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
+| sabnzbd | `hotio/sabnzbd` | sab.lan | (in gluetun's netns) | Usenet downloader |
+| prowlarr | `hotio/prowlarr` | prowlarr.lan | (in gluetun's netns) | Indexer manager |
+| radarr | `hotio/radarr` | radarr.lan | 7878 (loopback) | Movie automation |
+| sonarr | `hotio/sonarr` | sonarr.lan | 8989 (loopback) | TV automation |
+| lidarr | `hotio/lidarr` | lidarr.lan | 8686 (loopback) | Music automation |
+| plex | `plexinc/pms-docker` | direct on `:32400` | 32400 (PUBLIC) | Media server + GPU transcode (the one public service; bypasses Caddy) |
+| seerr | `ghcr.io/seerr-team/seerr` | seerr.lan | 5055 (loopback) | Content request portal (Overseerr+Jellyseerr successor) |
+| bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
+| tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
+| profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 
 ### Networks
 
