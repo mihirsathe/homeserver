@@ -364,16 +364,26 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
         except Exception as e:
             print(f"  ⚠ Prowlarr: failed to add {name}: {e}")
 
+    # Newznab category IDs: 2000s = Movies, 5000s = TV, 3000s = Audio.
+    sync_categories = {
+        "Radarr": [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060],
+        "Sonarr": [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080],
+        "Lidarr": [3000, 3010, 3020, 3030, 3040],
+    }
+
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
         # Both Prowlarr and the *arrs serve at root now (UrlBase stripped);
         # URLs carry no urlbase suffix. prowlarrUrl points the *arr back at
         # Prowlarr through gluetun's netns alias because Prowlarr itself has
-        # no bridge endpoint of its own.
+        # no bridge endpoint of its own. syncCategories pulled from the
+        # per-app map above so Sonarr/Lidarr get TV/Audio categories instead
+        # of Movies — reconcile_fields propagates this to any pre-existing
+        # Sonarr/Lidarr entries that were created with the wrong list.
         desired_fields = {
             "prowlarrUrl":    "http://gluetun:9696",
             "baseUrl":        app_url,
             "apiKey":         app_key,
-            "syncCategories": [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060],
+            "syncCategories": sync_categories[name],
         }
         existing_apps = arr_get(base, key, "/api/v1/applications")
         existing = next((a for a in existing_apps if a.get("name") == name), None)
