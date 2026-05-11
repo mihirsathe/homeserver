@@ -331,6 +331,13 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
         except Exception as e:
             print(f"  ⚠ Prowlarr: failed to add {name}: {e}")
 
+    # Newznab category IDs: 2000s = Movies, 5000s = TV, 3000s = Audio.
+    sync_categories = {
+        "Radarr": [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060],
+        "Sonarr": [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080],
+        "Lidarr": [3000, 3010, 3020, 3030, 3040],
+    }
+
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
         if already_exists(base, key, "/api/v1/applications", "name", name):
             print(f"  ✓ Prowlarr: {name} already connected")
@@ -345,8 +352,7 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
                     {"name": "prowlarrUrl", "value": "http://gluetun:9696/prowlarr"},
                     {"name": "baseUrl",     "value": app_url},
                     {"name": "apiKey",      "value": app_key},
-                    {"name": "syncCategories",
-                     "value": [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060]},
+                    {"name": "syncCategories", "value": sync_categories[name]},
                 ],
                 "implementationName": name,
                 "implementation": impl,
