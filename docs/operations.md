@@ -22,6 +22,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
 | Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
+| Re-seed disk folder structure | After adding any disk to the array | Run `scripts/seed-share-structure.sh` (see decisions.md § "Unraid allocator per-path pinning") |
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
 | SMART check (cache SSDs) | Quarterly | iDRAC storage view or PERC UI (SMART not available via Unraid) |
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |

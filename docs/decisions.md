@@ -82,6 +82,16 @@ This reverses an earlier position in this file that called Gluetun "unnecessary 
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.
 
+### Unraid allocator per-path pinning
+
+The `data` share runs with `shareAllocator="highwater"` and `shareSplitLevel="0"`. Under those settings Unraid's user-share allocator picks a disk for a given path exactly **once** — the first time that path is created — and every subsequent write into the *same path* is pinned to that disk forever, regardless of free-space balance. Only a brand-new top-level path triggers a fresh free-space-based disk pick.
+
+This bit us during the initial bulk seed of the media library. Every category folder (`media/movies`, `media/tv`, `media/music`, `usenet/complete/*`, `imports/*`) was created inside a single batch, so the allocator landed all of them on disk1. From that point every new episode of an existing show, every sequel in an existing series, every ripped album kept targeting disk1 while disk2–4 sat near-empty. Disk1 eventually ran to 109 MB free of 6 TB while the other three still had ~5.88 TB each, and the *arr apps started failing writes with ENOSPC.
+
+The mitigation is [`scripts/seed-share-structure.sh`](../homeserver/scripts/seed-share-structure.sh) — an idempotent script that `mkdir -p`s the same category skeleton on every `/mnt/disk*` before any real writes happen. Once each category exists on every disk, the allocator's per-path pin still applies, but the fresh subfolder for a new title (a new show, a new movie folder) inside a category gets a real free-space-based pick across all the disks that share the category. `setup-unraid.sh` runs the seeder on first deploy and the `media_stack_up` User Script re-runs it at every array start, before `docker compose up -d`.
+
+**Re-run `scripts/seed-share-structure.sh` any time a disk is added to the array** — otherwise the new disk starts with no category folders, the allocator will never pick it for any pinned path, and the pinning problem recurs on the new disk from day one. `media_stack_up` handles this automatically on the next array restart, but running the seeder manually right after the disk is added avoids waiting for a reboot.
+
 ---
 
 ## Compose Conventions
