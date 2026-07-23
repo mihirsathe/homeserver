@@ -108,16 +108,32 @@ for disk in "${DISKS[@]}"; do
         target="$disk/data/$cat"
         if [[ -d "$target" ]]; then
             disk_existed=$((disk_existed + 1))
-        else
-            mkdir -p "$target"
-            disk_created=$((disk_created + 1))
+            continue
         fi
-    done
 
-    # Match ownership + perms used by setup-unraid.sh so the containers
-    # (running as nobody:users / 99:100) can traverse and write.
-    chown -R nobody:users "$disk/data" 2>/dev/null || true
-    chmod -R a=,a+rX,u+w,g+w "$disk/data" 2>/dev/null || true
+        # `mkdir -p` walks the leading path and creates whatever's missing.
+        # We only want to chown/chmod things this script actually creates —
+        # never recurse into an existing library. Walk down manually so we
+        # can tell "just created" from "already there" per component.
+        components=()
+        IFS='/' read -ra parts <<<"data/$cat"
+        for part in "${parts[@]}"; do
+            components+=("$part")
+        done
+        prefix="$disk"
+        for part in "${components[@]}"; do
+            prefix="$prefix/$part"
+            if [[ ! -d "$prefix" ]]; then
+                mkdir "$prefix"
+                # Match the ownership + perms setup-unraid.sh uses for the
+                # top-level data tree. NEVER -R — the only directory we touch
+                # is the one we just created, on this single iteration.
+                chown nobody:users "$prefix" 2>/dev/null || true
+                chmod u=rwx,g=rwx,o= "$prefix" 2>/dev/null || true
+            fi
+        done
+        disk_created=$((disk_created + 1))
+    done
 
     if [[ $disk_created -gt 0 ]]; then
         ok "$disk: created $disk_created, already present $disk_existed"
