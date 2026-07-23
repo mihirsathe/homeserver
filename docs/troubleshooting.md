@@ -96,20 +96,46 @@ ls -lah /mnt/user/usenet-incomplete/
 
 ## Admin UIs unreachable over Tailscale
 
-LAN still works; `mediaserver.<tailnet>.ts.net` doesn't.
+`radarr.lan` (or any `*.lan`) doesn't load from a tailnet device. Two
+distinct failure modes — DNS or HTTP — diagnose separately.
+
+**First, narrow the layer:**
+
+```bash
+nslookup radarr.lan        # DNS layer
+curl -v http://radarr.lan/ # HTTP layer
+```
+
+If `nslookup` fails or returns the wrong IP, it's a DNS problem (most
+common). If it returns `<TAILNET_HOST_IP>` but `curl` hangs, it's
+network/Caddy.
+
+### DNS layer
 
 1. On the admin device: `tailscale status` — is the device itself connected? If not, Tailscale app → sign in again.
-2. Check the Unraid host is still on the tailnet: from the Unraid terminal, `tailscale status` — should show `mediaserver` as `active`. If not: `tailscale up --ssh --advertise-tags=tag:server` and re-auth via the printed URL.
-3. Tailscale admin console → Machines — confirm the host isn't expired / tagged off. If a key expired, re-run the `tailscale up` command above.
-4. ACL sanity: console → Access controls — confirm `tag:admin → tag:server` still permits the port you're trying to hit.
+2. Tailscale admin console → DNS — verify "Restrict to domain `lan`" is set with `<TAILNET_HOST_IP>` as the nameserver. (Per Step 6.5 of `deployment.md`.)
+3. From the Unraid host: `docker compose ps adguard` — must be `(healthy)`. If not: `docker compose logs adguard` — look for port-bind conflicts on `:53`.
+4. Direct-test AdGuard from a tailnet device: `nslookup radarr.lan <TAILNET_HOST_IP>` — should answer with the same IP regardless of the device's normal DNS.
+5. AdGuard UI → `http://adguard.lan/` (or `http://<TAILNET_HOST_IP>:80/` via Caddy) → Filters → DNS rewrites — verify `*.lan → <TAILNET_HOST_IP>` is present. If missing, re-run `python3 scripts/generate-configs.py --force-overwrite` and `docker restart adguard`.
 
-Plex (port 32400) doesn't ride Tailscale — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
+### HTTP / Caddy layer
+
+1. From the Unraid host: `docker compose ps caddy` — must be `(healthy)`.
+2. `docker compose logs caddy` — look for upstream connection errors (`dial tcp ...`).
+3. ACL sanity: Tailscale console → Access controls — confirm `tag:admin → tag:server:80` is permitted.
+4. Direct hit Caddy on the tailnet IP with a Host header to bypass DNS:
+   ```bash
+   curl -v -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+   ```
+   If this works but `radarr.lan` doesn't, the problem is purely DNS.
+
+Plex (port 32400) doesn't ride Caddy or AdGuard — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
 
 ---
 
 ## Gluetun kill-switch engaged (SAB / Prowlarr offline)
 
-SAB UI doesn't load, Prowlarr UI doesn't load, both via `http://<server-ip>:8080` and `:9696`. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan/` and `http://prowlarr.lan/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
 This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 

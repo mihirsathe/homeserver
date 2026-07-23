@@ -155,6 +155,31 @@ def already_exists(base: str, key: str, list_path: str, name_field: str, name: s
     except Exception:
         return False
 
+def reconcile_fields(existing: dict, *, top_level: Optional[dict] = None,
+                     fields: Optional[dict] = None) -> bool:
+    """Patch `existing` in place to match desired values; return True if anything
+    changed.
+
+    Used to bring previously-bootstrapped *arr download clients and Prowlarr
+    application connections in line with current desired state without
+    deleting and recreating them (which would lose user-side history). Both
+    *arrs and Prowlarr expose configuration objects with two layers — top-
+    level flags (`removeCompletedDownloads`, `enable`, …) and a `fields`
+    array of `{name, value}` dicts. We diff each layer separately.
+    """
+    changed = False
+    for k, v in (top_level or {}).items():
+        if existing.get(k) != v:
+            existing[k] = v
+            changed = True
+    if fields:
+        for f in existing.get("fields", []):
+            name = f.get("name")
+            if name in fields and f.get("value") != fields[name]:
+                f["value"] = fields[name]
+                changed = True
+    return changed
+
 def wait_for(url: str, label: str, timeout: int = 180) -> None:
     """Poll until `url` responds with a non-5xx, or bail after `timeout` seconds.
 
@@ -239,19 +264,37 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
         arr_post(base, key, f"/api/{api_ver}/rootfolder", payload)
         print(f"  ✓ {label}: root folder → {root_folder}")
 
-    # SABnzbd download client. removeCompletedDownloads=False so the *arr
-    # leaves the SAB queue/history entry in place after import — Radarr's
-    # own health check warns when this is True (the default), because the
-    # *arr can race SAB's post-processing and remove the entry before
-    # import finishes, leaving downloads orphaned. SAB's history_retention
-    # in sabnzbd.ini handles cleanup independently.
+    # SABnzbd download client. Desired state captured in desired_top +
+    # desired_fields so:
+    #   - new installs: full payload constructed from these dicts
+    #   - existing installs: reconcile_fields() drives any field that has
+    #     drifted from desired (host, port, urlBase, etc.) without losing
+    #     unrelated *arr-side state.
+    #
+    # removeCompletedDownloads=False so the *arr leaves SAB's queue/history
+    # entry in place after import — Radarr's health check warns when this
+    # is True (the default) because the *arr can race SAB's post-processing
+    # and remove the entry before import finishes. SAB's history_retention
+    # handles cleanup independently.
+    #
+    # host=gluetun because SAB shares gluetun's netns; from any other
+    # container's POV the SAB UI lives at gluetun:8080. Docker DNS for
+    # "sabnzbd" doesn't resolve.
+    desired_top = {"removeCompletedDownloads": False}
+    desired_fields = {
+        "host":         "gluetun",
+        "port":         8080,
+        "apiKey":       sabnzbd_key,
+        "urlBase":      "",
+        category_field: sabnzbd_category,
+        "useSsl":       False,
+    }
     existing_clients = arr_get(base, key, f"/api/{api_ver}/downloadclient")
     sab_client = next((c for c in existing_clients if c.get("name") == "SABnzbd"), None)
     if sab_client is not None:
-        if sab_client.get("removeCompletedDownloads") is not False:
-            sab_client["removeCompletedDownloads"] = False
+        if reconcile_fields(sab_client, top_level=desired_top, fields=desired_fields):
             arr_put(base, key, f"/api/{api_ver}/downloadclient/{sab_client['id']}", sab_client)
-            print(f"  ✓ {label}: SABnzbd reconciled (removeCompletedDownloads=False)")
+            print(f"  ✓ {label}: SABnzbd reconciled")
         else:
             print(f"  ✓ {label}: SABnzbd already connected")
     else:
@@ -259,19 +302,9 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
             "enable": True,
             "protocol": "usenet",
             "priority": 1,
-            "removeCompletedDownloads": False,
             "name": "SABnzbd",
-            "fields": [
-                # SAB shares gluetun's netns and has no bridge endpoint of
-                # its own, so from any other container's POV its UI lives at
-                # gluetun:8080. Resolving "sabnzbd" via docker DNS fails.
-                {"name": "host",           "value": "gluetun"},
-                {"name": "port",           "value": 8080},
-                {"name": "apiKey",         "value": sabnzbd_key},
-                {"name": "urlBase",        "value": "/sabnzbd"},
-                {"name": category_field,   "value": sabnzbd_category},
-                {"name": "useSsl",         "value": False},
-            ],
+            **desired_top,
+            "fields": [{"name": k, "value": v} for k, v in desired_fields.items()],
             "implementationName": "SABnzbd",
             "implementation": "Sabnzbd",
             "configContract": "SabnzbdSettings",
@@ -339,21 +372,36 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     }
 
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
-        if already_exists(base, key, "/api/v1/applications", "name", name):
-            print(f"  ✓ Prowlarr: {name} already connected")
+        # Both Prowlarr and the *arrs serve at root now (UrlBase stripped);
+        # URLs carry no urlbase suffix. prowlarrUrl points the *arr back at
+        # Prowlarr through gluetun's netns alias because Prowlarr itself has
+        # no bridge endpoint of its own. syncCategories pulled from the
+        # per-app map above so Sonarr/Lidarr get TV/Audio categories instead
+        # of Movies — reconcile_fields propagates this to any pre-existing
+        # Sonarr/Lidarr entries that were created with the wrong list.
+        desired_fields = {
+            "prowlarrUrl":    "http://gluetun:9696",
+            "baseUrl":        app_url,
+            "apiKey":         app_key,
+            "syncCategories": sync_categories[name],
+        }
+        existing_apps = arr_get(base, key, "/api/v1/applications")
+        existing = next((a for a in existing_apps if a.get("name") == name), None)
+        if existing is not None:
+            if reconcile_fields(existing, fields=desired_fields):
+                try:
+                    arr_put(base, key, f"/api/v1/applications/{existing['id']}", existing)
+                    print(f"  ✓ Prowlarr: {name} reconciled")
+                except Exception as e:
+                    print(f"  ⚠ Prowlarr: failed to reconcile {name}: {e}")
+            else:
+                print(f"  ✓ Prowlarr: {name} already connected")
             return
         try:
             arr_post(base, key, "/api/v1/applications", {
                 "name": name,
                 "syncLevel": "fullSync",
-                "fields": [
-                    # Prowlarr shares gluetun's netns; from each *arr's POV
-                    # its API is reachable at gluetun:9696, not prowlarr:9696.
-                    {"name": "prowlarrUrl", "value": "http://gluetun:9696/prowlarr"},
-                    {"name": "baseUrl",     "value": app_url},
-                    {"name": "apiKey",      "value": app_key},
-                    {"name": "syncCategories", "value": sync_categories[name]},
-                ],
+                "fields": [{"name": k, "value": v} for k, v in desired_fields.items()],
                 "implementationName": name,
                 "implementation": impl,
                 "configContract": contract,
@@ -366,11 +414,11 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     add_indexer("NZBGeek",   "nzbgeek",   require(env, "NZBGEEK_API_KEY"))
     add_indexer("NZBPlanet", "nzbplanet", require(env, "NZBPLANET_API_KEY"))
 
-    add_app("Radarr", "http://radarr:7878/radarr",
+    add_app("Radarr", "http://radarr:7878",
             require(env, "RADARR_API_KEY"),   "Radarr", "RadarrSettings")
-    add_app("Sonarr", "http://sonarr:8989/sonarr",
+    add_app("Sonarr", "http://sonarr:8989",
             require(env, "SONARR_API_KEY"),   "Sonarr", "SonarrSettings")
-    add_app("Lidarr", "http://lidarr:8686/lidarr",
+    add_app("Lidarr", "http://lidarr:8686",
             require(env, "LIDARR_API_KEY"),   "Lidarr", "LidarrSettings")
 
     # Trigger sync
@@ -521,15 +569,18 @@ def main() -> None:
     lan_ip = require(env, "PLEX_LAN_IP")
     sabnzbd_key = require(env, "SABNZBD_API_KEY")
 
+    # Every *arr serves at root now (UrlBase stripped). bootstrap.py still
+    # talks to them on localhost:<port> because the host port-publishes
+    # them on 127.0.0.1 — Caddy is for tailnet ingress, not internal calls.
     SERVICES = {
-        "radarr":   (f"http://localhost:7878/radarr",   require(env, "RADARR_API_KEY")),
-        "sonarr":   (f"http://localhost:8989/sonarr",   require(env, "SONARR_API_KEY")),
-        "lidarr":   (f"http://localhost:8686/lidarr",   require(env, "LIDARR_API_KEY")),
-        "prowlarr": (f"http://localhost:9696/prowlarr", require(env, "PROWLARR_API_KEY")),
+        "radarr":   ("http://localhost:7878",   require(env, "RADARR_API_KEY")),
+        "sonarr":   ("http://localhost:8989",   require(env, "SONARR_API_KEY")),
+        "lidarr":   ("http://localhost:8686",   require(env, "LIDARR_API_KEY")),
+        "prowlarr": ("http://localhost:9696",   require(env, "PROWLARR_API_KEY")),
     }
 
     print("\n=== Waiting for services ===\n")
-    wait_for("http://localhost:8080/sabnzbd/api?mode=version", "sabnzbd",
+    wait_for("http://localhost:8080/api?mode=version", "sabnzbd",
              timeout=args.timeout)
     for name, (url, _key) in SERVICES.items():
         api_ver = "v1" if name == "prowlarr" else "v3"
@@ -588,17 +639,21 @@ def main() -> None:
         print("  ⚠ Skipped — needs a working Plex connection from the previous step")
 
     print("\n=== Done ===\n")
-    print("Stack is fully configured. Access points:")
-    print(f"  SABnzbd:   http://{lan_ip}:8080/sabnzbd")
-    print(f"  Prowlarr:  http://{lan_ip}:9696/prowlarr")
-    print(f"  Radarr:    http://{lan_ip}:7878/radarr")
-    print(f"  Sonarr:    http://{lan_ip}:8989/sonarr")
-    print(f"  Lidarr:    http://{lan_ip}:8686/lidarr")
-    print(f"  Plex:      http://{lan_ip}:32400/web")
-    print(f"  Seerr:     http://{lan_ip}:5055")
+    print("Stack is fully configured. Admin UIs go through Caddy at *.lan;")
+    print("DNS resolves automatically via Tailscale split-DNS → AdGuard Home.")
+    print("Plex bypasses Caddy and is the only public-facing service.")
     print()
-    print("Admin UIs (everything above except Plex) are reachable via")
-    print("Tailscale MagicDNS from any device on your tailnet.")
+    print("  SABnzbd:   http://sab.lan")
+    print("  Prowlarr:  http://prowlarr.lan")
+    print("  Radarr:    http://radarr.lan")
+    print("  Sonarr:    http://sonarr.lan")
+    print("  Lidarr:    http://lidarr.lan")
+    print("  Bazarr:    http://bazarr.lan")
+    print("  Tautulli:  http://tautulli.lan")
+    print("  Profilarr: http://profilarr.lan")
+    print("  Seerr:     http://seerr.lan")
+    print("  AdGuard:   http://adguard.lan   (admin pass in generated.env)")
+    print(f"  Plex:      http://{lan_ip}:32400/web   (public — direct, not via Caddy)")
     print()
     print("Remaining manual steps:")
     print("  1. Plex → Settings → Transcoder → Use hardware acceleration when")
