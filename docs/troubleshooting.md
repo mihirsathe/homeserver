@@ -156,7 +156,7 @@ docker compose logs --tail 100 <name>   # why?
 
 Common patterns:
 
-- **Config file permission denied** — `configs/<service>/*.{ini,xml,json}` is mode 0600 and the container's PUID/PGID can't read it. Either the bind-mount is pointed at a world-readable path (expected: mode 0600 is still readable *by the owner*, which is `nobody:users` / PUID 99:100) or ownership is wrong. Check with `stat /mnt/user/appdata/homeserver/homeserver/configs/<service>/*`.
+- **Config file permission denied** — `/mnt/user/appdata/<service>/*.{ini,xml,json}` is mode 0600 and the container's PUID/PGID can't read it. Mode 0600 is still readable *by the owner*, which should be `nobody:users` (PUID 99:100). Check with `stat /mnt/user/appdata/<service>/*`.
 
 - **Port conflict** — some other process (host-side) is on the mapped port. `ss -tlnp | grep :<port>` on the host. Almost always a stale container; `docker ps -a | grep <name>` to find and remove it.
 

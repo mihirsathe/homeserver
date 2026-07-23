@@ -480,10 +480,10 @@ def configure_plex(token: str, lan_ip: str):
 def configure_tautulli(plex, token: str) -> None:
     """Pre-seed Tautulli's PMS connection so the first-run wizard is skipped.
 
-    config.ini is bind-mounted from ${STACK_DIR}/configs/tautulli/config.ini
-    to /config/config.ini inside the container (see docker-compose.yml).
-    Rewriting the host file in-place preserves the inode so the bind mount
-    stays pointed at the right content. A docker restart picks it up.
+    config.ini lives inside Tautulli's /config appdata directory
+    (/mnt/user/appdata/tautulli/config.ini), which is mounted as a plain
+    directory bind mount. Tautulli rewrites this file itself, so we edit it
+    in place and let a docker restart pick up the change.
 
     `plex` is a connected plexapi.PlexServer; we pull machineIdentifier and
     friendlyName straight off it. `token` is passed explicitly because
@@ -492,7 +492,7 @@ def configure_tautulli(plex, token: str) -> None:
     """
     import configparser
 
-    config_path = STACK_DIR / "configs" / "tautulli" / "config.ini"
+    config_path = Path("/mnt/user/appdata/tautulli/config.ini")
     if not config_path.exists():
         print(f"  ⚠ Tautulli: {config_path} missing — run generate-configs.py first")
         return
@@ -523,7 +523,6 @@ def configure_tautulli(plex, token: str) -> None:
     cfg.set("PMS", "pms_name",       plex.friendlyName)
     cfg.set("PMS", "pms_token",      token)
 
-    # Truncate-in-place so the bind-mounted inode survives.
     with open(config_path, "w") as f:
         cfg.write(f)
     config_path.chmod(0o600)

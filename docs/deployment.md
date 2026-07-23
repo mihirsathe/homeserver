@@ -113,7 +113,7 @@ Before running, grab a fresh claim token from `https://plex.tv/claim` and paste 
 docker compose --env-file .env.docker up -d
 ```
 
-`.env.docker` is the merged file (`.env` + `generated.env`) that `generate-configs.py` writes — using it as a single env-file avoids `--env-file` precedence quirks that can blank out `${STACK_DIR}` and break every config bind mount.
+`.env.docker` is the merged file (`.env` + `generated.env`) that `generate-configs.py` writes — using it as a single env-file avoids `--env-file` precedence quirks where a stale entry in one file can blank out a value the other is supposed to provide.
 
 Plex uses the claim token on first start to link the server to your account, then ignores it. `restart: unless-stopped` means containers restart automatically on all subsequent reboots. This command runs once, ever.
 

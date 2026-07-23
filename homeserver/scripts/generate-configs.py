@@ -40,6 +40,19 @@ STACK_DIR: Path      = Path(__file__).resolve().parent.parent   # homeserver/
 ENV_FILE: Path       = STACK_DIR / ".env"           # user-edited credentials
 GENERATED_FILE: Path = STACK_DIR / "generated.env"  # machine-written, gitignored
 DOCKER_ENV: Path     = STACK_DIR / ".env.docker"    # merged, single-file env
+# Config files for apps that rewrite their own config on the fly (SAB,
+# the *arrs, Tautulli, Bazarr) are seeded directly into each container's
+# /config appdata directory. Bind-mounting the file itself breaks the
+# moment the container rewrites via write-tmp-then-rename — the rename
+# can't replace a bind-mounted host inode, so the write lands in the
+# container's overlay layer and vanishes on restart. Writing into the
+# /config directory bind mount keeps atomic renames on the same fs.
+#
+# CONFIGS is still used for read-only bind-mount targets that the app
+# does NOT rewrite (currently: Caddy's Caddyfile, mounted :ro; AdGuard's
+# YAML). Those live under ${STACK_DIR}/configs/ so the git checkout is
+# the source of truth.
+APPDATA_ROOT: Path   = Path("/mnt/user/appdata")
 CONFIGS: Path        = STACK_DIR / "configs"
 
 # ---------------------------------------------------------------------------
@@ -331,7 +344,7 @@ def _write_secret(path: Path, content: str) -> None:
     _lock_down(path)
 
 def write_sabnzbd(env: dict):
-    dest = CONFIGS / "sabnzbd"
+    dest = APPDATA_ROOT / "sabnzbd"
     dest.mkdir(parents=True, exist_ok=True)
 
     api_key  = env["SABNZBD_API_KEY"]
@@ -465,10 +478,10 @@ ntf_enable = 0
     newzbin =
 """
     _write_secret(dest / "sabnzbd.ini", content)
-    print("  ✓ configs/sabnzbd/sabnzbd.ini")
+    print(f"  ✓ {dest}/sabnzbd.ini")
 
 def write_arr_config(name: str, port: int, api_key: str):
-    dest = CONFIGS / name
+    dest = APPDATA_ROOT / name
     dest.mkdir(parents=True, exist_ok=True)
 
     content = f"""<Config>
@@ -496,7 +509,7 @@ def write_arr_config(name: str, port: int, api_key: str):
 </Config>
 """
     _write_secret(dest / "config.xml", content)
-    print(f"  ✓ configs/{name}/config.xml")
+    print(f"  ✓ {dest}/config.xml")
 
 def ensure_seerr_appdata():
     """Create /mnt/user/appdata/seerr as nobody:users so the container (which
@@ -526,7 +539,7 @@ def ensure_profilarr_appdata():
     print(f"  ✓ {dest}/ (Profilarr state — configured via web UI)")
 
 def write_bazarr(env: dict):
-    dest = CONFIGS / "bazarr"
+    dest = APPDATA_ROOT / "bazarr"
     dest.mkdir(parents=True, exist_ok=True)
 
     # base_url left empty for both Bazarr's own listener and its sonarr/radarr
@@ -582,7 +595,7 @@ subtitles_languages = ['en']
 enabled_codecs = ['utf-8']
 """
     _write_secret(dest / "config.ini", content)
-    print("  ✓ configs/bazarr/config.ini")
+    print(f"  ✓ {dest}/config.ini")
 
 def write_tautulli(env: dict):
     """Pre-seed Tautulli config.ini with HTTP settings + API key.
@@ -593,7 +606,7 @@ def write_tautulli(env: dict):
     the wizard entirely. Keeping the two stages split here keeps this file
     pure-static and avoids a chicken-and-egg with the Plex token.
     """
-    dest = CONFIGS / "tautulli"
+    dest = APPDATA_ROOT / "tautulli"
     dest.mkdir(parents=True, exist_ok=True)
 
     content = f"""[General]
@@ -610,7 +623,7 @@ refresh_libraries_on_startup = 0
 refresh_users_on_startup = 0
 """
     _write_secret(dest / "config.ini", content)
-    print("  ✓ configs/tautulli/config.ini")
+    print(f"  ✓ {dest}/config.ini")
 
 # ---------------------------------------------------------------------------
 # Caddy reverse proxy + AdGuard Home tailnet split-DNS resolver

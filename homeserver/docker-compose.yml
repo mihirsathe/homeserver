@@ -14,9 +14,8 @@
 #   .env.docker is the merged result of .env + generated.env, written by
 #   generate-configs.py. We use a single env-file (not two --env-file flags)
 #   because docker compose's precedence between multiple --env-file files
-#   has historically been brittle — a stale STACK_DIR= line in .env could
-#   blank out the value generated.env provides, breaking every bind mount
-#   below that uses ${STACK_DIR}.
+#   has historically been brittle — a stale entry in .env could blank out a
+#   value generated.env is supposed to provide.
 #
 # UNRAID-SPECIFIC DECISIONS IN THIS FILE:
 #
@@ -143,8 +142,13 @@ services:
       - UMASK=002
       - TZ=${TZ}
     volumes:
+      # /config is a plain directory bind mount. sabnzbd.ini is seeded into it
+      # by generate-configs.py — NOT bind-mounted as a single file. SAB
+      # rewrites its own ini via atomic rename whenever categories, API keys,
+      # queue state, or history change; a rename() over a single-file bind
+      # mount can't replace the host inode, so those writes would land in the
+      # container's overlay layer and disappear on restart.
       - /mnt/user/appdata/sabnzbd:/config
-      - ${STACK_DIR}/configs/sabnzbd/sabnzbd.ini:/config/sabnzbd.ini
       - /mnt/user/data:/data
       # Incomplete downloads live on the cache pool (SSD) — par2 repair and
       # unrar hammer this path, and doing it on spinning disks is 10–20×
@@ -182,8 +186,11 @@ services:
       - UMASK=002
       - TZ=${TZ}
     volumes:
+      # config.xml is seeded into /mnt/user/appdata/prowlarr by
+      # generate-configs.py, then owned by Prowlarr (which rewrites it via
+      # atomic rename on any settings change). See the sabnzbd volume block
+      # for the full explanation of why we don't bind-mount it as a file.
       - /mnt/user/appdata/prowlarr:/config
-      - ${STACK_DIR}/configs/prowlarr/config.xml:/config/config.xml
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9696/ping || exit 1"]
@@ -214,7 +221,6 @@ services:
       - TZ=${TZ}
     volumes:
       - /mnt/user/appdata/radarr:/config
-      - ${STACK_DIR}/configs/radarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
       # Loopback only — fronted by caddy at radarr.lan. Direct port access
@@ -251,7 +257,6 @@ services:
       - TZ=${TZ}
     volumes:
       - /mnt/user/appdata/sonarr:/config
-      - ${STACK_DIR}/configs/sonarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
       # Loopback only — fronted by caddy at sonarr.lan.
@@ -287,7 +292,6 @@ services:
       - TZ=${TZ}
     volumes:
       - /mnt/user/appdata/lidarr:/config
-      - ${STACK_DIR}/configs/lidarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
       # Loopback only — fronted by caddy at lidarr.lan.
@@ -440,7 +444,6 @@ services:
       - TZ=${TZ}
     volumes:
       - /mnt/user/appdata/tautulli:/config
-      - ${STACK_DIR}/configs/tautulli/config.ini:/config/config.ini
     ports:
       # Loopback only — fronted by caddy at tautulli.lan.
       - "127.0.0.1:8181:8181"
@@ -514,7 +517,6 @@ services:
       - TZ=${TZ}
     volumes:
       - /mnt/user/appdata/bazarr:/config
-      - ${STACK_DIR}/configs/bazarr/config.ini:/config/config.ini
       - /mnt/user/data/media:/data/media
     ports:
       # Loopback only — fronted by caddy at bazarr.lan.
