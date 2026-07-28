@@ -695,14 +695,22 @@ def write_caddy(env: dict):
         "}",
         "",
     ]
+    # One block per site, one directive per line. The Caddyfile grammar has NO
+    # statement separator: the previous one-liner form
+    #     http://radarr.lan  { import common; reverse_proxy radarr:7878 }
+    # lexes `common;` as the import's argument, and the adapter rejects the
+    # ENTIRE file with "File to import not found: common;". That takes down
+    # admin ingress for every service and aborts update-stack.sh's pre-flight
+    # validate. Verified against caddy 2.8.4. Newlines only.
     services = caddy_services(env)
-    pad = max(len(name) for name in services)
     for name, (upstream_host, upstream_port) in services.items():
-        host = f"{name}.{HOSTNAME_SUFFIX}".ljust(pad + len(HOSTNAME_SUFFIX) + 1)
-        lines.append(
-            f"http://{host}  {{ import common; reverse_proxy {upstream_host}:{upstream_port} }}"
-        )
-    lines.append("")
+        lines += [
+            f"http://{name}.{HOSTNAME_SUFFIX} {{",
+            "    import common",
+            f"    reverse_proxy {upstream_host}:{upstream_port}",
+            "}",
+            "",
+        ]
     _write_secret(dest / "Caddyfile", "\n".join(lines))
     print("  ✓ configs/caddy/Caddyfile")
 

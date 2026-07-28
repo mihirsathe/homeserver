@@ -14,6 +14,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting
 | [Software](software.md) | OS, Unraid plugins, Docker stack, folder structure, external access, Usenet |
 | [Deployment](deployment.md) | Step-by-step setup from a fresh Unraid install |
 | [Upgrade Runbook](upgrade-2026-07.md) | Catching a first-setup box up to current `master` — change summary, safety checks, rollback |
+| [Rollout Plan](rollout-2026-07.md) | Phase order for the four changes in flight, measured merge conflicts, GPU/RAM budget |
 | [Operations](operations.md) | Maintenance schedule, diagnostics commands, known limitations |
 | [Sources](sources.md) | Every image, plugin, package, and driver — where it comes from |
 | [Decisions](decisions.md) | Why things are the way they are, and expansion paths |

@@ -4,6 +4,12 @@ Everything the server needs to go from "whatever was deployed at first setup" to
 current `master` (`fb50978`) **plus the ingress rework on this branch**, in one
 supervised session over SSH.
 
+**This runbook is Phase 1 of four.** Ollama (PR #17), the finance plane
+(PR #16) and chess coach (PR #15) are also in flight; see
+[rollout-2026-07.md](rollout-2026-07.md) for the phase order, the measured merge
+conflicts between them, and the two integration gaps neither of those PRs knows
+about. Finish this runbook and its Section 4 gate before starting any of them.
+
 **Read Section 2 before you type anything in Section 3.** The upgrade itself is
 low-risk for *media* — nothing in it writes to `/mnt/user/data`. The two things
 that can actually bite you are (a) `generate-configs.py --force-overwrite`
@@ -130,9 +136,18 @@ branch fixes that rather than evicting the GUI:
   address), not `TAILNET_HOST_IP`.
 - New `.env` values: `TS_AUTHKEY`, `CADDY_TAILNET_IP`, `CADDY_TS_HOSTNAME`.
 - `unraid.lan` joins the Caddy route table as a convenience alias for the GUI.
+- **The generated Caddyfile is fixed.** `master`'s one-liner site form
+  (`{ import common; reverse_proxy radarr:7878 }`) is invalid — the Caddyfile
+  grammar has no statement separator, so `common;` is read as the import's
+  argument and the adapter rejects the *entire* file with `File to import not
+  found: common;`. Caddy would refuse to start and `update-stack.sh`'s
+  pre-flight would abort. Sites are now emitted in block form, verified
+  `Valid configuration` against caddy 2.8.4. PR #17 fixes the same bug
+  independently; see the rollout plan for how the two reconcile.
 
-Sections 2 and 3 already assume this branch. If you deploy plain `master`
-instead, expect `caddy` to fail its port bind.
+Sections 2 and 3 already assume this branch. Plain `master` fails two
+independent ways: `caddy` can't bind `:80` (Unraid's GUI owns it) and its
+generated Caddyfile doesn't parse at all. Both are fixed here.
 
 ### 1.6 Interaction with PR #16 (finance plane) — not in this upgrade
 

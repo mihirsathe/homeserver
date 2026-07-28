@@ -12,6 +12,7 @@ Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running 
 | [docs/software.md](docs/software.md) | OS, plugins, Docker stack, folder structure, external access, Usenet |
 | [docs/deployment.md](docs/deployment.md) | Step-by-step deployment and scheduled maintenance setup |
 | [docs/upgrade-2026-07.md](docs/upgrade-2026-07.md) | Upgrading a long-stale deployment to current `master`: change summary, pre-flight data-safety checks, rollback |
+| [docs/rollout-2026-07.md](docs/rollout-2026-07.md) | Sequencing the four in-flight changes (upgrade + Ollama + finance + chess) into ordered phases, with measured merge conflicts |
 | [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, monitoring, secret rotation |
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, Tailscale/Gluetun outages |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |
