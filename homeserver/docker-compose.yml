@@ -532,6 +532,63 @@ services:
           memory: 1G
 
   # ---------------------------------------------------------------------------
+  # CHESS COACH — personal chess analysis + coaching webapp
+  # https://github.com/mihirsathe/chess-coach
+  #
+  # Unlike the rest of the stack this builds locally from a checkout (the
+  # repo is private, and a personal app doesn't warrant a registry):
+  #   git clone https://github.com/mihirsathe/chess-coach \
+  #       /mnt/user/appdata/chess-coach/repo
+  #   docker compose build coach && docker compose up -d coach
+  # Update = git pull + rebuild.
+  #
+  # One container: FastAPI web UI + analysis worker thread + scheduler that
+  # polls Lichess every 15 min and runs deep engine passes in quiet hours.
+  # Stockfish (CPU, avx512 build for the Xeon Gold 6146s) is baked into the
+  # image; the nvidia runtime is for lc0 + Maia (GPU human-model, phase 2).
+  # compute,utility only — no video/graphics needed (same CVE-2024-0132
+  # minimal-surface reasoning as plex).
+  #
+  # LICHESS_TOKEN / ANTHROPIC_API_KEY are optional: sync of public games
+  # works untokened; the token adds study publishing, the API key enables
+  # LLM coach reports. `:-` defaults keep compose happy until they're set.
+  #
+  # Reachable at coach.lan via caddy; loopback publish is for host debugging.
+  # ---------------------------------------------------------------------------
+  coach:
+    build:
+      context: /mnt/user/appdata/chess-coach/repo
+    container_name: coach
+    init: true
+    user: "${PUID}:${PGID}"
+    runtime: nvidia
+    networks:
+      - frontend
+    environment:
+      - TZ=${TZ}
+      - CHESS_COACH_DATA_DIR=/data
+      - LICHESS_TOKEN=${LICHESS_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - /mnt/user/appdata/chess-coach/data:/data
+    ports:
+      # Loopback only — fronted by caddy at coach.lan.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  # ---------------------------------------------------------------------------
   # ADGUARD HOME — tailnet split-DNS resolver
   #
   # Tailscale's admin console points the `lan` domain at TAILNET_HOST_IP:53;

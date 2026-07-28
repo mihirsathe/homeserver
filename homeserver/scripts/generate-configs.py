@@ -637,6 +637,7 @@ CADDY_SERVICES: dict[str, tuple[str, int]] = {
     "tautulli":  ("tautulli",  8181),
     "profilarr": ("profilarr", 6868),
     "adguard":   ("adguard",   80),
+    "coach":     ("coach",     8000),
 }
 
 def write_caddy(env: dict):
