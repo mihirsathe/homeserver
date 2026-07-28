@@ -154,7 +154,7 @@ Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscripti
 
 ### Local AI first-run
 
-Ollama starts with an empty model store. Pull a model from the Unraid terminal — `ollama-gate` blocks model management over the network by design, so this is a host operation:
+Ollama starts with an empty model store. Pull a model from the Unraid terminal:
 
 ```bash
 docker exec ollama ollama pull llama3.2:3b
@@ -163,29 +163,20 @@ docker exec ollama ollama list
 
 Keep models under ~4 GB so they coexist with a Plex transcode on the 6 GB card; [software.md](software.md#model-sizing) has sizing guidance.
 
-Verify the full path end to end:
+Verify it works:
 
 ```bash
-# Gate is up and reaching the engine
-curl -s http://127.0.0.1:11434/api/tags
-
-# Inference works
+# From the host
 curl -s http://127.0.0.1:11434/api/generate \
      -d '{"model":"llama3.2:3b","prompt":"say hi","stream":false}'
 
-# Model management is refused over the network (expect 403)
-curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-     http://127.0.0.1:11434/api/pull -d '{"model":"llama3.2:3b"}'
+# From a container on the `ai` network — this is how consumers reach it
+docker run --rm --network ai curlimages/curl -s http://ollama:11434/api/tags
 ```
 
-**Exclude the model store from backups.** Appdata Backup → Settings → add `/mnt/user/appdata/ollama` to the exclusion list. Model blobs are multi-GB and re-pullable in minutes; including them grows every weekly archive by tens of GB for no recovery value. `/mnt/user/appdata/ollama-gate` holds only a transient flag file and is equally safe to exclude.
+**Exclude the model store from backups.** Appdata Backup → Settings → add `/mnt/user/appdata/ollama` to the exclusion list. Model blobs are multi-GB and re-pullable in minutes; including them grows every weekly archive by tens of GB for no recovery value.
 
-If `bootstrap.py` was run before the stack came up (so `PLEX_TOKEN` was written later), make sure the arbiter picked the token up — `bootstrap.py` recreates the container itself, but if it warned that it couldn't:
-
-```bash
-docker compose --env-file .env.docker up -d gpu-arbiter
-docker logs gpu-arbiter --tail 5   # expect "plex_token=set"
-```
+Note that Ollama has **no authentication** — anything on the `ai` network can also delete models. That network is isolated from the media planes and nothing outside the host can reach it (no `*.lan` hostname, no `0.0.0.0` bind), but it's worth knowing before you add a container there.
 
 ---
 

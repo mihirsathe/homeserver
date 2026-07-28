@@ -526,25 +526,19 @@ def ensure_profilarr_appdata():
     print(f"  ✓ {dest}/ (Profilarr state — configured via web UI)")
 
 def ensure_ollama_appdata():
-    """Create the two appdata dirs the local-AI services need, as nobody:users.
+    """Create /mnt/user/appdata/ollama as nobody:users for the model store.
 
-    /mnt/user/appdata/ollama       — model blobs. Both containers run as 99:100
-                                     (`user:` override in compose), so this has
-                                     to exist and be writable before first
-                                     start or Ollama can't create its store.
-    /mnt/user/appdata/ollama-gate  — gpu-arbiter writes the GPU hold file here;
-                                     ollama-gate mounts the same path read-only.
+    Ollama runs as 99:100 (`user:` override in compose) with HOME=/ollama, so
+    this directory has to exist and be writable before first start or the
+    engine can't create its model store.
 
-    The model directory is deliberately NOT covered by the weekly Appdata
-    Backup — see docs/deployment.md. Models are multi-GB and re-pullable.
+    Deliberately NOT covered by the weekly Appdata Backup — see
+    docs/deployment.md. Model blobs are multi-GB and re-pullable in minutes.
     """
-    for dest, label in (
-        (Path("/mnt/user/appdata/ollama"), "Ollama models — exclude from Appdata Backup"),
-        (Path("/mnt/user/appdata/ollama-gate"), "GPU hold state"),
-    ):
-        dest.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
-        print(f"  ✓ {dest}/ ({label})")
+    dest = Path("/mnt/user/appdata/ollama")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (Ollama models — exclude from Appdata Backup)")
 
 def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
@@ -658,17 +652,7 @@ CADDY_SERVICES: dict[str, tuple[str, int]] = {
     "tautulli":  ("tautulli",  8181),
     "profilarr": ("profilarr", 6868),
     "adguard":   ("adguard",   80),
-    # ollama.lan hits the gate, never the engine — the tailnet gets exactly
-    # the same 403/503 policy a consumer container does. See write_ollama_gate.
-    "ollama":    ("ollama-gate", 11434),
 }
-
-# Services whose responses stream token-by-token. Caddy auto-disables response
-# buffering for text/event-stream, but Ollama streams application/x-ndjson,
-# which it does not recognise — without an explicit flush_interval the whole
-# generation buffers and the client sees nothing until it completes. These get
-# a block-form site with flushing on and no compression.
-CADDY_STREAMING: set[str] = {"ollama"}
 
 def write_caddy(env: dict):
     dest = CONFIGS / "caddy"
@@ -696,102 +680,15 @@ def write_caddy(env: dict):
     # file ("File to import not found: common;"), which takes the admin
     # ingress down and aborts update-stack.sh's pre-flight. Newlines only.
     for name, (upstream_host, upstream_port) in CADDY_SERVICES.items():
-        lines.append(f"http://{name}.{HOSTNAME_SUFFIX} {{")
-        if name in CADDY_STREAMING:
-            # No `import common` — gzip/zstd over a token stream buys nothing
-            # on a LAN and adds a buffering layer we'd have to reason about.
-            lines += [
-                f"    reverse_proxy {upstream_host}:{upstream_port} {{",
-                "        flush_interval -1",
-                "    }",
-            ]
-        else:
-            lines += [
-                "    import common",
-                f"    reverse_proxy {upstream_host}:{upstream_port}",
-            ]
-        lines += ["}", ""]
+        lines += [
+            f"http://{name}.{HOSTNAME_SUFFIX} {{",
+            "    import common",
+            f"    reverse_proxy {upstream_host}:{upstream_port}",
+            "}",
+            "",
+        ]
     _write_secret(dest / "Caddyfile", "\n".join(lines))
     print("  ✓ configs/caddy/Caddyfile")
-
-
-# ---------------------------------------------------------------------------
-# Ollama gate — the policy layer in front of the inference engine
-# ---------------------------------------------------------------------------
-# Endpoints that can pull a model onto the GPU. Only these are held during a
-# Plex transcode; /api/tags, /api/ps, /api/show and /v1/models are metadata
-# reads that cost no VRAM and stay available throughout.
-OLLAMA_INFERENCE_PATHS = [
-    "/api/generate", "/api/chat", "/api/embed", "/api/embeddings",
-    "/v1/chat/completions", "/v1/completions", "/v1/embeddings",
-]
-
-# Endpoints that mutate the model store. Ollama has no auth and no read-only
-# mode, so "can reach the API" would otherwise mean "can delete every model."
-OLLAMA_ADMIN_PATHS = ["/api/pull", "/api/push", "/api/create", "/api/delete", "/api/copy"]
-
-
-def write_ollama_gate(env: dict):
-    """Caddyfile for ollama-gate — the only route to the Ollama engine.
-
-    The GPU hold is expressed as a file matcher rather than a control API:
-    gpu-arbiter creates /gate-state/hold, Caddy stats it on each request. No
-    socket, no shared secret, no restart, and the two containers need no way
-    to authenticate to each other. The gate mounts the directory read-only.
-
-    Note the named matcher below combines `path` and `file` in one block —
-    Caddy ANDs different matcher types inside a named matcher, which is what
-    makes "inference endpoint AND hold in effect" expressible at all.
-    """
-    dest = CONFIGS / "ollama-gate"
-    dest.mkdir(parents=True, exist_ok=True)
-
-    admin_paths = " ".join(OLLAMA_ADMIN_PATHS)
-    inference_paths = " ".join(OLLAMA_INFERENCE_PATHS)
-
-    content = f"""{{
-    auto_https off
-    admin off
-}}
-
-# Matches any Host — reached as ollama-gate:11434 from the `ai` network,
-# as ollama.lan via caddy from the tailnet, and as 127.0.0.1:11434 from the
-# Unraid host. All three get identical policy.
-http://:11434 {{
-    # Model management is a host operation, not a network one:
-    #   docker exec ollama ollama pull <model>
-    @model_admin path {admin_paths}
-    handle @model_admin {{
-        respond "ollama-gate: model management is disabled over the network. Run `docker exec ollama ollama pull <model>` on the host." 403
-    }}
-
-    # GPU hold. gpu-arbiter creates /gate-state/hold when Plex starts
-    # transcoding; while it exists, nothing may load a model onto the card.
-    # Both matchers must match, so metadata endpoints stay live.
-    @inference_on_hold {{
-        path {inference_paths}
-        file {{
-            root /gate-state
-            try_files hold
-        }}
-    }}
-    handle @inference_on_hold {{
-        header Retry-After 15
-        respond "ollama-gate: GPU yielded to a Plex transcode. Retry in a few seconds." 503
-    }}
-
-    handle {{
-        reverse_proxy ollama:11434 {{
-            # Ollama streams application/x-ndjson, which Caddy does not
-            # auto-detect as streaming — without this the entire response
-            # buffers until generation completes.
-            flush_interval -1
-        }}
-    }}
-}}
-"""
-    _write_secret(dest / "Caddyfile", content)
-    print("  ✓ configs/ollama-gate/Caddyfile")
 
 
 def _bcrypt_via_docker(password: str) -> str:
@@ -1044,7 +941,6 @@ def main() -> None:
     write_bazarr(env)
     write_tautulli(env)
     write_caddy(env)
-    write_ollama_gate(env)
     write_adguard(env)
 
     # Step 6: Create data directories.

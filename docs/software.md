@@ -53,21 +53,18 @@ Caddy and is the one publicly-forwarded service.
 | bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
 | tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
 | profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
-| ollama | `ollama/ollama` | — (via gate) | — (no published port) | Local LLM inference engine. Second-priority tenant of the RTX 3050. |
-| ollama-gate | `caddy:2-alpine` | ollama.lan | 11434 (loopback) | Policy layer in front of Ollama: blocks model management over the network, 503s inference while Plex is transcoding. |
-| gpu-arbiter | `python:3.12-alpine` | — | — | Watches Plex sessions; preempts Ollama's VRAM when a transcode starts. |
+| ollama | `ollama/ollama` | — (no `.lan` name) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
 
 ### Networks
 
-Five bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
+Four bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
 
 | Network | Members | Purpose |
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
-| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `gpu-arbiter` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. `gpu-arbiter` joins read-only, to poll Plex's session list. |
-| `ai` | `ollama-gate`, `caddy`, *(your AI-consuming containers)* | The local-inference consumer plane. The Ollama engine is deliberately **not** here — everything reaches it through `ollama-gate`, so no consumer can route around the GPU arbitration. |
-| `ai_backend` | `ollama`, `ollama-gate`, `gpu-arbiter` | The engine plane. Only the gate (to proxy) and the arbiter (to evict models while the gate is turning everyone else away) are members. |
+| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. `caddy` is deliberately absent, which is why Ollama has no `*.lan` hostname. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
 
@@ -77,73 +74,60 @@ Networks are defined inline in the Compose file rather than `external: true` —
 
 Ollama runs on the same RTX 3050 that Plex transcodes on. **Plex always wins.** The whole design follows from one number: the card has **6 GB of VRAM**.
 
-NVENC and NVDEC are dedicated ASIC blocks on the die, so inference does not steal shader time from the encoder — the resource these two workloads actually contend for is VRAM capacity. Every mechanism below is about capping Ollama's footprint so a transcode always has room to allocate.
+NVENC and NVDEC are dedicated ASIC blocks on the die, so inference does not steal shader time from the encoder — the resource these two workloads actually contend for is VRAM capacity. Everything below caps Ollama's footprint so a transcode always has room to allocate.
 
 ### How the GPU is shared
 
-Four layers, ordered by how quickly they act. The first three are static and always in force; only the fourth needs a running daemon.
+Two mechanisms, both pure configuration. There is no scheduler, no daemon, and nothing watching Plex.
 
-| # | Mechanism | Acts | What it does |
-|---|-----------|------|--------------|
-| 1 | `OLLAMA_GPU_OVERHEAD` | always | Hard VRAM reservation (default 1.5 GiB) that Ollama will never allocate into. If a model doesn't fit in what's left, Ollama spills layers to CPU instead of OOMing the card — the failure mode is "slower", not "broken". |
-| 2 | `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_CONTEXT_LENGTH`, q8_0 KV cache | always | Bounds the footprint of whatever *is* loaded, so "how much VRAM is Ollama using" has one predictable answer instead of scaling with concurrent callers. |
-| 3 | `OLLAMA_KEEP_ALIVE=60s` | ~60 s idle | Idle models evict themselves without anything watching. |
-| 4 | `gpu-arbiter` + `ollama-gate` | ~5 s | Active preemption when Plex actually starts encoding. |
+| Mechanism | What it does |
+|-----------|--------------|
+| `OLLAMA_GPU_OVERHEAD` | Hard VRAM reservation (default 2 GiB) that Ollama never allocates into. This is what guarantees Plex can start a transcode. If a model doesn't fit in what's left, Ollama spills layers to CPU instead of OOMing the card — the failure mode is "slower", not "Plex can't transcode". |
+| `OLLAMA_KEEP_ALIVE` | Ollama's built-in eviction. A model unloads after this much idle time (default 60s here; upstream default is 5m). Local AI use on this box is bursty, so most of the time nothing is resident at all. |
 
-Layer 4 is the interesting one. `gpu-arbiter` polls Plex's `/status/sessions` every 5 seconds and counts sessions with `videoDecision="transcode"` — Direct Play and Direct Stream never touch the encoder, and audio-only transcodes are a CPU job, so neither counts. On the first real video transcode it:
+Supporting knobs bound the footprint so the reservation above is meaningful: `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PARALLEL=1` mean "how much VRAM is Ollama using" has one predictable answer instead of scaling with concurrent callers, and `OLLAMA_CONTEXT_LENGTH` plus a q8_0 KV cache keep the cache from outgrowing the weights.
 
-1. **Creates a hold file** that `ollama-gate` matches on. Caddy's `file` matcher stats it per request; while it exists, every endpoint that could pull a model onto the GPU answers `503` + `Retry-After: 15`. This is the part that matters — it stops the *next* request from re-loading a model behind the arbiter's back.
-2. **Evicts what's already resident** (`POST /api/generate` with `keep_alive: 0`), freeing the VRAM in about a second.
+### The gap, and why it's accepted
 
-The hold releases 60 seconds after the last transcode disappears. That delay is hysteresis: without it, a binge would flap the hold open and closed between every episode.
+`keep_alive` is an **idle timer, not a response to GPU pressure** — it does not know Plex exists. If a transcode starts ten seconds after an inference, Ollama holds its VRAM for the rest of the window.
 
-**In the normal case there is no conflict at all.** A 3–4B model at ~2.5 GB plus a 4K HDR tone-mapping transcode at ~1 GB coexist comfortably on a 6 GB card. Preemption is the safety valve for the tail — someone loaded a 7B and three 4K streams started at once.
+The reservation covers that: Plex still gets its 2 GiB and the transcode starts normally. It only becomes a real problem if Plex needs *more* than the reservation at that exact moment — roughly two or more concurrent 4K HDR tone-mapping transcodes — in which case the extra sessions fall back to CPU transcoding rather than failing.
 
-**The arbiter fails open.** No Plex token, Plex unreachable, or a malformed response means no hold, and Ollama keeps serving. Layers 1–3 still protect Plex, so failing closed would only mean a dead Plex token silently bricks local AI for the whole stack. See [decisions.md](decisions.md#local-ai-on-the-transcode-gpu).
+For this household that's the far tail, and the fixes are one-line: raise `OLLAMA_GPU_OVERHEAD_BYTES`, shorten `OLLAMA_KEEP_ALIVE`, or run a smaller model. An earlier revision of this design added a daemon that polled Plex and evicted models within a second of a transcode starting; it was dropped as too much machinery for the case it covered. [decisions.md](decisions.md#local-ai-on-the-transcode-gpu) records that trade in full, in case the tail ever stops being the tail.
 
 ### Model sizing
 
-Budget roughly **4 GB** for weights plus KV cache — that's 6 GB minus the 1.5 GiB reservation, minus a little slack. Models that fit comfortably:
+Budget roughly **3.5–4 GB** for weights plus KV cache — 6 GB minus the 2 GiB reservation. Models that fit comfortably:
 
 | Model | Size | Use |
 |-------|------|-----|
 | `llama3.2:3b` | ~2.0 GB | General chat/summarisation — the default recommendation |
-| `qwen3:4b` | ~2.6 GB | Stronger reasoning, still fits with a transcode running |
+| `qwen3:4b` | ~2.6 GB | Stronger reasoning, still fits alongside a transcode |
 | `nomic-embed-text` | ~0.3 GB | Embeddings for search/RAG |
-| `llama3.1:8b-q4_K_M` | ~4.9 GB | Fits *only* when nothing is transcoding; will spill to CPU under a hold |
+| `llama3.1:8b-q4_K_M` | ~4.9 GB | Does not fit — will run partly on CPU |
 
-Nothing is pre-pulled. Models are fetched from the host, because the gate blocks model management over the network:
+Nothing is pre-pulled:
 
 ```bash
 docker exec ollama ollama pull llama3.2:3b
 docker exec ollama ollama list
+docker exec ollama ollama rm <model>     # blobs live on the cache pool
 ```
 
 ### Reaching it
 
 | From | Endpoint |
 |------|----------|
-| Another container on the stack | `http://ollama-gate:11434` (join the `ai` network) |
-| A tailnet device | `http://ollama.lan/` |
+| Another container on the stack | `http://ollama:11434` (join the `ai` network) |
 | The Unraid host | `http://127.0.0.1:11434` |
+| The tailnet | **Not reachable.** Ollama has no `*.lan` hostname — Caddy is not on the `ai` network. |
 | The LAN or the internet | **Not reachable.** Nothing binds `0.0.0.0`, and the router still forwards only 32400. |
 
-Ollama also serves an OpenAI-compatible API at `/v1`, so most SDKs work unmodified against `http://ollama-gate:11434/v1` with a placeholder API key.
-
-### Why the names look backwards
-
-`ollama` is the engine; `ollama-gate` is what you connect to. Ollama has no authentication and no read-only mode — whoever can reach `:11434` can also delete every model on the box. So the engine is fenced onto `ai_backend` with no published port, and the gate sits in front on `ai` enforcing two rules:
-
-- **`403`** on `/api/pull`, `/push`, `/create`, `/delete`, `/copy` — model management is a host operation, never a network one. A compromised consumer container can't wipe the model store.
-- **`503`** on the inference endpoints while the hold is in effect.
-
-Metadata reads (`/api/tags`, `/api/ps`, `/api/show`, `/v1/models`) pass through at all times, holds included — listing models costs no VRAM.
-
-A container that reaches for `http://ollama:11434` out of habit gets NXDOMAIN, a loud failure, rather than silently bypassing the arbitration.
+Ollama also serves an OpenAI-compatible API at `/v1`, so most SDKs work unmodified against `http://ollama:11434/v1` with a placeholder API key.
 
 ### Adding an AI-consuming container
 
-Join the `ai` network and point at the gate. There's a commented template in `docker-compose.yml` next to `ollama-gate`:
+Join the `ai` network and point at Ollama. There's a commented template in `docker-compose.yml` directly below the `ollama` service:
 
 ```yaml
   some-ai-app:
@@ -151,12 +135,14 @@ Join the `ai` network and point at the gate. There's a commented template in `do
     networks:
       - ai
     environment:
-      - OLLAMA_BASE_URL=http://ollama-gate:11434
-      - OPENAI_BASE_URL=http://ollama-gate:11434/v1
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_BASE_URL=http://ollama:11434/v1
       - OPENAI_API_KEY=unused
 ```
 
-Treat `503` as "retry after `Retry-After`", not as a hard error — it means Plex is mid-transcode. If the app has an admin UI, add a row to `CADDY_SERVICES` in `generate-configs.py` and re-run it to get `<name>.lan` routing.
+If the app has an admin UI, add a row to `CADDY_SERVICES` in `generate-configs.py` and re-run it for `<name>.lan` routing — that publishes the *app's* UI to the tailnet, not Ollama's API.
+
+**Ollama has no authentication and no read-only mode**, so anything on the `ai` network can also delete models. Network membership is the access control. That's an accepted trade while every member is a container we deliberately put there, and models re-pull in minutes — but it's the reason the `ai` network is isolated from the media planes, and the reason to think before adding something to it.
 
 ### Folder Structure on Server
 
@@ -176,8 +162,7 @@ Treat `503` as "retry after `Retry-After`", not as a hard error — it means Ple
 │   ├── bazarr/
 │   ├── tautulli/
 │   ├── profilarr/                    ← SQLite DB (subscribed databases + selected profiles)
-│   ├── ollama/                       ← LLM model blobs (multi-GB — EXCLUDE from Appdata Backup)
-│   └── ollama-gate/                  ← GPU hold flag written by gpu-arbiter
+│   └── ollama/                       ← LLM model blobs (multi-GB — EXCLUDE from Appdata Backup)
 ├── usenet-incomplete/                ← cache pool (SSD), shareUseCache=only
 │                                        SABnzbd active downloads + par2/unrar
 └── data/                             ← spinning array, shareUseCache=yes
@@ -210,7 +195,7 @@ Plex-account 2FA is mandatory on every shared account. Relay is toggled off (`PL
 
 ### Everything else — Tailscale
 
-The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, the Ollama API, and the Unraid webUI are reachable only from devices on the tailnet. No public URL, no Cloudflare Access, no reverse proxy. Admin devices install Tailscale, tag themselves `tag:admin`, and Tailscale ACLs restrict `tag:admin → tag:server` to the specific admin ports. The server runs `tailscale up --ssh` so SSH also rides the tailnet.
+The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, and the Unraid webUI are reachable only from devices on the tailnet. No public URL, no Cloudflare Access, no reverse proxy. Admin devices install Tailscale, tag themselves `tag:admin`, and Tailscale ACLs restrict `tag:admin → tag:server` to the specific admin ports. The server runs `tailscale up --ssh` so SSH also rides the tailnet.
 
 ### Family request flow (no public request portal)
 

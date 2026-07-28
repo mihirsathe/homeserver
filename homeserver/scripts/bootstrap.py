@@ -112,28 +112,6 @@ def refresh_docker_env() -> None:
     DOCKER_ENV.write_text("".join(lines))
     DOCKER_ENV.chmod(0o600)
 
-def recreate_gpu_arbiter() -> None:
-    """Recreate gpu-arbiter so it picks up a freshly-written PLEX_TOKEN.
-
-    The arbiter reads the token from its environment, which Compose resolves
-    at container-create time — a plain `restart` would keep the old (empty)
-    value. Until it has a token it can't see Plex sessions, so the GPU hold
-    never engages and Ollama keeps the card during transcodes. The static VRAM
-    reservation still protects Plex in the meantime (see docs/decisions.md),
-    so this is best-effort: a failure here is a warning, not a hard stop.
-    """
-    try:
-        subprocess.run(
-            ["docker", "compose", "-f", str(STACK_DIR / "docker-compose.yml"),
-             "--env-file", str(DOCKER_ENV), "up", "-d", "gpu-arbiter"],
-            check=True, capture_output=True, timeout=120,
-        )
-        print("  ✓ gpu-arbiter recreated with the new token")
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f"  ⚠ Could not recreate gpu-arbiter ({e.__class__.__name__}).")
-        print("    Run: docker compose --env-file .env.docker up -d gpu-arbiter")
-
-
 def require(env: dict, key: str) -> str:
     val = env.get(key, "").strip()
     if not val:
@@ -639,9 +617,7 @@ def main() -> None:
         if plex_token:
             write_generated({"PLEX_TOKEN": plex_token})
             refresh_docker_env()
-            print("  ✓ PLEX_TOKEN saved to generated.env")
-            recreate_gpu_arbiter()
-            print()
+            print("  ✓ PLEX_TOKEN saved to generated.env\n")
 
     plex = None
     if plex_token:
@@ -677,7 +653,6 @@ def main() -> None:
     print("  Profilarr: http://profilarr.lan")
     print("  Seerr:     http://seerr.lan")
     print("  AdGuard:   http://adguard.lan   (admin pass in generated.env)")
-    print("  Ollama:    http://ollama.lan    (API only, no UI — see docs/software.md)")
     print(f"  Plex:      http://{lan_ip}:32400/web   (public — direct, not via Caddy)")
     print()
     print("Remaining manual steps:")
@@ -692,8 +667,7 @@ def main() -> None:
     print("     targets (paste URLs + API keys from generated.env), subscribe to")
     print("     the Dictionarry DB and/or TRaSH Guides, select profiles, sync.")
     print("     Profilarr has no API-driven bootstrap path.")
-    print("  4. Ollama ships with no models. Pull one from the host — the gate")
-    print("     blocks model management over the network by design:")
+    print("  4. Ollama ships with no models. Pull one:")
     print("       docker exec ollama ollama pull llama3.2:3b")
     print("     Keep models under ~4 GB so they coexist with a Plex transcode")
     print("     on the 6 GB card. See docs/software.md#local-ai for sizing.")

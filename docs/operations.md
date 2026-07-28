@@ -45,14 +45,12 @@ watch -n 2 'docker exec plex nvidia-smi'
 # Who is holding VRAM right now (Plex transcode vs Ollama model)?
 docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 
-# Is Ollama holding a model in VRAM? (size_vram > 0 means yes)
+# Is Ollama holding a model in VRAM? (size_vram > 0 means yes; empty = idle,
+# already unloaded by OLLAMA_KEEP_ALIVE)
 curl -s http://127.0.0.1:11434/api/ps
 
-# Is the GPU currently yielded to Plex? (file present = inference is 503ing)
-ls -l /mnt/user/appdata/ollama-gate/hold 2>/dev/null && echo "HELD" || echo "free"
-
-# Why — what the arbiter has been doing
-docker logs gpu-arbiter --tail 20
+# Force Ollama to hand the GPU back right now, without waiting out keep_alive
+curl -s http://127.0.0.1:11434/api/generate -d '{"model":"llama3.2:3b","keep_alive":0}'
 
 # Local AI end-to-end (expect a completion)
 curl -s http://127.0.0.1:11434/api/generate \
@@ -129,8 +127,8 @@ At current RAM, heavy simultaneous workloads (many active transcodes + downloads
 
 Ollama is the second-priority tenant of the RTX 3050. Two consequences worth knowing before debugging something as "broken":
 
-- **Inference returns `503` while Plex is transcoding video.** That's `ollama-gate` doing its job. It clears ~60s after the last transcode ends. Clients should honour `Retry-After` rather than treating it as an error.
-- **Models much over ~4 GB will spill layers to CPU** and run several times slower, because 1.5 GiB of VRAM is reserved for Plex and never handed to Ollama. This is a deliberate trade — it's why a transcode can always start. Sizing guidance is in [software.md](software.md#model-sizing); the reservation is tunable via `OLLAMA_GPU_OVERHEAD_BYTES` in `.env`.
+- **Models much over ~4 GB spill layers to CPU** and run several times slower, because 2 GiB of VRAM is reserved for Plex and never handed to Ollama. This is deliberate — it's what guarantees a transcode can always start. Sizing guidance is in [software.md](software.md#model-sizing); the reservation is tunable via `OLLAMA_GPU_OVERHEAD_BYTES`.
+- **Ollama does not react to Plex starting a transcode.** `OLLAMA_KEEP_ALIVE` is an idle timer, so a model loaded seconds before playback keeps its VRAM for the rest of that minute. The reservation covers it in every normal case; the exception is two or more concurrent 4K HDR tone-mapping transcodes, where the extra sessions fall back to CPU. If that shows up in practice, raise the reservation or shorten keep-alive — see [decisions.md](decisions.md#local-ai-on-the-transcode-gpu) for the preemption design that was considered and set aside.
 
 Both go away with a larger GPU; see [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
@@ -155,7 +153,6 @@ No dedicated metrics stack — the goal is low operational cost, not an observab
 | Gluetun tunnel down (SAB/Prowlarr offline) | `docker logs gluetun` | Container healthcheck flips to `unhealthy`; Fix Common Problems surfaces it. SAB + Prowlarr will stay unreachable until Mullvad reconnects (that's the kill-switch doing its job) |
 | Tailscale offline | `tailscale status` from an admin device | If admin URLs stop resolving, check tailnet membership in the Tailscale admin console |
 | Stream activity / client issues | Tautulli | Tautulli → Settings → Notification Agents — email, Discord, Telegram, etc. |
-| GPU arbiter wedged | `gpu-arbiter` healthcheck | The loop touches a heartbeat file every poll; a stale heartbeat flips the container `unhealthy` within ~90s. This matters because a wedged arbiter that already wrote the hold file would 503 inference indefinitely — Fix Common Problems surfaces it on the dashboard |
 | Ollama model store growth | `du -sh /mnt/user/appdata/ollama` | Counts against the same cache-pool threshold as everything else in appdata; the 75% warning covers it |
 
 **Unraid notification agent**: CA Notification Agent plugin gives email / Pushover / Discord delivery of Unraid events. Configure it once and the SMART/parity/cache alerts above route through it.

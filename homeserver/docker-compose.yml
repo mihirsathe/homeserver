@@ -43,15 +43,15 @@
 #                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
 #                  Prowlarr via gluetun). Blocks a popped frontend container
 #                  from pivoting straight into the downloader plane.
-#   ai           — the local-inference consumer plane. Anything on the stack
-#                  that wants an LLM joins this and talks to ollama-gate. The
-#                  Ollama engine itself is NOT here, so a consumer cannot
-#                  route around the gate's GPU arbitration.
-#   ai_backend   — ollama (the engine), ollama-gate, gpu-arbiter. The only
-#                  members are the gate and the arbiter, both of which have a
-#                  reason to reach the engine directly.
-#   caddy        — joined to all four planes so the reverse proxy can
-#                  reach every backend by docker-DNS name.
+#   ai           — ollama plus anything on the stack that needs local
+#                  inference. Isolated from the media planes: nothing here
+#                  has a reason to reach the *arrs or the downloaders, and
+#                  Ollama has no auth of its own, so network membership is
+#                  the access control.
+#   caddy        — joined to the three media planes so the reverse proxy can
+#                  reach every admin backend by docker-DNS name. Deliberately
+#                  NOT on `ai` — Ollama has no *.lan hostname because nothing
+#                  on the tailnet needs to reach it.
 #
 # ADMIN INGRESS (the only way into admin UIs from the tailnet):
 #   tailnet device → tailscale → host:80 → caddy → backend by name.
@@ -77,15 +77,11 @@ networks:
   automation:
     name: automation
     driver: bridge
-  # Consumer plane for local AI. Join a container here and point it at
-  # http://ollama-gate:11434 — see the commented example below `ollama-gate`.
+  # Local-inference plane. Join a container here and point it at
+  # http://ollama:11434 — see the commented example below `ollama`.
+  # Not `internal: true` — `ollama pull` has to reach registry.ollama.ai.
   ai:
     name: ai
-    driver: bridge
-  # Engine plane. Not `internal: true` — `ollama pull` has to reach
-  # registry.ollama.ai to fetch model blobs.
-  ai_backend:
-    name: ai_backend
     driver: bridge
 
 services:
@@ -549,47 +545,54 @@ services:
           memory: 1G
 
   # ---------------------------------------------------------------------------
-  # OLLAMA — local LLM inference engine, second-priority tenant of the RTX 3050
+  # OLLAMA — local LLM inference, second-priority tenant of the RTX 3050
   #
   # THE CORE CONSTRAINT: the 3050 LP has 6 GB of VRAM and Plex owns it. NVENC
-  # and NVDEC are dedicated ASIC blocks, so an inference workload does not
-  # starve the encoder for shader time — the resource these two actually fight
-  # over is VRAM capacity. Every knob below is about capping Ollama's VRAM
-  # footprint so a transcode always has room.
+  # and NVDEC are dedicated ASIC blocks, so inference does not starve the
+  # encoder for shader time — the resource these two actually fight over is
+  # VRAM capacity. Every knob below caps Ollama's footprint so a transcode
+  # always has room to allocate.
   #
-  # Four layers keep Plex whole, in order of how fast they act:
+  # Two mechanisms, both pure configuration, no daemon watching anything:
   #
-  #   1. OLLAMA_GPU_OVERHEAD — a hard reservation Ollama will never allocate
-  #      into. Always in force, needs no daemon, survives every failure below
-  #      it. If a model doesn't fit in what's left, Ollama spills layers to CPU
-  #      instead of OOMing the card. This is the layer that matters most.
-  #   2. MAX_LOADED_MODELS/NUM_PARALLEL/CONTEXT_LENGTH — bound the footprint of
-  #      whatever does get loaded, so "how much VRAM is Ollama using" has one
-  #      predictable answer instead of scaling with concurrent callers.
-  #   3. OLLAMA_KEEP_ALIVE — idle models evict themselves after a minute.
-  #   4. gpu-arbiter + ollama-gate — active preemption when Plex actually
-  #      starts encoding. See those two services below.
+  #   1. OLLAMA_GPU_OVERHEAD — a hard reservation Ollama never allocates into.
+  #      This is what actually guarantees Plex can start a transcode. It holds
+  #      unconditionally, and if a model doesn't fit in what's left, Ollama
+  #      spills layers to CPU instead of OOMing the card. Failure mode is
+  #      "slower", never "Plex can't transcode".
+  #   2. OLLAMA_KEEP_ALIVE — Ollama's own eviction. A model unloads after this
+  #      much idle time (upstream default is 5m; 60s here hands the card back
+  #      much sooner). Local AI use on this box is bursty, so most of the time
+  #      nothing is resident at all.
   #
-  # In the normal case layers 1–3 mean there is no conflict at all: a 3–4B
-  # class model at ~2.5 GB plus a 4K HDR transcode at ~1 GB coexist on a 6 GB
-  # card. Preemption is the safety valve for the tail — someone runs a 7B, and
-  # three 4K streams start at once.
+  # The bounded-footprint knobs (MAX_LOADED_MODELS / NUM_PARALLEL /
+  # CONTEXT_LENGTH / KV cache type) exist so that "how much VRAM is Ollama
+  # using" has one predictable answer instead of scaling with concurrent
+  # callers — which is what makes the reservation above meaningful.
   #
-  # NOT reachable from the ai network on purpose: consumers get ollama-gate,
-  # which is what enforces the hold. This container has no published port —
-  # the gate owns 127.0.0.1:11434. Model management is `docker exec ollama`.
+  # ACCEPTED LIMITATION: keep_alive is an idle timer, not a response to GPU
+  # pressure — it doesn't know Plex exists. If a transcode starts seconds
+  # after an inference, Ollama keeps its VRAM for the rest of the window. The
+  # reservation covers this: Plex still gets its headroom. It's only a real
+  # problem if Plex needs MORE than the reservation at that moment (roughly
+  # 2+ concurrent 4K HDR tone-mapping transcodes), where the extra sessions
+  # fall back to CPU transcoding. If that ever shows up in practice, the fix
+  # is to raise OLLAMA_GPU_OVERHEAD_BYTES or run a smaller model — see
+  # docs/decisions.md for the preemption design this replaced.
   # ---------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     runtime: nvidia
+    networks:
+      # Consumer plane. Containers that need an LLM join this network and
+      # reach http://ollama:11434 — see the commented example below.
+      - ai
     # Runs as nobody:users like the rest of the stack rather than the image's
     # default root. Ollama needs no privileges — /dev/nvidia* is world-
     # accessible — but HOME must point somewhere writable, because that's
     # where it keeps models and its (unused) signing key.
     user: "${PUID}:${PGID}"
-    networks:
-      - ai_backend
     environment:
       - TZ=${TZ}
       - HOME=/ollama
@@ -598,14 +601,13 @@ services:
       # and is the broader surface CVE-2024-0132 abused).
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      # Binds inside the container only — nothing publishes this port, and the
-      # only members of ai_backend are the gate and the arbiter.
       - OLLAMA_HOST=0.0.0.0:11434
-      # LAYER 1 — bytes of VRAM Ollama must leave alone. Default 1610612736
-      # (1.5 GiB) covers several concurrent 1080p NVENC sessions or one 4K HDR
-      # tone-mapping transcode with margin.
-      - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD_BYTES:-1610612736}
-      # LAYER 2 — one model, one request at a time. On 6 GB, serving two models
+      # Bytes of VRAM Ollama must leave alone. Default 2147483648 (2 GiB)
+      # covers a couple of concurrent 4K HDR tone-mapping transcodes.
+      - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD_BYTES:-2147483648}
+      # Hand VRAM back after this much idle time.
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-60s}
+      # One model, one request at a time. On 6 GB, serving two models
       # concurrently means neither fits. Extra callers queue instead.
       - OLLAMA_MAX_LOADED_MODELS=1
       - OLLAMA_NUM_PARALLEL=1
@@ -618,13 +620,19 @@ services:
       # OLLAMA_KV_CACHE_TYPE=f16 in .env to opt back out.
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
-      # LAYER 3 — hand VRAM back on idle without waiting for the arbiter.
-      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-60s}
     volumes:
       # Model blobs land in ollama/models/ here. These are multi-GB and
       # re-downloadable — exclude this path from the Appdata Backup plugin
       # (docs/deployment.md) or a weekly backup grows by tens of GB.
       - /mnt/user/appdata/ollama:/ollama/.ollama
+    ports:
+      # Loopback only, same convention as every other backend in this stack:
+      # for host-side debugging from the Unraid terminal, not for LAN or
+      # Tailscale access. Nothing binds 0.0.0.0 and the router forwards only
+      # 32400, so the only clients are stack containers and the host itself.
+      # Deliberately NOT fronted by Caddy — there is no *.lan hostname for
+      # Ollama, because nothing on the tailnet needs to reach it.
+      - "127.0.0.1:11434:11434"
     restart: unless-stopped
     healthcheck:
       # The image ships no curl/wget; `ollama list` round-trips the local API
@@ -642,68 +650,10 @@ services:
           # if Ollama spills layers to CPU because a transcode has the card.
           memory: 8G
 
-  # ---------------------------------------------------------------------------
-  # OLLAMA-GATE — the only way anything reaches Ollama
-  #
-  # Ollama has no authentication and no concept of a read-only client: whoever
-  # can reach :11434 can also delete every model on the box. That is fine for
-  # `localhost` on a laptop and not fine for a shared network plane, so the
-  # engine is fenced onto ai_backend and this Caddy sits in front on `ai`.
-  #
-  # It does exactly two things (config generated by generate-configs.py into
-  # configs/ollama-gate/Caddyfile):
-  #
-  #   403 on /api/pull, /push, /create, /delete, /copy — model management is a
-  #       host operation (`docker exec ollama ollama pull …`), never a network
-  #       one. A compromised consumer container cannot wipe the model store.
-  #   503 + Retry-After on the inference endpoints while gpu-arbiter's hold
-  #       file exists, so nothing can pull a model back onto the GPU while
-  #       Plex is encoding. Caddy's `file` matcher reads the flag directly —
-  #       no control socket, no API, nothing to authenticate between the two.
-  #
-  # Everything else (/api/tags, /api/ps, /api/show, /v1/models) proxies
-  # straight through, holds included — listing models costs no VRAM.
-  #
-  # WHY THE NAMES LOOK BACKWARDS: `ollama` is the engine and `ollama-gate` is
-  # what you connect to. A consumer that reaches for http://ollama:11434 out of
-  # habit gets NXDOMAIN — a loud failure — rather than silently bypassing the
-  # arbitration. `docker exec ollama ollama pull` still reads naturally.
-  # ---------------------------------------------------------------------------
-  ollama-gate:
-    image: caddy:2-alpine
-    container_name: ollama-gate
-    networks:
-      - ai
-      - ai_backend
-    volumes:
-      - ${STACK_DIR}/configs/ollama-gate/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Read-only: the gate only stats the hold file, gpu-arbiter owns writes.
-      - /mnt/user/appdata/ollama-gate:/gate-state:ro
-    ports:
-      # Loopback only — for host-side debugging and `curl` from the Unraid
-      # terminal. Tailnet devices go through caddy at http://ollama.lan/.
-      # Nothing binds 0.0.0.0, and the router forwards only 32400.
-      - "127.0.0.1:11434:11434"
-    restart: unless-stopped
-    depends_on:
-      ollama: { condition: service_started }
-    healthcheck:
-      # caddy:2-alpine has busybox nc but no curl/wget — same pattern as caddy.
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 11434 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-
   # --- Adding a local-AI consumer ---------------------------------------------
-  # Any container that needs an LLM joins the `ai` network and points at the
-  # gate. Ollama serves an OpenAI-compatible API at /v1, so most SDKs work
-  # unmodified with a placeholder key (the gate is the auth boundary; Ollama
-  # itself ignores the header).
+  # Join the `ai` network and point at Ollama. It serves an OpenAI-compatible
+  # API at /v1, so most SDKs work unmodified with a placeholder key (Ollama
+  # has no auth of its own and ignores the header).
   #
   #   some-ai-app:
   #     image: example/some-ai-app:latest
@@ -711,70 +661,17 @@ services:
   #     networks:
   #       - ai
   #     environment:
-  #       - OLLAMA_BASE_URL=http://ollama-gate:11434
-  #       - OPENAI_BASE_URL=http://ollama-gate:11434/v1
+  #       - OLLAMA_BASE_URL=http://ollama:11434
+  #       - OPENAI_BASE_URL=http://ollama:11434/v1
   #       - OPENAI_API_KEY=unused
   #     restart: unless-stopped
   #
-  # Handle 503 from the gate as "retry after the Retry-After interval", not as
-  # a hard error — it means Plex is mid-transcode. If the app has an admin UI,
-  # add it to CADDY_SERVICES in generate-configs.py to get <name>.lan routing.
+  # Note that anything on this network can also delete models — Ollama has no
+  # read-only mode. That's an accepted trade for now given every member is a
+  # container we chose to put there, and models re-pull in minutes. If the app
+  # has an admin UI, add it to CADDY_SERVICES in generate-configs.py for
+  # <name>.lan routing; that's the app's UI, not Ollama's API.
   # ----------------------------------------------------------------------------
-
-  # ---------------------------------------------------------------------------
-  # GPU-ARBITER — watches Plex, preempts Ollama
-  #
-  # Stock python:3.12-alpine running the bind-mounted scripts/gpu-arbiter.py
-  # (stdlib only, so there's no image to build). Polls Plex's session list;
-  # when a video transcode appears it writes the hold file the gate matches on
-  # and evicts whatever Ollama has resident in VRAM. Full rationale and the
-  # fail-open reasoning are in the script's docstring.
-  #
-  # Dual-homed frontend + ai_backend: it needs `plex` on one side and the
-  # Ollama engine on the other. It's the only crossing between those planes,
-  # it initiates both connections, and nothing routes through it.
-  #
-  # PLEX_TOKEN is empty until bootstrap.py runs. The arbiter starts anyway and
-  # logs a warning — recreate it after bootstrap so it picks the token up.
-  # ---------------------------------------------------------------------------
-  gpu-arbiter:
-    image: python:3.12-alpine
-    container_name: gpu-arbiter
-    user: "${PUID}:${PGID}"
-    networks:
-      - frontend
-      - ai_backend
-    environment:
-      - TZ=${TZ}
-      - PLEX_URL=http://plex:32400
-      - PLEX_TOKEN=${PLEX_TOKEN:-}
-      # The engine directly, not the gate — eviction has to work *while* the
-      # gate is turning everyone else away.
-      - OLLAMA_URL=http://ollama:11434
-      - HOLD_FILE=/gate-state/hold
-      - HEARTBEAT_FILE=/gate-state/heartbeat
-      - POLL_INTERVAL=${GPU_ARBITER_POLL_SECONDS:-5}
-      # Hysteresis — don't flap the hold between episodes of a binge.
-      - RELEASE_DELAY=${GPU_ARBITER_RELEASE_SECONDS:-60}
-    volumes:
-      - ${STACK_DIR}/scripts/gpu-arbiter.py:/app/gpu-arbiter.py:ro
-      # Read-write: this container is the only writer of the hold file.
-      - /mnt/user/appdata/ollama-gate:/gate-state
-    command: ["python3", "-u", "/app/gpu-arbiter.py"]
-    restart: unless-stopped
-    healthcheck:
-      # The loop touches the heartbeat file every poll. A stale heartbeat means
-      # the loop is wedged, which matters: a wedged arbiter that already wrote
-      # the hold file would 503 inference indefinitely.
-      test: ["CMD-SHELL", "python3 -c \"import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/gate-state/heartbeat') < 60 else 1)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
 
   # ---------------------------------------------------------------------------
   # ADGUARD HOME — tailnet split-DNS resolver
@@ -847,9 +744,6 @@ services:
       - frontend
       - automation
       - downloaders
-      # ollama.lan → ollama-gate:11434. Caddy joins the consumer plane, not
-      # ai_backend — the tailnet gets the same gated view a container does.
-      - ai
     ports:
       - "80:80"
     volumes:

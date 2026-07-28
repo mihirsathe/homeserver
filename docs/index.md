@@ -28,7 +28,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting
 | GPU | Yeston RTX 3050 LP 6G · 12 concurrent NVENC sessions · shared with Ollama, Plex has priority |
 | Storage | Dell MD1400 DAS · 32 TB usable (4×8 TB + 16 TB parity) |
 | OS | Unraid Pro (lifetime) · BOSS card boot |
-| Stack | 16 Docker containers · defined in one Compose file |
-| Local AI | Ollama on the transcode GPU · yields VRAM to Plex automatically · reachable only from stack containers and the tailnet |
+| Stack | 14 Docker containers · defined in one Compose file |
+| Local AI | Ollama on the transcode GPU · static VRAM reservation keeps Plex first · reachable only from stack containers |
 | Access | One router port (TCP 32400 → Plex) · admin via Tailscale · SAB/Prowlarr via Mullvad |
 | Rebuild time | ~15 minutes from scratch |

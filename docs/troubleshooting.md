@@ -194,66 +194,54 @@ A service's healthcheck isn't passing or port isn't bound. `wait_for` reports th
 
 ---
 
-## Local AI returns 503
-
-`ollama-gate` returns `503` with `Retry-After: 15` on the inference endpoints when the GPU has been yielded to Plex. Most of the time this is the system working correctly.
-
-```bash
-# Is a hold in effect, and why?
-ls -l /mnt/user/appdata/ollama-gate/hold 2>/dev/null && echo HELD || echo free
-docker logs gpu-arbiter --tail 20
-```
-
-**If Plex is transcoding**: expected. The hold clears ~60s after the last video transcode ends. If a client treats this as a hard error rather than retrying, fix the client — `Retry-After` is there for exactly this.
-
-**If Plex is NOT transcoding and the hold is stuck**, the arbiter is wedged or was killed uncleanly. It clears stale holds at startup and releases on SIGTERM, so a restart fixes it:
-
-```bash
-docker compose --env-file .env.docker restart gpu-arbiter
-```
-
-If that doesn't clear it, the arbiter isn't running at all (nothing else ever removes the file). `docker compose ps gpu-arbiter` — an `unhealthy` status means its heartbeat went stale. As an immediate unblock, `rm /mnt/user/appdata/ollama-gate/hold`; then fix the arbiter, because until it's back Plex has no active preemption (the static VRAM reservation still protects it).
-
-**If you get 503 on a request that isn't inference**, check the path — only `/api/generate`, `/api/chat`, `/api/embed`, `/api/embeddings` and the `/v1` completion endpoints are held. `/api/tags` and `/api/ps` stay available throughout; if those 503 too, something else is wrong.
-
----
-
-## Local AI returns 403 on `ollama pull`
-
-By design. Model management is blocked over the network — a consumer container that gets popped shouldn't be able to delete the model store. Pull from the host instead:
-
-```bash
-docker exec ollama ollama pull llama3.2:3b
-```
-
-The same applies to `/api/push`, `/api/create`, `/api/delete`, and `/api/copy`.
-
----
-
 ## Ollama is slow, or a model won't fit
 
-1. **Is it running on the GPU at all?** `curl -s http://127.0.0.1:11434/api/ps` — `size_vram: 0` means Ollama placed the model entirely on CPU.
-2. **The model is too big.** 1.5 GiB of the 6 GB card is reserved for Plex, leaving ~4.5 GB. Anything bigger spills layers to CPU, which is correct behaviour (better slow than an OOM that breaks a transcode). Use a smaller model — see [software.md](software.md#model-sizing) — or lower `OLLAMA_GPU_OVERHEAD_BYTES` in `.env` if you're willing to give Plex less headroom.
-3. **Context length is eating the VRAM.** KV cache scales linearly with `OLLAMA_CONTEXT_LENGTH`; at 16K it can exceed the weights. Drop it back to 4096.
-4. **A transcode just ended and the model was evicted.** The first request after a hold re-loads from disk — one slow request, then normal.
+1. **Is it running on the GPU at all?** `curl -s http://127.0.0.1:11434/api/ps` — `size_vram: 0` means Ollama placed the model entirely on CPU. An empty list just means nothing is loaded right now, which is normal after 60s idle.
+2. **The model is too big.** 2 GiB of the 6 GB card is reserved for Plex, leaving ~4 GB. Anything bigger spills layers to CPU — correct behaviour, since the alternative is a transcode that can't allocate. Use a smaller model ([software.md](software.md#model-sizing)), or lower `OLLAMA_GPU_OVERHEAD_BYTES` if you're willing to give Plex less headroom.
+3. **Context length is eating the VRAM.** KV cache scales linearly with `OLLAMA_CONTEXT_LENGTH`; at 16K it can exceed the weights. Drop back to 4096.
+4. **First request after an idle period is slow.** Expected — `OLLAMA_KEEP_ALIVE=60s` unloaded the model and it re-loads from SSD. One slow request, then normal.
 
-Any `.env` change here needs `python3 scripts/generate-configs.py && docker compose --env-file .env.docker up -d`.
+`.env` changes here need `docker compose --env-file .env.docker up -d` to take effect (Compose resolves environment at container-create time, so `restart` alone won't do it).
 
 ---
 
-## `gpu-arbiter` logs "PLEX_TOKEN is empty"
+## Plex fell back to CPU transcoding while a model was loaded
 
-The arbiter can't see Plex sessions, so the GPU hold will never engage. Plex is still protected by the static VRAM reservation, but preemption is off.
+Ollama has no awareness of Plex — `OLLAMA_KEEP_ALIVE` is an idle timer, not a response to GPU pressure. The 2 GiB reservation is what guarantees Plex can allocate, so this only happens when Plex needs *more* than the reservation at that moment: realistically two or more concurrent 4K HDR tone-mapping transcodes.
 
-`PLEX_TOKEN` is written to `generated.env` by `bootstrap.py`. Compose resolves environment values at container-*create* time, so a plain `restart` keeps the old empty value — the container has to be recreated:
+Confirm it's actually VRAM and not the usual suspects:
 
 ```bash
-python3 scripts/bootstrap.py                              # if the token was never obtained
-docker compose --env-file .env.docker up -d gpu-arbiter   # recreate with the token
-docker logs gpu-arbiter --tail 5                          # expect "plex_token=set"
+docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+curl -s http://127.0.0.1:11434/api/ps    # is a model resident?
 ```
 
-A `401` in the log instead means the token is stale — rotate it per [operations.md](operations.md#plex-token).
+If VRAM is near the 6 GB ceiling with a model resident, in increasing order of cost:
+
+1. Raise `OLLAMA_GPU_OVERHEAD_BYTES` (e.g. `3221225472` for 3 GiB) and `docker compose --env-file .env.docker up -d ollama`.
+2. Shorten `OLLAMA_KEEP_ALIVE` so the window of exposure is smaller.
+3. Run a smaller model.
+4. Unload on demand: `curl -s http://127.0.0.1:11434/api/generate -d '{"model":"<model>","keep_alive":0}'`.
+
+If VRAM is *not* the problem, this is the ordinary "Plex isn't using hardware transcoding" path above — check Plex Pass first.
+
+[decisions.md](decisions.md#local-ai-on-the-transcode-gpu) documents the Plex-polling preemption daemon that was built for this case and set aside, if it ever becomes worth reviving.
+
+---
+
+## A container can't reach Ollama
+
+Ollama listens only on the `ai` network and host loopback. There is no `ollama.lan` — Caddy is deliberately not on that network.
+
+```bash
+# From the host
+curl -s http://127.0.0.1:11434/api/tags
+
+# From the consumer container — must be on the `ai` network
+docker inspect -f '{{json .NetworkSettings.Networks}}' <container> | tr ',' '\n' | grep -o '"[a-z_]*"' | head
+```
+
+If the container isn't on `ai`, add `ai` to its `networks:` list in `docker-compose.yml` and `docker compose --env-file .env.docker up -d <service>`. Use `http://ollama:11434` — not `localhost`, and not the host LAN IP.
 
 ---
 
