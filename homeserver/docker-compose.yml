@@ -567,6 +567,13 @@ services:
     environment:
       - TZ=${TZ}
       - CHESS_COACH_DATA_DIR=/data
+      # Big-box engine tuning (config.toml defaults suit laptop dev). The
+      # 6146s have 24c/48t across two sockets; 16 threads + 4G hash leaves
+      # plenty for plex transcodes and the arr stack.
+      - CHESS_COACH_ENGINE_THREADS=16
+      - CHESS_COACH_ENGINE_HASH_MB=4096
+      - CHESS_COACH_SCAN_MOVETIME_MS=250
+      - CHESS_COACH_DEEP_MOVETIME_MS=3000
       - LICHESS_TOKEN=${LICHESS_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - NVIDIA_VISIBLE_DEVICES=all
@@ -586,7 +593,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G
+          # 4G engine hash + python/web overhead.
+          memory: 6G
 
   # ---------------------------------------------------------------------------
   # ADGUARD HOME — tailnet split-DNS resolver
