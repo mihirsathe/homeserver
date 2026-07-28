@@ -46,6 +46,12 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
 
 ### 3a — Tailscale
 
+Two nodes join the tailnet: the Unraid host itself, and a `ts-caddy` sidecar
+container that exists purely to give Caddy an IP address of its own. That
+second node is why admin URLs can be port-free — Unraid's web GUI keeps the
+host's `:80`, and Caddy binds `:80` on its own address instead of fighting for
+the host's. Both nodes carry `tag:server`, so one ACL rule covers both.
+
 1. Create a tailnet at [login.tailscale.com](https://login.tailscale.com/) if you don't already have one.
 2. In the admin console → **Access controls**, add tags and an ACL roughly like:
    ```json
@@ -57,7 +63,7 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
      "acls": [
        { "action": "accept",
          "src": ["tag:admin"],
-         "dst": ["tag:server:81,32400,53"] }
+         "dst": ["tag:server:80,32400,53"] }
      ],
      "ssh": [
        { "action": "accept",
@@ -71,6 +77,17 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
    ```
    Open the auth URL, sign in, confirm the tags. The Unraid host now has a stable `mediaserver.<tailnet>.ts.net` hostname (MagicDNS).
 4. Install Tailscale on every admin device (laptop, phone). In the admin console, edit each device → add `tag:admin`.
+5. **Generate an auth key for the `ts-caddy` sidecar** — admin console → Settings
+   → Keys → Generate auth key:
+   - **Reusable**: yes
+   - **Ephemeral**: **no** — this matters. Ephemeral nodes are removed when they
+     go offline and rejoin with a *different* IP, which would silently orphan
+     AdGuard's `*.lan` rewrite every time the container restarted.
+   - **Tags**: `tag:server`
+
+   Put it in `.env` as `TS_AUTHKEY`. It's only used for the sidecar's first
+   login; after that the node identity persists in `/mnt/user/appdata/ts-caddy`,
+   so the key expiring later is harmless.
 
 After this, the *arr/SAB/Seerr/Unraid webUIs are reachable only from tagged admin devices.
 
@@ -107,6 +124,33 @@ python3 scripts/generate-configs.py
 
 ## Step 5 — Start the stack
 
+### 5a — Bring up the Caddy sidecar first and learn its address
+
+`CADDY_TAILNET_IP` is the one value that can't be known ahead of time — the
+node has to exist before it has an address, and AdGuard's `*.lan` rewrite has
+to point at it. So the sidecar goes up on its own first:
+
+```bash
+docker compose --env-file .env.docker up -d ts-caddy
+docker exec ts-caddy tailscale ip -4          # e.g. 100.64.1.9
+```
+
+Put that in `.env` as `CADDY_TAILNET_IP`, then regenerate so AdGuard's wildcard
+points at it:
+
+```bash
+python3 scripts/generate-configs.py --force-overwrite
+```
+
+You only ever do this once. The node keeps its identity — and its IP — across
+restarts because its state lives in `/mnt/user/appdata/ts-caddy`.
+
+If `tailscale ip -4` returns nothing, the node hasn't authenticated:
+`docker logs ts-caddy` will say why (an expired key, or a key that isn't
+authorized for `tag:server`).
+
+### 5b — Start everything else
+
 Before running, grab a fresh claim token from `https://plex.tv/claim` and paste it into `.env` as `PLEX_CLAIM` — it expires in 4 minutes, so do this immediately before the command below.
 
 ```bash
@@ -138,13 +182,13 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally, open **Seerr** at `http://seerr.lan:81/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
+Finally, open **Seerr** at `http://seerr.lan/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
-Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan:81/` and it's already bound to the Plex server with full history access.
+Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan/` and it's already bound to the Plex server with full history access.
 
 ### Profilarr first-run
 
-Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan:81/` and:
+Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan/` and:
 
 1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name. Note: these are *internal* container-to-container URLs, not the Caddy-fronted `radarr.lan` form — Caddy doesn't sit between containers on the same docker network.
 2. **Link a database** — Databases → Add. The Dictionarry DB is the default curated source; TRaSH Guides can be linked alongside it. Do not also run Recyclarr against these *arrs — they will fight.
@@ -162,6 +206,20 @@ resolves `*.lan` (radarr.lan, sonarr.lan, sab.lan, …) without per-device
 config — no `/etc/hosts` editing, works on iOS/Android, scales to as many
 devices as you add later.
 
+### Two IPs, two jobs — don't mix them up
+
+This is the one part that's easy to get backwards:
+
+| Value | Whose IP | What lives there |
+|-------|----------|------------------|
+| `TAILNET_HOST_IP` | the Unraid **host** | AdGuard on `:53`, the Unraid GUI on `:80` |
+| `CADDY_TAILNET_IP` | the **`ts-caddy` node** | Caddy on `:80` — every `*.lan` admin UI |
+
+The Tailscale console rule points at `TAILNET_HOST_IP` (that's where the
+resolver listens). AdGuard's wildcard *answers* with `CADDY_TAILNET_IP` (that's
+where the proxy listens). Swap them and `*.lan` resolves to the Unraid GUI
+instead of to Caddy.
+
 ### One-time setup
 
 1. **Get the Unraid host's tailnet IP** (run on the Unraid terminal):
@@ -171,7 +229,7 @@ devices as you add later.
    ```
    Put this in `homeserver/.env` as `TAILNET_HOST_IP`. If you didn't fill it
    in before running `generate-configs.py`, do it now and re-run with
-   `--force-overwrite` so the AdGuard rewrite rule has the right answer.
+   `--force-overwrite`.
 
 2. **Tailscale admin console** → DNS:
    - Under "Nameservers" → "Add nameserver" → "Custom..." → enter
@@ -183,11 +241,38 @@ devices as you add later.
 
 3. **Verify on any tailnet device**:
    ```
-   nslookup radarr.lan        # should return TAILNET_HOST_IP
-   curl -I http://radarr.lan:81  # should return a 200 / 302 from Caddy
+   nslookup radarr.lan        # should return CADDY_TAILNET_IP
+   curl -I http://radarr.lan  # should return a 200 / 302 from Caddy
    ```
 
-That's it. Adding new admin services later is a one-row edit to
+### The Unraid GUI stays off Caddy on purpose
+
+`http://DellBox/Main` (or whatever you named the server in Settings →
+Identification) keeps working exactly as it always has, on the host's own
+`:80`. Over Tailscale the same GUI is at `http://<TAILNET_HOST_IP>/`.
+
+That path is deliberately **not** proxied, because it's the one that has to
+work when everything else doesn't. It has no Docker dependency, so it survives:
+
+- the array being stopped (Docker is down, so every container is down)
+- a `docker.img` problem or a bad image pull
+- Caddy or the `ts-caddy` sidecar being dead
+- AdGuard being dead, or the split-DNS rule being wrong
+
+`unraid.lan` is also routed through Caddy as a convenience alias, and it's
+fine to use day to day — but it inherits every one of Caddy's failure modes.
+When something is broken, go to the host IP directly.
+
+One operational caveat, shared with the existing `gluetun` → `sabnzbd`/
+`prowlarr` arrangement: **`caddy` lives inside `ts-caddy`'s network namespace,
+so if `ts-caddy` is recreated, `caddy` must be restarted too** or it keeps
+pointing at a namespace that no longer exists:
+
+```bash
+docker compose --env-file .env.docker up -d ts-caddy && docker restart caddy
+```
+
+Adding new admin services later is a one-row edit to
 `CADDY_SERVICES` in `generate-configs.py` and a re-run; the new hostname
 inherits the same wildcard rule, no DNS work required.
 
@@ -195,7 +280,7 @@ inherits the same wildcard rule, no DNS work required.
 
 `generate-configs.py` auto-generates `ADGUARD_ADMIN_PASS` (a UUID) and
 pre-seeds it into `AdGuardHome.yaml` as the admin user. Read it from
-`generated.env` when you want to log into `http://adguard.lan:81/`:
+`generated.env` when you want to log into `http://adguard.lan/`:
 
 ```bash
 grep ^ADGUARD_ADMIN_PASS generated.env | cut -d= -f2

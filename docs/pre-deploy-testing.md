@@ -214,7 +214,7 @@ Step 6.5):
 nslookup radarr.lan                     # expect TAILNET_HOST_IP
 for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
   printf "%-12s " "$svc"
-  curl -fsS -o /dev/null -w "%{http_code}\n" "http://${svc}.lan:81/"
+  curl -fsS -o /dev/null -w "%{http_code}\n" "http://${svc}.lan/"
 done
 ```
 
@@ -312,11 +312,11 @@ Expected: a `MediaContainer` XML identity blob. If it times out, the router port
 nslookup radarr.lan                        # expect TAILNET_HOST_IP
 
 # Each admin UI responds through Caddy on :80
-curl -fsS http://radarr.lan:81/ping
-curl -fsS http://sonarr.lan:81/ping
-curl -fsS http://prowlarr.lan:81/ping
-curl -fsS http://sab.lan:81/api?mode=version
-curl -fsS http://seerr.lan:81/api/v1/status | jq .
+curl -fsS http://radarr.lan/ping
+curl -fsS http://sonarr.lan/ping
+curl -fsS http://prowlarr.lan/ping
+curl -fsS http://sab.lan/api?mode=version
+curl -fsS http://seerr.lan/api/v1/status | jq .
 ```
 
 All should succeed. Drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin services are tailnet-only.
@@ -324,9 +324,9 @@ All should succeed. Drop off the tailnet (`tailscale down` or disable the client
 **Boundary property check** — backend ports must NOT be reachable from anywhere except host loopback. From a tailnet device that is *not* the Unraid host:
 
 ```bash
-# Direct backend ports must time out / refuse. Only :81 (Caddy), :80 (Unraid
-# GUI), :32400 (Plex), :5055 (Seerr) and :53 (AdGuard) listen on a
-# non-loopback interface.
+# Direct backend ports must time out / refuse. On the HOST's tailnet IP only
+# :80 (Unraid GUI), :32400 (Plex), :5055 (Seerr) and :53 (AdGuard) answer.
+# Caddy lives on its own tailnet node (CADDY_TAILNET_IP), not on the host.
 for p in 6767 6868 7878 8080 8181 8686 8989 9696; do
   printf "%-5s " "$p"
   timeout 3 bash -c "</dev/tcp/<TAILNET_HOST_IP>/$p" 2>&1 | head -c 60; echo

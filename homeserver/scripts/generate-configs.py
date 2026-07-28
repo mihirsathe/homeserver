@@ -186,7 +186,7 @@ def prompt_for_missing(env: dict) -> dict:
 
     missing = [
         k for k in [
-            "TZ", "TAILNET_HOST_IP",
+            "TZ", "TAILNET_HOST_IP", "TS_AUTHKEY",
             "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
             "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
             "USENET_HOST", "USENET_USER", "USENET_PASS",
@@ -208,11 +208,21 @@ def prompt_for_missing(env: dict) -> dict:
                    hint="e.g. America/New_York, America/Los_Angeles, Europe/London",
                    validator=validate_tz)
 
-    if "TAILNET_HOST_IP" in missing:
+    if "TAILNET_HOST_IP" in missing or "TS_AUTHKEY" in missing:
         print("--- Tailscale ---")
-        get_or_ask("TAILNET_HOST_IP", "Unraid host's tailnet IPv4",
-                   hint="run `tailscale ip -4` on the Unraid host (e.g. 100.64.1.7)",
-                   validator=validate_ip)
+        if "TAILNET_HOST_IP" in missing:
+            get_or_ask("TAILNET_HOST_IP", "Unraid host's tailnet IPv4",
+                       hint="run `tailscale ip -4` on the Unraid host (e.g. 100.64.1.7)",
+                       validator=validate_ip)
+        if "TS_AUTHKEY" in missing:
+            # Joins the ts-caddy sidecar to the tailnet as its own node so
+            # Caddy gets an IP of its own and never contends for the host's
+            # port 80 (which the Unraid GUI owns).
+            get_or_ask("TS_AUTHKEY", "Tailscale auth key for the Caddy sidecar",
+                       hint="admin console → Settings → Keys → Generate auth key. "
+                            "REUSABLE, NOT ephemeral, tagged tag:server. An ephemeral "
+                            "node gets a new IP whenever it restarts, which breaks "
+                            "AdGuard's *.lan rewrite.")
 
     # Network / Plex
     net_missing = [k for k in ["PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
@@ -624,11 +634,10 @@ refresh_users_on_startup = 0
 # have no bridge alias of their own — sabnzbd:8080 NXDOMAINs from inside
 # the Caddy container.
 #
-# The site addresses below carry no port: Caddy listens on :80 inside its
-# container and compose publishes that on the host's CADDY_HTTP_PORT (81 by
-# default, because Unraid's web GUI owns :80). Caddy strips the port from the
-# Host header before matching, so `http://radarr.lan` still matches a request
-# that arrived as `Host: radarr.lan:81` — no port belongs in the Caddyfile.
+# The site addresses below carry no port and need none: Caddy binds :80 inside
+# ts-caddy's netns, which is that sidecar's own tailnet node — not the host,
+# whose :80 belongs to the Unraid web GUI. AdGuard points *.lan at
+# CADDY_TAILNET_IP, so `http://radarr.lan` lands here on :80 directly.
 # ---------------------------------------------------------------------------
 HOSTNAME_SUFFIX = "lan"
 
@@ -644,6 +653,27 @@ CADDY_SERVICES: dict[str, tuple[str, int]] = {
     "profilarr": ("profilarr", 6868),
     "adguard":   ("adguard",   80),
 }
+
+def caddy_services(env: dict) -> dict:
+    """CADDY_SERVICES plus the host-targeted routes that depend on .env.
+
+    unraid.lan is a *convenience alias* for the Unraid web GUI, not its
+    guaranteed path. The GUI keeps the host's own :80 — reachable at
+    http://<server-name>/ on the LAN and http://<host tailnet IP>/ over
+    Tailscale — because that path has no Docker dependency and therefore
+    survives a stopped array or a broken Caddy. Routing it through Caddy as
+    well just saves typing an IP; if Caddy is down, use the direct path.
+
+    The upstream is the host's LAN IP rather than a container name: from
+    inside ts-caddy's netns the host is an ordinary LAN peer reached out
+    through the docker bridge gateway.
+    """
+    services = dict(CADDY_SERVICES)
+    host_ip = env.get("PLEX_LAN_IP", "").strip()
+    if host_ip:
+        services["unraid"] = (host_ip, 80)
+    return services
+
 
 def write_caddy(env: dict):
     dest = CONFIGS / "caddy"
@@ -665,8 +695,9 @@ def write_caddy(env: dict):
         "}",
         "",
     ]
-    pad = max(len(name) for name in CADDY_SERVICES)
-    for name, (upstream_host, upstream_port) in CADDY_SERVICES.items():
+    services = caddy_services(env)
+    pad = max(len(name) for name in services)
+    for name, (upstream_host, upstream_port) in services.items():
         host = f"{name}.{HOSTNAME_SUFFIX}".ljust(pad + len(HOSTNAME_SUFFIX) + 1)
         lines.append(
             f"http://{host}  {{ import common; reverse_proxy {upstream_host}:{upstream_port} }}"
@@ -705,14 +736,22 @@ def write_adguard(env: dict):
     dest = CONFIGS / "adguard"
     dest.mkdir(parents=True, exist_ok=True)
 
-    tailnet_ip = env.get("TAILNET_HOST_IP", "").strip()
+    # The wildcard answers with CADDY's tailnet IP, not the host's. Caddy runs
+    # in the ts-caddy sidecar's network namespace and therefore joins the
+    # tailnet as its own node with its own 100.x address — that is the address
+    # every *.lan name has to resolve to. The host's own tailnet IP stays
+    # pointed at the Unraid GUI on :80 and at AdGuard on :53.
+    caddy_ip = env.get("CADDY_TAILNET_IP", "").strip()
     admin_pass = env.get("ADGUARD_ADMIN_PASS", "").strip()
 
-    if not tailnet_ip:
-        print("  ⚠ TAILNET_HOST_IP not set — AdGuard wildcard rewrite will be a placeholder")
-        print("    Run `tailscale ip -4` on the Unraid host, set TAILNET_HOST_IP in .env,")
-        print("    re-run generate-configs.py --force-overwrite, and restart adguard.")
-        tailnet_ip = "0.0.0.0"  # placeholder — adguard won't answer until user fixes this
+    if not caddy_ip:
+        print("  ⚠ CADDY_TAILNET_IP not set — AdGuard wildcard rewrite will be a placeholder")
+        print("    Bring the sidecar up first, then read its address:")
+        print("      docker compose --env-file .env.docker up -d ts-caddy")
+        print("      docker exec ts-caddy tailscale ip -4")
+        print("    Put that in .env as CADDY_TAILNET_IP, re-run this script with")
+        print("    --force-overwrite, and restart adguard.")
+        caddy_ip = "0.0.0.0"  # placeholder — adguard won't answer until user fixes this
 
     pw_hash = _bcrypt_via_docker(admin_pass) if admin_pass else ""
     user_block = ""
@@ -723,7 +762,7 @@ def write_adguard(env: dict):
 """
     else:
         # No hash means AdGuard's first-launch wizard runs — reach it through
-        # Caddy at http://adguard.lan:81/ and pick an admin password manually
+        # Caddy at http://adguard.lan/ and pick an admin password manually
         # that one time.
         print("  ℹ AdGuard admin user not pre-seeded — first-launch wizard will run")
         user_block = "users: []\n"
@@ -761,11 +800,12 @@ dns:
   blocking_mode: default
   cache_size: 4194304
   rewrites:
-    # Wildcard *.{HOSTNAME_SUFFIX} → host's tailnet IP. Tailscale's split-DNS
-    # rule sends every {HOSTNAME_SUFFIX} query here, so any new admin service
-    # added to CADDY_SERVICES resolves automatically without DNS changes.
+    # Wildcard *.{HOSTNAME_SUFFIX} → the ts-caddy node's tailnet IP (NOT the
+    # Unraid host's). Tailscale's split-DNS rule sends every
+    # {HOSTNAME_SUFFIX} query here, so any new admin service added to
+    # CADDY_SERVICES resolves automatically without DNS changes.
     - domain: '*.{HOSTNAME_SUFFIX}'
-      answer: {tailnet_ip}
+      answer: {caddy_ip}
 filtering:
   protection_enabled: true
   filtering_enabled: true
@@ -897,8 +937,12 @@ def main() -> None:
     write_merged_docker_env()
 
     # Step 4: Final validation — everything required must now be set.
+    # CADDY_TAILNET_IP is deliberately absent: it can't be known until the
+    # ts-caddy sidecar has authenticated and been assigned an address, which
+    # happens after this script's first run. write_adguard() warns and emits a
+    # placeholder; the second --force-overwrite run fills it in.
     required = [
-        "TZ", "TAILNET_HOST_IP",
+        "TZ", "TAILNET_HOST_IP", "TS_AUTHKEY",
         "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
         "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",

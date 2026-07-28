@@ -43,16 +43,26 @@
 #                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
 #                  Prowlarr via gluetun). Blocks a popped frontend container
 #                  from pivoting straight into the downloader plane.
-#   caddy        — joined to all three planes so the reverse proxy can
-#                  reach every backend by docker-DNS name.
+#   ts-caddy     — joined to all three planes so caddy, which shares this
+#                  sidecar's netns, can reach every backend by docker-DNS
+#                  name. caddy itself declares no networks of its own.
 #
 # ADMIN INGRESS (the only way into admin UIs from the tailnet):
-#   tailnet device → tailscale → host:81 → caddy → backend by name.
-#   Backend ports are bound to 127.0.0.1 only (loopback) — they exist for
-#   bootstrap.py + host-side debugging, never for direct LAN/Tailscale
-#   access. AdGuard Home (in the stack) answers *.lan DNS queries via a
-#   wildcard rewrite to TAILNET_HOST_IP, configured as a Tailscale
-#   restricted nameserver in the admin console.
+#   tailnet device → tailscale → ts-caddy node :80 → caddy → backend by name.
+#   Caddy runs inside ts-caddy's netns, so it serves on that node's own
+#   tailnet IP and publishes nothing on the host. Backend ports are bound to
+#   127.0.0.1 only (loopback) — they exist for bootstrap.py + host-side
+#   debugging, never for direct LAN/Tailscale access. AdGuard Home (in the
+#   stack) answers *.lan DNS queries via a wildcard rewrite to
+#   CADDY_TAILNET_IP, configured as a Tailscale restricted nameserver in the
+#   admin console.
+#
+# THE UNRAID GUI IS DELIBERATELY NOT BEHIND CADDY:
+#   It keeps the host's :80 (http://DellBox/Main, http://<host tailnet IP>/).
+#   That path has no Docker dependency, so it survives a stopped array, a
+#   broken image pull, and a dead Caddy — the situations where you most need
+#   a way in. `unraid.lan` is offered through Caddy as a convenience alias
+#   only; it is never the guaranteed path.
 #
 # PUBLIC-FACING:
 #   Only plex is reachable from the internet — TCP 32400 is port-forwarded
@@ -577,6 +587,71 @@ services:
           memory: 256M
 
   # ---------------------------------------------------------------------------
+  # TS-CADDY — a second Tailscale node that exists only to give Caddy an IP
+  #
+  # WHY THIS EXISTS: two services cannot both own port 80 on one IP address.
+  # Unraid's web GUI owns the host's :80 and must keep it — it is the one
+  # admin surface that works with Docker stopped (array down, docker.img
+  # maintenance, a bad image pull), so fronting it with a container would
+  # make the emergency path depend on the thing you'd be trying to fix.
+  # Admin URLs still have to be port-free (`http://radarr.lan`, no port suffix),
+  # so Caddy needs its own address rather than its own port.
+  #
+  # This sidecar joins the tailnet as a separate node and gets its own
+  # 100.x address. Caddy shares its netns, binds :80 there, and the host's
+  # port space is never touched. The alternative — a second LAN IP via
+  # macvlan/ipvlan on br0 — was rejected: the host cannot reach macvlan
+  # children on its own parent interface, which breaks Tailscale subnet
+  # routing to exactly the address we'd be trying to publish.
+  #
+  # The node's IP is STABLE as long as /var/lib/tailscale persists, which is
+  # why state is on appdata and why the auth key must NOT be ephemeral —
+  # an ephemeral node is torn down when it goes offline and comes back with
+  # a different IP, orphaning AdGuard's wildcard rewrite.
+  #
+  # TS_ACCEPT_DNS=false is load-bearing. With MagicDNS accepted, tailscaled
+  # rewrites /etc/resolv.conf in this netns; `*.lan` would then resolve via
+  # AdGuard back to this very node instead of via docker DNS to the backend
+  # containers, and every proxy hop would loop.
+  # ---------------------------------------------------------------------------
+  ts-caddy:
+    image: tailscale/tailscale:latest
+    container_name: ts-caddy
+    hostname: ${CADDY_TS_HOSTNAME:-caddy}   # → <hostname>.<tailnet>.ts.net
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_ACCEPT_DNS=false
+      - TS_EXTRA_ARGS=--advertise-tags=tag:server
+      - TZ=${TZ}
+    volumes:
+      - /mnt/user/appdata/ts-caddy:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    networks:
+      # Joined to all three planes so Caddy — sharing this netns — can resolve
+      # every backend by docker-DNS name, exactly as it did before.
+      - frontend
+      - automation
+      - downloaders
+    restart: unless-stopped
+    healthcheck:
+      # `tailscale ip -4` only succeeds once the node is authenticated and has
+      # been assigned an address — which is precisely the precondition Caddy
+      # needs before it binds.
+      test: ["CMD-SHELL", "tailscale ip -4 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
   # CADDY — single ingress for every admin UI
   #
   # Each backend is reachable at http://<name>.lan/ — Caddy routes by Host
@@ -595,24 +670,20 @@ services:
   # admin off — there's nothing pushing config dynamically, the localhost
   # admin API on :2019 is dead weight + a small attack surface.
   #
-  # HOST PORT IS 81, NOT 80. Unraid's own web GUI owns :80 on a stock install
-  # and it is the most reliable way onto the box — moving it to make room for
-  # Caddy trades a dependable fallback for cosmetic URLs. Caddy still listens
-  # on :80 *inside* the container, so the Caddyfile's `http://<name>.lan` site
-  # addresses are unchanged; Caddy strips the port from the Host header before
-  # matching, so a request arriving as `Host: radarr.lan:81` still routes.
-  # Override with CADDY_HTTP_PORT in .env if 81 is taken — and update the
-  # Tailscale ACL port list to match.
+  # CADDY PUBLISHES NO HOST PORTS. It shares ts-caddy's network namespace and
+  # binds :80 on that node's *own* tailnet IP. Unraid's web GUI keeps host :80
+  # untouched, so `http://DellBox/Main` works exactly as it always has — and
+  # keeps working when Docker is down (array stopped, image maintenance),
+  # which a Caddy-fronted GUI could not. See ts-caddy below.
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
     container_name: caddy
-    networks:
-      - frontend
-      - automation
-      - downloaders
-    ports:
-      - "${CADDY_HTTP_PORT:-81}:80"
+    # Owns no network of its own — ts-caddy's netns provides both the tailnet
+    # address Caddy serves on and the docker-DNS access to every backend.
+    network_mode: "service:ts-caddy"
+    depends_on:
+      ts-caddy: { condition: service_healthy }
     volumes:
       - ${STACK_DIR}/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - /mnt/user/appdata/caddy:/data

@@ -169,7 +169,7 @@ For UI access during an outage, you can also bypass DNS by sending the
 Host header to the host directly from any tailnet device:
 
 ```bash
-curl -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:81/ping
+curl -H "Host: radarr.lan" http://<CADDY_TAILNET_IP>/ping
 ```
 
 **Recovery**:

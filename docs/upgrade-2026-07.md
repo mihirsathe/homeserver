@@ -62,11 +62,16 @@ with a manual step outside the box.
 
 **After:**
 
-- Two new containers: **`caddy`** (binds host **`:81`**, reverse-proxies by Host
-  header) and **`adguard`** (binds host **`:53`** TCP+UDP, answers `*.lan` with
-  your tailnet IP). Admin URLs are therefore `http://radarr.lan:81/`. Caddy
-  listens on `:80` *inside* its container; only the host publish is 81, so the
-  Caddyfile carries no port and needs no change if you move it.
+- Three new containers: **`ts-caddy`** (a Tailscale sidecar that joins the
+  tailnet as its own node purely to hold an IP), **`caddy`** (runs inside that
+  sidecar's netns and binds `:80` there), and **`adguard`** (binds host `:53`
+  TCP+UDP, answers `*.lan` with the sidecar's IP). Admin URLs are
+  `http://radarr.lan` — no port.
+- **Caddy publishes nothing on the host.** Unraid's web GUI keeps `:80`
+  untouched, so `http://DellBox/Main` is unaffected — and stays working when
+  Docker is down, which is why the GUI is deliberately not proxied. Two
+  services can't share one IP's port 80; giving Caddy its own address rather
+  than its own port is what buys port-free URLs without evicting the GUI.
 - Every admin backend port rebinds from `0.0.0.0:<port>` → **`127.0.0.1:<port>`**.
   They become unreachable from the LAN and from Tailscale — only Caddy is.
   Plex (`32400`) and Seerr (`5055`) stay published on all interfaces.
@@ -250,30 +255,27 @@ grep -A15 '^\[servers\]'    configs/sabnzbd/sabnzbd.ini
 grep -A30 '^\[categories\]' configs/sabnzbd/sabnzbd.ini
 ```
 
-### 2.5 Port 81 is free
+### 2.5 No new host ports are claimed
 
-Caddy publishes on host **`:81`**, deliberately leaving `:80` to Unraid's own
-web GUI — the GUI is the most dependable way onto the box and it stays exactly
-where it is. Confirm 81 is actually free:
+Caddy publishes nothing on the host — it binds `:80` inside the `ts-caddy`
+sidecar's network namespace, which is a separate tailnet node with its own IP.
+Confirm nothing you care about changes hands:
 
 ```bash
-ss -tlnp | grep -w ':81' || echo "port 81 free"
-ss -tlnp | grep -w ':80'   # expect nginx — Unraid's GUI, leave it alone
+ss -tlnp | grep -w ':80'    # expect nginx — Unraid's GUI. It KEEPS this.
+ss -tulnp | grep -w ':53'   # must be free — see 2.6
 ```
 
-- **81 free** → nothing to do.
-- **81 taken** → set `CADDY_HTTP_PORT` in `.env` to something that isn't
-  (`8088`, `8010`, …) before Section 3.5, and use that port everywhere this
-  document says `:81`, including the Tailscale ACL in 3.6:
+Three different things listen on "port 80" after this upgrade, on three
+different addresses, which is why none of them collide:
 
-  ```bash
-  echo "CADDY_HTTP_PORT=8088" >> .env
-  ```
+| Listener | Address | Reachable as |
+|----------|---------|--------------|
+| Unraid nginx | the host's LAN + tailnet IPs | `http://DellBox/`, `http://<TAILNET_HOST_IP>/` |
+| Caddy | the `ts-caddy` node's tailnet IP | `http://radarr.lan` and every other `*.lan` |
+| AdGuard's own admin UI | its container IP on the `frontend` bridge | only via Caddy, at `adguard.lan` — never published to the host |
 
-Nothing needs to change in the Caddyfile — Caddy listens on `:80` inside the
-container regardless, and strips the port from the `Host` header before matching
-its site blocks, so `Host: radarr.lan:8088` still routes to the `http://radarr.lan`
-block.
+You need a Tailscale auth key before Section 3 — see 3.3.
 
 ### 2.6 Port 53 is free
 
@@ -393,9 +395,10 @@ Ordered fallbacks if something does go wrong:
 
 1. **Existing SSH session** — `localhost:<port>` for everything.
 2. **New SSH over Tailscale** — unaffected by the ACL port list.
-3. **Unraid web GUI on `http://<lan-ip>/`** — still on `:80`, which is exactly
-   why Caddy was moved to `:81`. Works from the LAN with no Tailscale at all,
-   and gives you a terminal.
+3. **Unraid web GUI on `http://<lan-ip>/` or `http://DellBox/`** — still on
+   `:80`, untouched by this upgrade, and Docker-independent. Works from the LAN
+   with no Tailscale at all, works with the array stopped, and gives you a
+   terminal.
 4. **iDRAC / physical console** — if the network is entirely gone.
 
 Realistically you have to break three independent things before you're locked
@@ -407,13 +410,14 @@ out, and this upgrade touches none of them.
 - [ ] 2.2 All API keys present; `STACK_DIR` correct; env files copied to `/boot`
 - [ ] 2.3 Appdata backup exists **and `tar -tzf` lists its contents**
 - [ ] 2.4 `configs/` snapshotted to `/boot`; SAB servers/categories recorded
-- [ ] 2.5 Port 80 free (or Unraid GUI moved off it)
+- [ ] 2.5 Host port map understood; Unraid keeps :80
 - [ ] 2.6 Port 53 free (or VM-manager dnsmasq dealt with)
 - [ ] 2.7 ≥5 GB free on appdata; no individual array disk near zero
 - [ ] 2.8 `compose ps`, resolved config, and per-service pings captured
 - [ ] 2.9 Image digests written to `/boot`
 - [ ] 2.10 `media_stack_up` env-file checked
-- [ ] 2.11 Tailscale up; tailnet IP noted; SSH session held open
+- [ ] 2.11 Tailscale up; tailnet IP noted; fallback path confirmed
+- [ ] 3.3 prerequisite: a reusable, NON-ephemeral `tag:server` auth key in hand
 
 ---
 
@@ -449,16 +453,45 @@ grep '^TAILNET_HOST_IP=' .env                # expect a 100.x.x.x address
 If it's blank or wrong, AdGuard's wildcard rewrite gets a `0.0.0.0` placeholder
 and nothing on the tailnet will resolve `*.lan`.
 
-### 3.3 Pre-pull the two new images
+### 3.3 Get a Tailscale auth key and bring up the sidecar
 
-Do this **before** regenerating configs. `generate-configs.py` shells out to
-`caddy:2-alpine`'s `caddy hash-password` to bcrypt the AdGuard admin password;
-if the image isn't on disk it degrades to AdGuard's first-launch wizard instead.
+Caddy needs an IP of its own, which means a second tailnet node. In the
+Tailscale admin console → **Settings → Keys → Generate auth key**:
+
+- **Reusable**: yes
+- **Ephemeral**: **NO.** This matters more than it looks. Ephemeral nodes are
+  deleted when they go offline and rejoin with a *different* IP — which would
+  silently orphan AdGuard's `*.lan` rewrite on every container restart.
+- **Tags**: `tag:server`
 
 ```bash
-docker compose --env-file .env.docker pull caddy adguard
-mkdir -p /mnt/user/appdata/adguard/work /mnt/user/appdata/caddy
+cd /mnt/user/appdata/homeserver/homeserver
+grep -q '^TS_AUTHKEY=' .env || echo "TS_AUTHKEY=tskey-auth-REPLACE_ME" >> .env
+$EDITOR .env                              # paste the real key
+
+docker compose --env-file .env.docker pull ts-caddy caddy adguard
+mkdir -p /mnt/user/appdata/adguard/work /mnt/user/appdata/caddy /mnt/user/appdata/ts-caddy
+
+docker compose --env-file .env.docker up -d ts-caddy
+docker exec ts-caddy tailscale ip -4      # e.g. 100.64.1.9
 ```
+
+Record that address into `.env` — it's what AdGuard will hand out for `*.lan`:
+
+```bash
+echo "CADDY_TAILNET_IP=$(docker exec ts-caddy tailscale ip -4)" >> .env
+grep '^CADDY_TAILNET_IP=' .env            # sanity-check: a 100.x address
+```
+
+If `tailscale ip -4` prints nothing, the node didn't authenticate —
+`docker logs ts-caddy` says why (expired key, or a key not authorized for
+`tag:server`). Fix it before continuing; `generate-configs.py` will otherwise
+write a `0.0.0.0` placeholder into the AdGuard rewrite and nothing will resolve.
+
+The `caddy:2-alpine` pull above also matters for a second reason:
+`generate-configs.py` shells out to its `caddy hash-password` to bcrypt the
+AdGuard admin password, and falls back to AdGuard's first-launch wizard if the
+image isn't on disk yet.
 
 ### 3.4 Regenerate configs — the careful way
 
@@ -540,7 +573,8 @@ are already on disk. That's deliberate: config changes and image changes stay
 separately attributable.
 
 Wait ~60s, then confirm every service is `(healthy)`. If `caddy` or `adguard`
-is not running, it's almost certainly a port bind — go back to 2.5 / 2.6:
+is not running: for `adguard` it's almost certainly the `:53` bind (2.6); for
+`caddy` it's the sidecar not being healthy yet (3.3):
 
 ```bash
 docker logs caddy --tail 30
@@ -552,7 +586,8 @@ Prove Caddy routes correctly **from the host, without needing DNS yet**:
 ```bash
 for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
   printf '%-11s ' "$s"
-  curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: ${s}.lan" http://localhost:81/
+  curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: ${s}.lan" \
+       "http://$(docker exec ts-caddy tailscale ip -4)/"
 done
 ```
 
@@ -574,20 +609,24 @@ both pages before editing** — neither has an API-driven undo.
    `TAILNET_HOST_IP`. Toggle **Restrict to domain** on, set the domain to `lan`.
    Save.
 2. **Access controls** → change the `tag:admin → tag:server` destination port
-   list to `["tag:server:81,32400,53"]`, replacing the old per-service port list.
+   list to `["tag:server:80,32400,53"]`, replacing the old per-service port list.
    Save.
 
 Do #1 first and verify it before doing #2 — #2 is what actually removes your
 direct-port fallback. Leave the `ssh` stanza in the ACL alone; it's what governs
 Tailscale SSH and it is not affected by the port list.
 
-If you set a custom `CADDY_HTTP_PORT` in 2.5, use that number instead of `81`.
+Note which IP goes where — this is the easiest thing to get backwards. The
+console nameserver points at **`TAILNET_HOST_IP`** (where AdGuard listens on
+`:53`). AdGuard's wildcard *answers* with **`CADDY_TAILNET_IP`** (where Caddy
+listens on `:80`). Both nodes carry `tag:server`, so the one ACL rule covers
+the host's `:80` GUI and Caddy's `:80` alike.
 
 From your **Mac** (not the server):
 
 ```bash
-nslookup radarr.lan            # expect your TAILNET_HOST_IP
-curl -I http://radarr.lan:81/   # expect 200/302 from Caddy
+nslookup radarr.lan            # expect CADDY_TAILNET_IP (not the host's)
+curl -I http://radarr.lan/   # expect 200/302 from Caddy
 curl -I http://<lan-ip>/        # Unraid GUI, still on :80, untouched
 ```
 
@@ -649,7 +688,8 @@ databases. That migration is the one-way step from 2.9.
 ```bash
 cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker ps
-# 13 services, all "running", all "(healthy)" — the 11 you had, plus caddy + adguard
+# 14 services, all "running", all "(healthy)" — the 11 you had, plus
+# ts-caddy + caddy + adguard
 ```
 
 ### 4.2 Endpoints answer at root
@@ -659,11 +699,11 @@ From the Mac:
 ```bash
 for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
   printf '%-11s ' "$s"
-  curl -fsS -o /dev/null -w '%{http_code}\n' "http://${s}.lan:81/" || echo FAIL
+  curl -fsS -o /dev/null -w '%{http_code}\n' "http://${s}.lan/" || echo FAIL
 done
 
-curl -fsS http://radarr.lan:81/ping             # OK
-curl -fsS 'http://sab.lan:81/api?mode=version'  # JSON with a version field
+curl -fsS http://radarr.lan/ping             # OK
+curl -fsS 'http://sab.lan/api?mode=version'  # JSON with a version field
 ```
 
 ### 4.3 Backend ports are actually locked down
@@ -678,12 +718,13 @@ done
 ```
 
 ```bash
-nc -z -w3 <TAILNET_HOST_IP> 81 && echo "81 open ✓ (Caddy)"
-nc -z -w3 <TAILNET_HOST_IP> 80 && echo "80 open ✓ (Unraid GUI, unchanged)"
+nc -z -w3 <TAILNET_HOST_IP>  80 && echo "host :80 open ✓ (Unraid GUI, unchanged)"
+nc -z -w3 <CADDY_TAILNET_IP> 80 && echo "caddy :80 open ✓ (admin ingress)"
 ```
 
-`81` (Caddy), `80` (Unraid GUI), `5055` (Seerr) and `32400` (Plex) staying open
-is expected and correct.
+On the **host's** tailnet IP, `80` (Unraid GUI), `53` (AdGuard), `5055` (Seerr)
+and `32400` (Plex) staying open is expected and correct. On the **ts-caddy**
+node, only `80`.
 
 ### 4.4 In-app integration — this is the one that matters
 
@@ -743,14 +784,40 @@ Add a movie to a Plex Watchlist on a family-tier account:
 - [ ] File lands in `/data/usenet/complete/movies/…` and hardlinks into `/data/media/movies/…`
 - [ ] Plex picks it up on the next scan
 
-### 4.8 Reboot persistence
+### 4.8 The emergency path still works
+
+The whole point of leaving the GUI off Caddy. Verify all three, because this is
+what you fall back to when the stack is broken:
+
+```bash
+curl -I http://DellBox/Main               # from the Mac, on the LAN
+curl -I http://<TAILNET_HOST_IP>/         # from the Mac, over Tailscale
+curl -I http://unraid.lan                 # convenience alias via Caddy
+```
+
+Then prove the first two are genuinely Docker-independent — stop Caddy and
+confirm they keep answering while `*.lan` goes dark:
+
+```bash
+docker stop caddy ts-caddy
+curl -I http://<TAILNET_HOST_IP>/         # still 200 — this is the guarantee
+curl -I http://radarr.lan                 # expected to fail now
+docker compose --env-file .env.docker up -d ts-caddy && docker restart caddy
+```
+
+That last line is the operational caveat worth remembering: **`caddy` lives in
+`ts-caddy`'s network namespace, so whenever `ts-caddy` is recreated, `caddy`
+must be restarted too** or it holds a reference to a namespace that no longer
+exists. Same relationship `sabnzbd` and `prowlarr` already have with `gluetun`.
+
+### 4.9 Reboot persistence
 
 The real test of 3.8. When convenient:
 
 ```bash
 # Stop the array from the Unraid GUI and restart it, then:
 docker compose --env-file .env.docker ps      # everything back up, healthy
-curl -fsS http://radarr.lan:81/ping              # from the Mac
+curl -fsS http://radarr.lan/ping              # from the Mac
 ```
 
 ---

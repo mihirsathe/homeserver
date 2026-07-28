@@ -33,31 +33,38 @@
 
 All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/homeserver/homeserver/` on the server).
 
-All admin UIs are reached at `http://<name>.lan:81/` through Caddy.
+All admin UIs are reached at `http://<name>.lan/` through Caddy.
 Backend ports bind `127.0.0.1:` only — they exist for `bootstrap.py` and
 host-side debugging, never direct LAN/Tailscale access. Plex bypasses
 Caddy and is the one publicly-forwarded service.
 
-Caddy publishes on host `:81`, not `:80` — Unraid's own web GUI owns `:80`
-and stays there, so the GUI remains a working way onto the box even if
-Caddy, AdGuard, or the tailnet DNS rule is broken. Override with
-`CADDY_HTTP_PORT` in `.env`.
+**Caddy publishes no host ports at all.** It shares the `ts-caddy` sidecar's
+network namespace, so it joins the tailnet as its own node and binds `:80` on
+that node's address. Unraid's web GUI keeps the host's `:80` untouched — which
+is the point: two services can't share one IP's port 80, and admin URLs had to
+stay port-free, so Caddy got its own *address* rather than its own port.
+
+That also makes the GUI the emergency path. `http://<server-name>/` on the LAN
+and `http://<host tailnet IP>/` over Tailscale have no Docker dependency, so
+they keep working with the array stopped or Caddy dead. `unraid.lan` is a
+convenience alias through Caddy, never the guaranteed route.
 
 | Container | Image | Admin URL | Backend port (loopback) | Role |
 |-----------|-------|-----------|-------------------------|------|
-| caddy | `caddy:2-alpine` | — | `:81` (Tailscale ingress → container `:80`) | Reverse proxy: Host-header routes `<name>.lan` → each backend |
-| adguard | `adguard/adguardhome` | adguard.lan:81 | `:53/udp+tcp` (Tailscale split-DNS resolver) | Wildcard `*.lan → TAILNET_HOST_IP`. Ad-blocking is configured but dormant — split DNS only routes `*.lan` here (see [deployment](deployment.md#does-adguard-actually-block-ads)) |
+| caddy | `caddy:2-alpine` | — | none — `:80` inside `ts-caddy`'s netns | Reverse proxy: Host-header routes `<name>.lan` → each backend |
+| adguard | `adguard/adguardhome` | adguard.lan | `:53/udp+tcp` (Tailscale split-DNS resolver) | Wildcard `*.lan → CADDY_TAILNET_IP`. Ad-blocking is configured but dormant — split DNS only routes `*.lan` here (see [deployment](deployment.md#does-adguard-actually-block-ads)) |
+| ts-caddy | `tailscale/tailscale` | — | none — owns a tailnet node/IP for caddy | Sidecar that gives Caddy its own address so the host's `:80` stays Unraid's |
 | gluetun | `qmcgaw/gluetun` | — | 8080, 9696 (loopback) | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
-| sabnzbd | `hotio/sabnzbd` | sab.lan:81 | (in gluetun's netns) | Usenet downloader |
-| prowlarr | `hotio/prowlarr` | prowlarr.lan:81 | (in gluetun's netns) | Indexer manager |
-| radarr | `hotio/radarr` | radarr.lan:81 | 7878 (loopback) | Movie automation |
-| sonarr | `hotio/sonarr` | sonarr.lan:81 | 8989 (loopback) | TV automation |
-| lidarr | `hotio/lidarr` | lidarr.lan:81 | 8686 (loopback) | Music automation |
+| sabnzbd | `hotio/sabnzbd` | sab.lan | (in gluetun's netns) | Usenet downloader |
+| prowlarr | `hotio/prowlarr` | prowlarr.lan | (in gluetun's netns) | Indexer manager |
+| radarr | `hotio/radarr` | radarr.lan | 7878 (loopback) | Movie automation |
+| sonarr | `hotio/sonarr` | sonarr.lan | 8989 (loopback) | TV automation |
+| lidarr | `hotio/lidarr` | lidarr.lan | 8686 (loopback) | Music automation |
 | plex | `plexinc/pms-docker` | direct on `:32400` | 32400 (PUBLIC) | Media server + GPU transcode (only public service; bypasses Caddy) |
-| seerr | `ghcr.io/seerr-team/seerr` | seerr.lan:81 | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
-| bazarr | `hotio/bazarr` | bazarr.lan:81 | 6767 (loopback) | Subtitle automation |
-| tautulli | `hotio/tautulli` | tautulli.lan:81 | 8181 (loopback) | Plex analytics, stream history, notifications |
-| profilarr | `santiagosayshey/profilarr` | profilarr.lan:81 | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+| seerr | `ghcr.io/seerr-team/seerr` | seerr.lan | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
+| bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
+| tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
+| profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 
 ### Networks
 
@@ -67,7 +74,7 @@ Three bridge networks carve the stack into blast-radius zones so a compromised c
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
-| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `adguard`, `ts-caddy` (+`caddy` via its netns) | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
 
