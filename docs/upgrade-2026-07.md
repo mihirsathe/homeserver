@@ -1,7 +1,8 @@
 # Upgrade Runbook — catching a first-setup box up to `master`
 
 Everything the server needs to go from "whatever was deployed at first setup" to
-current `master` (`fb50978`), in one supervised session over SSH.
+current `master` (`fb50978`) **plus the ingress rework on this branch**, in one
+supervised session over SSH.
 
 **Read Section 2 before you type anything in Section 3.** The upgrade itself is
 low-risk for *media* — nothing in it writes to `/mnt/user/data`. The two things
@@ -12,7 +13,7 @@ covered below.
 
 | | |
 |---|---|
-| **Target commit** | `fb50978` — `master` as of 2026-07-28 |
+| **Target** | `master` (`fb50978`) + this branch's ingress rework — see 1.5 |
 | **Expected duration** | ~45 min hands-on, plus image-pull time |
 | **Requires** | SSH to the Unraid host (Tailscale SSH), a browser for the Tailscale admin console |
 | **Hard rollback** | appdata backup taken in Section 2.3 + image digests recorded in 2.9 |
@@ -47,7 +48,8 @@ you're missing.
 | `c1cad27` | PR #9 | Prowlarr indexer schema matched on `name`, not `definitionName` |
 | `56020e9` | PR #10 | `removeCompletedDownloads=False` on each *arr's SAB client |
 | `41fb166` | PR #13 | Prowlarr pushes TV/audio categories to Sonarr/Lidarr, not movie categories |
-| `fb50978` | PR #12 | **Caddy + AdGuard, UrlBase strip, loopback port binds** ← target |
+| `fb50978` | PR #12 | **Caddy + AdGuard, UrlBase strip, loopback port binds** — current `master` |
+| *this branch* | — | Caddy moves to its own tailnet node so admin URLs lose the port and Unraid keeps `:80` — see 1.5 |
 
 If your hash isn't in the table, you're on an intermediate commit inside one of
 those PRs — treat it as "at or before" the merge commit listed above it.
@@ -69,7 +71,9 @@ with a manual step outside the box.
   `http://radarr.lan` — no port.
 - **Caddy publishes nothing on the host.** Unraid's web GUI keeps `:80`
   untouched, so `http://DellBox/Main` is unaffected — and stays working when
-  Docker is down, which is why the GUI is deliberately not proxied. Two
+  Docker is down (bad image pull, docker.img trouble, or an array stop, which
+  on Unraid tears Docker down because docker.img is loop-mounted from a pool).
+  That is why the GUI is deliberately not proxied. Two
   services can't share one IP's port 80; giving Caddy its own address rather
   than its own port is what buys port-free URLs without evicting the GUI.
 - Every admin backend port rebinds from `0.0.0.0:<port>` → **`127.0.0.1:<port>`**.
@@ -105,12 +109,51 @@ two indexers (PR #9 — before this fix Prowlarr synced an *empty* indexer set, 
 grabs silently never happened), and Sonarr/Lidarr start receiving TV/audio
 categories instead of movie categories (PR #13).
 
-### 1.4 Not in scope
+### 1.4 Obsolete docs
 
 `docs/PR12-test-plan.md` is now obsolete. It was written for pre-merge testing;
 its Section 4 revert path ("check out master") points at what is now the *new*
 state, so following it today would do the opposite of what it says. Ignore it —
 this document supersedes it.
+
+### 1.5 The ingress rework on this branch
+
+`master` as merged has Caddy publishing host `:80`. That collides with Unraid's
+web GUI, which owns `:80` on a stock install — so deploying `fb50978`
+unmodified would leave `caddy` unable to bind and admin ingress dead. This
+branch fixes that rather than evicting the GUI:
+
+- New **`ts-caddy`** container (`tailscale/tailscale`) joins the tailnet as its
+  own node. `caddy` runs in its netns (`network_mode: service:ts-caddy`) and
+  binds `:80` *there*, publishing nothing on the host.
+- AdGuard's wildcard answers `*.lan` with **`CADDY_TAILNET_IP`** (the sidecar's
+  address), not `TAILNET_HOST_IP`.
+- New `.env` values: `TS_AUTHKEY`, `CADDY_TAILNET_IP`, `CADDY_TS_HOSTNAME`.
+- `unraid.lan` joins the Caddy route table as a convenience alias for the GUI.
+
+Sections 2 and 3 already assume this branch. If you deploy plain `master`
+instead, expect `caddy` to fail its port bind.
+
+### 1.6 Interaction with PR #16 (finance plane) — not in this upgrade
+
+PR #16 is open against the same base and adds Actual Budget + `actual-ai` on a
+new `finance` network. **It does not conflict with this upgrade's design**, and
+nothing here needs to change for it, but two things are worth knowing:
+
+- It fronts Actual with **`tailscale serve`** on the *host* node's `:443`,
+  because Actual's `SharedArrayBuffer` SQLite engine requires a Secure Context
+  and so can't live behind Caddy's plain-HTTP `.lan` vhosts. That's the host
+  node; Caddy is on the `ts-caddy` node. Different nodes, no contention — the
+  host's `:443` is free because Unraid's SSL is off.
+- **Never run `tailscale serve --http=80` on the host node.** It would shadow
+  the Unraid GUI on the tailnet, which is the emergency path this whole design
+  is built to preserve. PR #16 uses the default (`:443`), which is fine.
+
+Apply them one at a time: finish this upgrade, verify Section 4, *then* merge
+PR #16. Merging the two branches will conflict in `docker-compose.yml` (both
+touch the `networks:` block and the file tail) and in `docs/software.md` (both
+edit the service table) — both are small, mechanical resolutions.
+
 
 ---
 

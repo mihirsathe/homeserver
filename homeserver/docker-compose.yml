@@ -591,9 +591,12 @@ services:
   #
   # WHY THIS EXISTS: two services cannot both own port 80 on one IP address.
   # Unraid's web GUI owns the host's :80 and must keep it — it is the one
-  # admin surface that works with Docker stopped (array down, docker.img
-  # maintenance, a bad image pull), so fronting it with a container would
-  # make the emergency path depend on the thing you'd be trying to fix.
+  # admin surface that works with Docker stopped, so fronting it with a
+  # container would make the emergency path depend on the thing you would be
+  # trying to fix. Docker goes down for a docker.img problem, a bad image
+  # pull, the service being toggled off — and on Unraid specifically, for an
+  # array stop: docker.img is loop-mounted from a pool at /var/lib/docker, so
+  # array stop must tear Docker down before it can unmount that pool.
   # Admin URLs still have to be port-free (`http://radarr.lan`, no port suffix),
   # so Caddy needs its own address rather than its own port.
   #

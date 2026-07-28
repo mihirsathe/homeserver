@@ -254,10 +254,22 @@ Identification) keeps working exactly as it always has, on the host's own
 That path is deliberately **not** proxied, because it's the one that has to
 work when everything else doesn't. It has no Docker dependency, so it survives:
 
-- the array being stopped (Docker is down, so every container is down)
+- **the array being stopped.** On generic Linux `dockerd` is independent of any
+  array, but Unraid deliberately couples them: `docker.img` lives on a pool
+  (`/mnt/cache/system/docker/docker.img`) and is loop-mounted at
+  `/var/lib/docker`, so array stop has to stop the Docker service and unmount
+  it before it can unmount the pool. This is visible in the long-running class
+  of Unraid bugs where array stop hangs on "Retry unmounting disk share(s)"
+  because `/var/lib/docker` is still mounted, and the community fix is
+  `umount /var/lib/docker` — which only makes sense because stopping the array
+  is trying to tear Docker down.
 - a `docker.img` problem or a bad image pull
+- the Docker service being disabled in Settings → Docker
 - Caddy or the `ts-caddy` sidecar being dead
 - AdGuard being dead, or the split-DNS rule being wrong
+
+Only the first of those is Unraid-specific. The rest apply to any Docker host,
+so the GUI stays off Caddy regardless of how array-stop behaves.
 
 `unraid.lan` is also routed through Caddy as a convenience alias, and it's
 fine to use day to day — but it inherits every one of Caddy's failure modes.
