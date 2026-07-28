@@ -57,7 +57,7 @@ Two pieces of network plumbing must exist before the stack comes up: a Tailscale
      "acls": [
        { "action": "accept",
          "src": ["tag:admin"],
-         "dst": ["tag:server:80,32400,53"] }
+         "dst": ["tag:server:81,32400,53"] }
      ],
      "ssh": [
        { "action": "accept",
@@ -138,13 +138,13 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
 
-Finally, open **Seerr** at `http://seerr.lan/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
+Finally, open **Seerr** at `http://seerr.lan:81/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
-Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan/` and it's already bound to the Plex server with full history access.
+Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `http://tautulli.lan:81/` and it's already bound to the Plex server with full history access.
 
 ### Profilarr first-run
 
-Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan/` and:
+Profilarr is the one stack component that isn't fully scripted — its subscription state lives in a SQLite DB configured via the web UI. Open `http://profilarr.lan:81/` and:
 
 1. **Add sync targets** — Settings → Instances → Add: Radarr (`http://radarr:7878`, API key from `generated.env` → `RADARR_API_KEY`) and Sonarr (`http://sonarr:8989`, `SONARR_API_KEY`). The `automation` Docker network lets Profilarr reach both by service name. Note: these are *internal* container-to-container URLs, not the Caddy-fronted `radarr.lan` form — Caddy doesn't sit between containers on the same docker network.
 2. **Link a database** — Databases → Add. The Dictionarry DB is the default curated source; TRaSH Guides can be linked alongside it. Do not also run Recyclarr against these *arrs — they will fight.
@@ -184,7 +184,7 @@ devices as you add later.
 3. **Verify on any tailnet device**:
    ```
    nslookup radarr.lan        # should return TAILNET_HOST_IP
-   curl -I http://radarr.lan  # should return a 200 / 302 from Caddy
+   curl -I http://radarr.lan:81  # should return a 200 / 302 from Caddy
    ```
 
 That's it. Adding new admin services later is a one-row edit to
@@ -195,15 +195,52 @@ inherits the same wildcard rule, no DNS work required.
 
 `generate-configs.py` auto-generates `ADGUARD_ADMIN_PASS` (a UUID) and
 pre-seeds it into `AdGuardHome.yaml` as the admin user. Read it from
-`generated.env` when you want to log into `http://adguard.lan/`:
+`generated.env` when you want to log into `http://adguard.lan:81/`:
 
 ```bash
 grep ^ADGUARD_ADMIN_PASS generated.env | cut -d= -f2
 ```
 
-User is `admin`. AdGuard's UI gives you a queries dashboard, blocklist
-management, and tailnet-wide ad-blocking (the AdGuard DNS Filter is
-enabled by default — disable it in the UI if undesired).
+User is `admin`. AdGuard's UI gives you a queries dashboard and blocklist
+management.
+
+### Does AdGuard actually block ads?
+
+**As deployed, no — not in any meaningful way.** Worth being precise about,
+because the config makes it look like it should.
+
+`generate-configs.py` writes `configs/adguard/AdGuardHome.yaml` with two
+things enabled: the `*.lan → TAILNET_HOST_IP` wildcard rewrite, and the
+AdGuard DNS Filter blocklist (`filtering_enabled: true`, filter id 1).
+The blocklist is real and it works — but a DNS filter can only block
+queries it actually receives, and almost nothing routes queries here:
+
+- **Tailnet devices** — the Step 6.5 rule is a *restricted* nameserver
+  ("Restrict to domain: `lan`"). Tailscale sends only `*.lan` queries to
+  AdGuard; every other lookup goes to the device's normal resolver and
+  never touches the filter.
+- **LAN devices** — never consulted at all. They use whatever DNS your
+  router hands out over DHCP.
+- **Containers in this stack** — use Docker's embedded resolver, which
+  forwards to the host's `/etc/resolv.conf`, not to AdGuard.
+
+So AdGuard's practical job here is split-DNS for `*.lan`. The ad-blocking
+is latent config, not an active filter.
+
+**To actually turn it on**, pick a scope:
+
+| Scope | How | Cost |
+|-------|-----|------|
+| Whole tailnet | Tailscale admin → DNS → add `TAILNET_HOST_IP` as a **global** nameserver (not restricted to a domain), then enable **Override local DNS** | Every tailnet device's DNS now depends on the server being up. A reboot or a stopped `adguard` container breaks name resolution everywhere until it returns. |
+| Whole LAN | Router DHCP → set primary DNS to the server's LAN IP | Same single-point-of-failure, plus anyone on the LAN — including guests — is affected |
+| One device | Point that device's DNS at `TAILNET_HOST_IP` manually | No blast radius; no coverage either |
+
+The failure mode is the thing to weigh: with split DNS restricted to
+`lan`, AdGuard going down costs you the `*.lan` admin URLs and nothing
+else — you fall back to `localhost:<port>` on the host. Promote it to
+global resolver and AdGuard becomes load-bearing for all internet access
+on every device pointed at it. On a box that reboots for parity checks
+and array maintenance, that is a real trade, not a free win.
 
 ### Long-term aside
 

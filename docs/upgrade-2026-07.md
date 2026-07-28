@@ -62,9 +62,11 @@ with a manual step outside the box.
 
 **After:**
 
-- Two new containers: **`caddy`** (binds host **`:80`**, reverse-proxies by Host
+- Two new containers: **`caddy`** (binds host **`:81`**, reverse-proxies by Host
   header) and **`adguard`** (binds host **`:53`** TCP+UDP, answers `*.lan` with
-  your tailnet IP).
+  your tailnet IP). Admin URLs are therefore `http://radarr.lan:81/`. Caddy
+  listens on `:80` *inside* its container; only the host publish is 81, so the
+  Caddyfile carries no port and needs no change if you move it.
 - Every admin backend port rebinds from `0.0.0.0:<port>` → **`127.0.0.1:<port>`**.
   They become unreachable from the LAN and from Tailscale — only Caddy is.
   Plex (`32400`) and Seerr (`5055`) stay published on all interfaces.
@@ -98,15 +100,7 @@ two indexers (PR #9 — before this fix Prowlarr synced an *empty* indexer set, 
 grabs silently never happened), and Sonarr/Lidarr start receiving TV/audio
 categories instead of movie categories (PR #13).
 
-### 1.4 Known-open, deliberately not in scope
-
-**PR #14 (closed unmerged, 2026-07-28)** — the `data` share runs
-`shareAllocator=highwater` with `shareSplitLevel=0`, which pins each *path* to
-the disk it was first created on. Bulk-seeding put every category folder on
-disk1, so new writes kept targeting disk1 until it hit ~109 MB free while
-disk2–4 sat near-empty. Section 2.7 checks for this. **It is a pre-existing
-condition, not something this upgrade causes or fixes** — but if disk1 is near
-full when you start, imports will ENOSPC regardless of anything here.
+### 1.4 Not in scope
 
 `docs/PR12-test-plan.md` is now obsolete. It was written for pre-merge testing;
 its Section 4 revert path ("check out master") points at what is now the *new*
@@ -256,23 +250,30 @@ grep -A15 '^\[servers\]'    configs/sabnzbd/sabnzbd.ini
 grep -A30 '^\[categories\]' configs/sabnzbd/sabnzbd.ini
 ```
 
-### 2.5 Port 80 is free — the most likely thing to break
+### 2.5 Port 81 is free
 
-Caddy binds host `:80`. **Unraid's own web GUI listens on port 80 by default.**
-If it still does, `caddy` will fail to start with a bind error and admin ingress
-never comes up.
+Caddy publishes on host **`:81`**, deliberately leaving `:80` to Unraid's own
+web GUI — the GUI is the most dependable way onto the box and it stays exactly
+where it is. Confirm 81 is actually free:
 
 ```bash
-ss -tlnp | grep -w ':80' || echo "port 80 free"
+ss -tlnp | grep -w ':81' || echo "port 81 free"
+ss -tlnp | grep -w ':80'   # expect nginx — Unraid's GUI, leave it alone
 ```
 
-- **Free** → nothing to do.
-- **Held by `nginx` (Unraid's GUI)** → move the GUI before Section 3.5:
-  Settings → Management Access → HTTP port → `8008` → Apply. The GUI then lives
-  at `http://<lan-ip>:8008`. Do this from a session you won't lose — over
-  Tailscale, with an SSH session already open as a fallback.
-- **Held by something else** (a Docker container from the Unraid template UI,
-  an nginx-proxy-manager) → decide which one owns `:80`. Two things cannot.
+- **81 free** → nothing to do.
+- **81 taken** → set `CADDY_HTTP_PORT` in `.env` to something that isn't
+  (`8088`, `8010`, …) before Section 3.5, and use that port everywhere this
+  document says `:81`, including the Tailscale ACL in 3.6:
+
+  ```bash
+  echo "CADDY_HTTP_PORT=8088" >> .env
+  ```
+
+Nothing needs to change in the Caddyfile — Caddy listens on `:80` inside the
+container regardless, and strips the port from the `Host` header before matching
+its site blocks, so `Host: radarr.lan:8088` still routes to the `http://radarr.lan`
+block.
 
 ### 2.6 Port 53 is free
 
@@ -302,9 +303,9 @@ df -h /mnt/disk* | awk 'NR==1 || /\/mnt\/disk/'
 - `update-stack.sh` **hard-fails** below **5 GB free on appdata**. Caddy and
   AdGuard images are small (~50 MB combined), but a months-behind pull of Plex +
   four *arrs + SAB will want several GB.
-- If any single `/mnt/disk*` is near zero while others have TBs free, that's the
-  PR #14 allocator problem from 1.4. It will not stop this upgrade, but imports
-  are already failing and that needs its own fix.
+- A single `/mnt/disk*` at or near zero won't stop this upgrade, but it will
+  ENOSPC *arr imports independently of it. Worth knowing before you start so you
+  don't misattribute the failure.
 
 ### 2.8 Current state, captured for comparison
 
@@ -366,19 +367,39 @@ grep -n 'env-file' /boot/config/plugins/user.scripts/scripts/media_stack_up/scri
 Expect `docker compose --env-file .env.docker up -d`. If you see
 `--env-file .env --env-file generated.env`, fix it in Section 3.8.
 
-### 2.11 Confirm you won't lock yourself out
-
-After Section 3.5 the admin ports are loopback-only and `*.lan` doesn't resolve
-until the Tailscale rule in 3.6 is in place. Before you start:
+### 2.11 Know your fallbacks
 
 ```bash
 tailscale status | head -5
 tailscale ip -4                  # note this — it's TAILNET_HOST_IP
 ```
 
-Keep the SSH session from your Mac open for the whole upgrade. From the host
-itself, everything stays reachable on `localhost:<port>` no matter how badly
-DNS or Caddy is configured — that's your escape hatch.
+**Tailscale does not go down during this upgrade.** Nothing here touches the
+daemon, and it runs on the Unraid host, not in a container — `docker compose
+down` doesn't affect it. What *does* change is a gap in the middle of Section 3:
+after 3.5 the admin ports are loopback-only, and `*.lan` doesn't resolve until
+the DNS rule in 3.6 lands. During that window the admin UIs have no working URL
+from your Mac. SSH is unaffected throughout.
+
+Keeping one SSH session open is a convenience, not a lifeline — from the host,
+`localhost:<port>` reaches every backend no matter how broken Caddy or DNS is.
+The one thing worth being deliberate about is the **ACL edit in 3.6 step 2**:
+a malformed ACL blocks *new* connections, so it is genuinely nicer to already
+be sitting in a shell when you save it. Tailscale SSH is governed by the `ssh`
+block, not the `acls` port list, so editing the port list can't revoke SSH —
+but deleting the wrong stanza can.
+
+Ordered fallbacks if something does go wrong:
+
+1. **Existing SSH session** — `localhost:<port>` for everything.
+2. **New SSH over Tailscale** — unaffected by the ACL port list.
+3. **Unraid web GUI on `http://<lan-ip>/`** — still on `:80`, which is exactly
+   why Caddy was moved to `:81`. Works from the LAN with no Tailscale at all,
+   and gives you a terminal.
+4. **iDRAC / physical console** — if the network is entirely gone.
+
+Realistically you have to break three independent things before you're locked
+out, and this upgrade touches none of them.
 
 ### Pre-flight checklist
 
@@ -531,12 +552,18 @@ Prove Caddy routes correctly **from the host, without needing DNS yet**:
 ```bash
 for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
   printf '%-11s ' "$s"
-  curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: ${s}.lan" http://localhost/
+  curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: ${s}.lan" http://localhost:81/
 done
 ```
 
 Any 2xx/3xx/401 is a pass — the backend answered. A `502`/`503` means Caddy
 can't reach that backend; a connection refused means Caddy isn't listening.
+
+Also confirm you didn't disturb the Unraid GUI — it should still be on `:80`:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/   # Unraid, not Caddy
+```
 
 ### 3.6 Tailscale admin console
 
@@ -547,17 +574,21 @@ both pages before editing** — neither has an API-driven undo.
    `TAILNET_HOST_IP`. Toggle **Restrict to domain** on, set the domain to `lan`.
    Save.
 2. **Access controls** → change the `tag:admin → tag:server` destination port
-   list to `["tag:server:80,32400,53"]`, replacing the old per-service port list.
+   list to `["tag:server:81,32400,53"]`, replacing the old per-service port list.
    Save.
 
 Do #1 first and verify it before doing #2 — #2 is what actually removes your
-direct-port fallback.
+direct-port fallback. Leave the `ssh` stanza in the ACL alone; it's what governs
+Tailscale SSH and it is not affected by the port list.
+
+If you set a custom `CADDY_HTTP_PORT` in 2.5, use that number instead of `81`.
 
 From your **Mac** (not the server):
 
 ```bash
 nslookup radarr.lan            # expect your TAILNET_HOST_IP
-curl -I http://radarr.lan/     # expect 200/302 from Caddy
+curl -I http://radarr.lan:81/   # expect 200/302 from Caddy
+curl -I http://<lan-ip>/        # Unraid GUI, still on :80, untouched
 ```
 
 ### 3.7 Bootstrap — reconciles the *arr databases
@@ -628,11 +659,11 @@ From the Mac:
 ```bash
 for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
   printf '%-11s ' "$s"
-  curl -fsS -o /dev/null -w '%{http_code}\n' "http://${s}.lan/" || echo FAIL
+  curl -fsS -o /dev/null -w '%{http_code}\n' "http://${s}.lan:81/" || echo FAIL
 done
 
-curl -fsS http://radarr.lan/ping             # OK
-curl -fsS 'http://sab.lan/api?mode=version'  # JSON with a version field
+curl -fsS http://radarr.lan:81/ping             # OK
+curl -fsS 'http://sab.lan:81/api?mode=version'  # JSON with a version field
 ```
 
 ### 4.3 Backend ports are actually locked down
@@ -646,7 +677,13 @@ for p in 6767 6868 7878 8080 8181 8686 8989 9696; do
 done
 ```
 
-`5055` (Seerr) and `32400` (Plex) staying open is expected and correct.
+```bash
+nc -z -w3 <TAILNET_HOST_IP> 81 && echo "81 open ✓ (Caddy)"
+nc -z -w3 <TAILNET_HOST_IP> 80 && echo "80 open ✓ (Unraid GUI, unchanged)"
+```
+
+`81` (Caddy), `80` (Unraid GUI), `5055` (Seerr) and `32400` (Plex) staying open
+is expected and correct.
 
 ### 4.4 In-app integration — this is the one that matters
 
@@ -713,7 +750,7 @@ The real test of 3.8. When convenient:
 ```bash
 # Stop the array from the Unraid GUI and restart it, then:
 docker compose --env-file .env.docker ps      # everything back up, healthy
-curl -fsS http://radarr.lan/ping              # from the Mac
+curl -fsS http://radarr.lan:81/ping              # from the Mac
 ```
 
 ---

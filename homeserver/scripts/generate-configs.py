@@ -623,6 +623,12 @@ refresh_users_on_startup = 0
 # sab + prowlarr point at gluetun:* because they share gluetun's netns and
 # have no bridge alias of their own — sabnzbd:8080 NXDOMAINs from inside
 # the Caddy container.
+#
+# The site addresses below carry no port: Caddy listens on :80 inside its
+# container and compose publishes that on the host's CADDY_HTTP_PORT (81 by
+# default, because Unraid's web GUI owns :80). Caddy strips the port from the
+# Host header before matching, so `http://radarr.lan` still matches a request
+# that arrived as `Host: radarr.lan:81` — no port belongs in the Caddyfile.
 # ---------------------------------------------------------------------------
 HOSTNAME_SUFFIX = "lan"
 
@@ -716,9 +722,9 @@ def write_adguard(env: dict):
     password: {pw_hash}
 """
     else:
-        # No hash means first-launch wizard runs on http://<host>:80 — the
-        # user picks an admin password manually that one time. Caddy still
-        # fronts adguard.lan once that's done.
+        # No hash means AdGuard's first-launch wizard runs — reach it through
+        # Caddy at http://adguard.lan:81/ and pick an admin password manually
+        # that one time.
         print("  ℹ AdGuard admin user not pre-seeded — first-launch wizard will run")
         user_block = "users: []\n"
 

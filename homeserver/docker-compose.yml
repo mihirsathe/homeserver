@@ -47,7 +47,7 @@
 #                  reach every backend by docker-DNS name.
 #
 # ADMIN INGRESS (the only way into admin UIs from the tailnet):
-#   tailnet device → tailscale → host:80 → caddy → backend by name.
+#   tailnet device → tailscale → host:81 → caddy → backend by name.
 #   Backend ports are bound to 127.0.0.1 only (loopback) — they exist for
 #   bootstrap.py + host-side debugging, never for direct LAN/Tailscale
 #   access. AdGuard Home (in the stack) answers *.lan DNS queries via a
@@ -594,6 +594,15 @@ services:
   #
   # admin off — there's nothing pushing config dynamically, the localhost
   # admin API on :2019 is dead weight + a small attack surface.
+  #
+  # HOST PORT IS 81, NOT 80. Unraid's own web GUI owns :80 on a stock install
+  # and it is the most reliable way onto the box — moving it to make room for
+  # Caddy trades a dependable fallback for cosmetic URLs. Caddy still listens
+  # on :80 *inside* the container, so the Caddyfile's `http://<name>.lan` site
+  # addresses are unchanged; Caddy strips the port from the Host header before
+  # matching, so a request arriving as `Host: radarr.lan:81` still routes.
+  # Override with CADDY_HTTP_PORT in .env if 81 is taken — and update the
+  # Tailscale ACL port list to match.
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
@@ -603,7 +612,7 @@ services:
       - automation
       - downloaders
     ports:
-      - "80:80"
+      - "${CADDY_HTTP_PORT:-81}:80"
     volumes:
       - ${STACK_DIR}/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - /mnt/user/appdata/caddy:/data

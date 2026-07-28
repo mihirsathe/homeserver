@@ -103,7 +103,7 @@ distinct failure modes — DNS or HTTP — diagnose separately.
 
 ```bash
 nslookup radarr.lan        # DNS layer
-curl -v http://radarr.lan/ # HTTP layer
+curl -v http://radarr.lan:81/ # HTTP layer
 ```
 
 If `nslookup` fails or returns the wrong IP, it's a DNS problem (most
@@ -116,16 +116,16 @@ network/Caddy.
 2. Tailscale admin console → DNS — verify "Restrict to domain `lan`" is set with `<TAILNET_HOST_IP>` as the nameserver. (Per Step 6.5 of `deployment.md`.)
 3. From the Unraid host: `docker compose ps adguard` — must be `(healthy)`. If not: `docker compose logs adguard` — look for port-bind conflicts on `:53`.
 4. Direct-test AdGuard from a tailnet device: `nslookup radarr.lan <TAILNET_HOST_IP>` — should answer with the same IP regardless of the device's normal DNS.
-5. AdGuard UI → `http://adguard.lan/` (or `http://<TAILNET_HOST_IP>:80/` via Caddy) → Filters → DNS rewrites — verify `*.lan → <TAILNET_HOST_IP>` is present. If missing, re-run `python3 scripts/generate-configs.py --force-overwrite` and `docker restart adguard`.
+5. AdGuard UI → `http://adguard.lan:81/` (or `http://<TAILNET_HOST_IP>:81/` via Caddy) → Filters → DNS rewrites — verify `*.lan → <TAILNET_HOST_IP>` is present. If missing, re-run `python3 scripts/generate-configs.py --force-overwrite` and `docker restart adguard`.
 
 ### HTTP / Caddy layer
 
 1. From the Unraid host: `docker compose ps caddy` — must be `(healthy)`.
 2. `docker compose logs caddy` — look for upstream connection errors (`dial tcp ...`).
-3. ACL sanity: Tailscale console → Access controls — confirm `tag:admin → tag:server:80` is permitted.
+3. ACL sanity: Tailscale console → Access controls — confirm `tag:admin → tag:server:81` is permitted.
 4. Direct hit Caddy on the tailnet IP with a Host header to bypass DNS:
    ```bash
-   curl -v -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+   curl -v -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:81/ping
    ```
    If this works but `radarr.lan` doesn't, the problem is purely DNS.
 
@@ -135,7 +135,7 @@ Plex (port 32400) doesn't ride Caddy or AdGuard — it's the only service on the
 
 ## Gluetun kill-switch engaged (SAB / Prowlarr offline)
 
-SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan/` and `http://prowlarr.lan/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan:81/` and `http://prowlarr.lan:81/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
 This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 
