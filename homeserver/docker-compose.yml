@@ -579,6 +579,11 @@ services:
       - CHESS_COACH_ENGINE_HASH_MB=4096
       - CHESS_COACH_SCAN_MOVETIME_MS=250
       - CHESS_COACH_DEEP_MOVETIME_MS=3000
+      # LLM coach narrative backend. Flip to `ollama` once the ollama
+      # container is in the stack (same frontend network, so the docker-DNS
+      # name works); `none` = facts-only template reports, fully functional.
+      - CHESS_COACH_COACH_BACKEND=${CHESS_COACH_COACH_BACKEND:-none}
+      - CHESS_COACH_OLLAMA_URL=${CHESS_COACH_OLLAMA_URL:-http://ollama:11434}
       - LICHESS_TOKEN=${LICHESS_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - NVIDIA_VISIBLE_DEVICES=all
