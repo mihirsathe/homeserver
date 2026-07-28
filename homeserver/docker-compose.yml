@@ -539,13 +539,13 @@ services:
   # repo is private, and a personal app doesn't warrant a registry):
   #   git clone https://github.com/mihirsathe/chess-coach \
   #       /mnt/user/appdata/chess-coach/repo
-  #   install -d -o 99 -g 100 /mnt/user/appdata/chess-coach/data
   #   docker compose build coach && docker compose up -d coach
   # Update = git pull + rebuild.
   #
-  # The install -d line matters: the container runs as ${PUID}:${PGID} and
-  # the image (plain python-slim) has no root-owned entrypoint to chown a
-  # docker-created bind dir, unlike the hotio/linuxserver images.
+  # The data bind dir is created nobody:users by setup-unraid.sh (step 7);
+  # that matters because this container runs as ${PUID}:${PGID} and the
+  # plain python-slim image has no root entrypoint to chown a docker-created
+  # (root-owned) bind dir, unlike the hotio/linuxserver images.
   #
   # One container: FastAPI web UI + analysis worker thread + scheduler that
   # polls Lichess every 15 min and runs deep engine passes in quiet hours.

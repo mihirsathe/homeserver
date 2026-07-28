@@ -257,16 +257,22 @@ if [[ ! -d /mnt/user ]]; then
     echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
     echo "  mkdir -p /mnt/user/usenet-incomplete"
     echo "  mkdir -p /mnt/user/appdata/plex-transcode"
-    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode"
+    echo "  mkdir -p /mnt/user/appdata/chess-coach/data"
+    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/chess-coach"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
 else
     mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
     mkdir -p /mnt/user/usenet-incomplete
     mkdir -p /mnt/user/appdata/plex-transcode
+    # chess-coach runs as PUID:PGID with no chown-at-start entrypoint (plain
+    # python-slim image) — the bind dir must be nobody:users before first up,
+    # or docker creates it root-owned and SQLite writes fail.
+    mkdir -p /mnt/user/appdata/chess-coach/data
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
+    chown -R nobody:users /mnt/user/appdata/chess-coach
     chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 
     ok "Folder structure created:"
