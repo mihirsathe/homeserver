@@ -582,7 +582,7 @@ services:
       # LLM coach narrative backend. Flip to `ollama` once the ollama
       # container is in the stack (same frontend network, so the docker-DNS
       # name works); `none` = facts-only template reports, fully functional.
-      - CHESS_COACH_COACH_BACKEND=${CHESS_COACH_COACH_BACKEND:-none}
+      - CHESS_COACH_LLM_BACKEND=${CHESS_COACH_LLM_BACKEND:-none}
       - CHESS_COACH_OLLAMA_URL=${CHESS_COACH_OLLAMA_URL:-http://ollama:11434}
       - LICHESS_TOKEN=${LICHESS_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
