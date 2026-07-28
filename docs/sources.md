@@ -10,6 +10,8 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 
 | Container | Image | Tag | Registry | Maintainer |
 |-----------|-------|-----|----------|------------|
+| caddy | `caddy` | `:2-alpine` | Docker Hub | Caddy authors (official) |
+| adguard | `adguard/adguardhome` | `:latest` | Docker Hub | AdGuard (official) |
 | gluetun | `qmcgaw/gluetun` | `:latest` | Docker Hub | qdm12 (community, widely used) |
 | sabnzbd | `ghcr.io/hotio/sabnzbd` | `:release` | GitHub Container Registry | hotio |
 | prowlarr | `ghcr.io/hotio/prowlarr` | `:release` | GitHub Container Registry | hotio |

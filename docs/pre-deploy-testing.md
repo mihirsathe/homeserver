@@ -12,7 +12,7 @@ You have an Ubuntu LTS desktop with an NVIDIA GPU. Before racking the R640 you c
 |-------------|-----------------------|
 | docker-compose.yml end-to-end | Unraid OS + plugins (CA Backup, Fix Common Problems, Nvidia-Driver plugin, User Scripts, Tailscale) |
 | NVIDIA + NVENC passthrough to Plex | PERC H730P HBA mode + SMART passthrough |
-| Inter-container DNS on `downloaders` / `frontend` / `automation` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
+| Inter-container DNS on `downloaders` / `frontend` / `automation` / `ai` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
 | Hardlink behaviour across `/data` | `/mnt/user/...` as a real Unraid share (we fake it with a bindmount) |
 | generate-configs.py + bootstrap.py | iDRAC / fan control (setup-fan-control.sh) |
 | backup-appdata.sh + restore-appdata.sh | setup-unraid.sh (plugin install/config) |
