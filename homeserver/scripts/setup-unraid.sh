@@ -257,16 +257,22 @@ if [[ ! -d /mnt/user ]]; then
     echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
     echo "  mkdir -p /mnt/user/usenet-incomplete"
     echo "  mkdir -p /mnt/user/appdata/plex-transcode"
-    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode"
+    echo "  mkdir -p /mnt/user/appdata/actual"
+    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/actual"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
 else
     mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
     mkdir -p /mnt/user/usenet-incomplete
     mkdir -p /mnt/user/appdata/plex-transcode
+    # actual-server ships no USER directive (the published image runs as root)
+    # and takes no PUID/PGID. docker-compose.yml pins it to 99:100 via `user:`,
+    # so /data must already exist owned by 99:100 or the container restart-loops.
+    mkdir -p /mnt/user/appdata/actual
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
+    chown -R nobody:users /mnt/user/appdata/actual
     chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 
     ok "Folder structure created:"

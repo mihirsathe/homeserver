@@ -78,6 +78,62 @@ SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustain
 
 This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
+### Actual Budget is fronted by `tailscale serve`, not Caddy
+
+Every other admin UI here is plain HTTP at `<name>.lan` behind Caddy with
+`auto_https off`, on the reasoning that Tailscale already encrypts the transport.
+Actual cannot use that path.
+
+Its web client uses `SharedArrayBuffer` for the SQLite engine, and browsers only expose
+`SharedArrayBuffer` in a **Secure Context** — HTTPS, or `localhost`. Over
+`http://actual.lan` the app fails with `SharedArrayBufferMissing`. It does not degrade;
+it does not load. Terminating TLS at Caddy would not help either, because what matters
+is the scheme the *browser* sees.
+
+So one command on the host, persisting across reboots:
+
+```
+tailscale serve --bg http://127.0.0.1:5006
+```
+
+Tailscale terminates TLS at `https://<node>.<tailnet>.ts.net` with a real,
+publicly-trusted cert and proxies to the container on plain HTTP.
+
+**Why not `tailscale cert` + `ACTUAL_HTTPS_KEY`/`ACTUAL_HTTPS_CERT`?** That was the first
+design and it was worse. Certs handed over as files on disk are the caller's problem to
+renew — tailscaled has no idea where they were installed — so it needed a monthly renewal
+script, plus cert files to own, chown, and reason about in backups. `tailscale serve`
+provisions the cert without file installation, so Tailscale renews it itself. No cron, no
+script, no files.
+
+It also collapsed four incidental complications: the container stays on plain HTTP, so
+the port is back on loopback per stack convention, the upstream healthcheck works
+unmodified, and `actual-ai` needs no `NODE_TLS_REJECT_UNAUTHORIZED` (the earlier design
+had it talking HTTPS to a cert whose name didn't match the container).
+
+Consequences worth knowing:
+
+- Actual is **not** in `CADDY_SERVICES` and Caddy is not on the `finance` network. There
+  is no `actual.lan`. `generate-configs.py` is untouched.
+- Requires HTTPS Certificates enabled for the tailnet (admin console -> DNS -> HTTPS
+  Certificates) and MagicDNS.
+- `tailscale serve` occupies the node's :443. Nothing else in this stack uses it.
+- Actual sets `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` itself
+  (upstream `src/app.ts`). Nothing must add them a second time — duplicated COOP/COEP is
+  its own `SharedArrayBufferMissing` fatal. Verify `tailscale serve` passes them through.
+
+### No rules pre-seeded — Actual learns them
+
+Actual ships **Category Learning** enabled by default: categorize a payee a couple of
+times and it writes the rule itself, manageable at More -> Rules and toggleable per-payee
+from the Payees page. So no rule set is pre-seeded here and no rule-generation tooling is
+needed — actual-ai's first pass plus manual corrections produce rules as a byproduct.
+
+One interaction to watch: it is not documented whether Category Learning distinguishes a
+user's UI edit from actual-ai's API write. If it does not, the LLM's guesses get promoted
+to permanent rules, wrong ones included. Check More -> Rules after the first live
+(non-dryRun) run and turn Category Learning off for noisy payees if needed.
+
 ### Single parity (for now)
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.

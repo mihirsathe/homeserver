@@ -52,6 +52,8 @@ Caddy and is the one publicly-forwarded service.
 | seerr | `ghcr.io/seerr-team/seerr` | seerr.lan | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
 | tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
+| actual_server | `actualbudget/actual-server` | `https://<node>.<tailnet>.ts.net` (via `tailscale serve`) | 5006 (loopback) | Envelope/zero-based budgeting. Needs a Secure Context, so it bypasses Caddy — see decisions.md |
+| actual-ai | `sakowicz/actual-ai` | — | (none) | Categorizes transactions Actual's rules engine missed, via an external Ollama |
 | profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 
 ### Networks
