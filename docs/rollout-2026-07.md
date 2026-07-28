@@ -5,6 +5,12 @@ running its first-setup deployment. Companion to
 [upgrade-2026-07.md](upgrade-2026-07.md), which is the detailed runbook for
 Phase 1.
 
+> **Superseded on sequencing.** The owner has since decided to land everything
+> in a single supervised session rather than across phases, walked through live.
+> The measured conflicts, capacity figures and integration gaps below remain
+> valid and should be re-measured before the run; the Phase 1/2/3/4 *ordering*
+> does not apply. See [integration-brief.md](integration-brief.md).
+
 **The governing rule: one phase at a time, each with its own verification gate.**
 The end state is **18 services across five network planes** — measured by
 merging all four branches locally, not estimated. Two phases contain
