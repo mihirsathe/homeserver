@@ -8,6 +8,7 @@ nav = [
   {"Hardware" = "hardware.md"},
   {"Software" = "software.md"},
   {"Deployment" = "deployment.md"},
+  {"Upgrade runbook" = "upgrade-2026-07.md"},
   {"Operations" = "operations.md"},
   {"Disaster recovery" = "disaster-recovery.md"},
   {"Troubleshooting" = "troubleshooting.md"},
