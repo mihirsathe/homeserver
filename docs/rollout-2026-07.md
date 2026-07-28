@@ -6,7 +6,8 @@ running its first-setup deployment. Companion to
 Phase 1.
 
 **The governing rule: one phase at a time, each with its own verification gate.**
-The end state is ~20 services across seven network planes. Two phases contain
+The end state is **18 services across five network planes** — measured by
+merging all four branches locally, not estimated. Two phases contain
 one-way steps (database migrations, an `*arr` DB rewrite), so "just roll back"
 isn't free, and if two changes are in flight when something breaks you can't
 tell which caused it.
@@ -18,7 +19,7 @@ tell which caused it.
 | Phase | Change | Branch / PR | Hard dependency |
 |---|--------|-------------|-----------------|
 | 1 | Catch-up to `master` + ingress rework | `claude/homeserver-upgrade-deployment-tj4vgf` | none |
-| 2 | Ollama + GPU arbitration | PR #17 `claude/ollama-plex-gpu-sharing-7mjmd0` | Phase 1 |
+| 2 | Ollama (local inference) | PR #17 `claude/ollama-plex-gpu-sharing-7mjmd0` | Phase 1 |
 | 3 | Finance plane (Actual Budget) | PR #16 `feat/finance-plane` | **Phase 2** — see below |
 | 4 | Chess coach (`coach.lan`) | PR #15 `add-chess-coach` | Phase 1; git credentials on the box |
 
@@ -57,12 +58,17 @@ Trial-merged every branch locally against Phase 1:
 | Merge | Conflicts |
 |-------|-----------|
 | Phase 1 ← PR #15 | **none** |
-| Phase 1 ← PR #16 | **none** |
-| Phase 1 ← PR #17 | `generate-configs.py`, `docker-compose.yml`, `docs/software.md` |
-| PR #15 ← PR #16 | `.env.example`, `setup-unraid.sh` — both purely additive, keep both sides |
+| Phase 1 ← PR #16 | `docs/decisions.md` — additive |
+| Phase 1 ← PR #17 | `docs/decisions.md`, `docs/software.md`, `docker-compose.yml`, `generate-configs.py` |
+| PR #15 ← PR #16 | `.env.example`, `setup-unraid.sh` — additive |
 
-Only PR #17 genuinely interacts with Phase 1, because both touch Caddy. One of
-those conflicts needs real thought rather than "keep both" — see Phase 2.
+**Every one of these is "keep both sides"** except one: in
+`generate-configs.py`, PR #17 and Phase 1 fix the same Caddyfile bug with
+different comments. Take Phase 1's version — it calls `caddy_services(env)`
+rather than `CADDY_SERVICES` directly, which is what preserves `unraid.lan`.
+
+Re-measured after PR #17 was force-updated (see below); the earlier reading of
+that branch is obsolete.
 
 ---
 
@@ -73,22 +79,21 @@ failures if missed.
 
 ### 1. `actual-ai` can't reach Ollama as PR #16 is written
 
-PR #16 predates PR #17 and assumes Ollama is **external**: `OLLAMA_URL` is a
-`.env` value pointing off-stack, and `actual-ai` joins only the `finance`
-network. PR #17 puts Ollama on this box behind a gate on a new `ai` network,
-and deliberately gives the engine **no DNS name** on the consumer plane so
-nothing can route around the arbitration.
+PR #16 predates PR #17 and assumes Ollama is **external**: `OLLAMA_URL` points
+off-stack and `actual-ai` joins only the `finance` network. PR #17 puts Ollama
+on this box on a new `ai` network, published only on `127.0.0.1:11434`.
 
-So after both land, `actual-ai` must:
+Verified against the merged tree: `actual-ai` ends up on `finance` alone, so
+`ollama` does not resolve for it. After both land it must be:
 
 ```yaml
     networks:
       - finance
-      - ai              # <-- add; without it ollama-gate does not resolve
+      - ai              # <-- add; without it `ollama` does not resolve
 ```
 
-with `OLLAMA_URL=http://ollama-gate:11434/api` in `.env` — the gate, not the
-engine, and keeping PR #16's required `/api` suffix.
+with `OLLAMA_URL=http://ollama:11434/api` in `.env` — keeping PR #16's required
+`/api` suffix.
 
 Symptom if missed: `actual-ai` logs connection failures and retries forever
 without crash-looping, which is PR #16's intended graceful degradation and
@@ -96,50 +101,60 @@ therefore looks like nothing is wrong.
 
 ### 2. The two runbooks disagree on model size
 
-The finance install runbook says `ollama pull llama3.1:8b`. PR #17's sizing
-guidance is a **3B** model (~2.5 GB), which coexists with a 4K transcode on a
-6 GB card; it treats a 7B+ model as the tail case that needs active preemption.
+The finance install runbook says `ollama pull llama3.1:8b`. That is the wrong
+size for this card, and PR #17's redesign makes it more wrong, not less.
 
-An 8B model at q4 is ~5 GB. It will work — PR #17's `OLLAMA_GPU_OVERHEAD`
-reservation makes the failure mode "spills layers to CPU, gets slower" rather
-than "OOMs the card" — but it means the arbiter's preemption path is load-
-bearing during Plex transcodes instead of being a safety valve. Start with
-`llama3.2:3b`, and only move up if categorization quality is actually
-insufficient.
+The 3050 has 6 GB. PR #17 sets `OLLAMA_GPU_OVERHEAD` to **2 GiB** by default —
+memory Ollama will never allocate into, reserved so Plex's encoder always has
+room. That leaves roughly **4 GB** for the model. An 8B at q4 is ~5 GB, so it
+will not fit and will spill layers to CPU: the failure mode is "much slower",
+not "broken", but it is a silent, permanent slowdown. A 3B at ~2.5 GB fits with
+headroom.
 
-Also: with PR #17 in place, **model pulls are a host operation**. The gate
-returns 403 on `/api/pull`, so the finance runbook's `ollama pull` becomes:
+Use `llama3.2:3b`, and only move up if categorization quality is genuinely
+insufficient — and if you do, raise `OLLAMA_CONTEXT_LENGTH`/overhead
+deliberately rather than discovering the spill from latency.
+
+Model pulls are a host operation either way, since nothing publishes Ollama
+beyond loopback:
 
 ```bash
 docker exec ollama ollama pull llama3.2:3b
 ```
 
----
+## GPU and RAM: the real capacity story
 
-## GPU: three tenants, one 6 GB card
+Three services now request the nvidia runtime — confirmed against the merged
+tree: `plex`, `ollama`, `coach`.
 
-PR #17 resolves what would otherwise be this rollout's biggest risk, so the
-work here is verification rather than design. Its key insight is that the
-contended resource is **VRAM, not compute** — NVENC/NVDEC are dedicated ASIC
-blocks, so inference never steals encoder time from Plex.
+The contended resource is **VRAM, not compute**: NVENC/NVDEC are dedicated ASIC
+blocks, so inference never steals encoder time from Plex. On a 6 GB card:
 
 | Tenant | Appetite | Arrives |
 |--------|----------|---------|
 | Plex NVENC | ~1 GB for a 4K HDR transcode | Phase 1 (already live) |
-| Ollama | ~2.5 GB at 3B, ~5 GB at 8B | Phase 2 |
+| Ollama | ~2.5 GB at 3B (fits); ~5 GB at 8B (spills — see above) | Phase 2 |
 | `coach` — lc0 / Maia | small nets (~100–200 MB) | Phase 4, and only at *its* phase 2 — not at first deploy |
 
-The static layers (`OLLAMA_GPU_OVERHEAD`, `MAX_LOADED_MODELS=1`, `KEEP_ALIVE=60s`)
-cover the common case with no conflict at all. Verify on hardware per
-`docs/pre-deploy-testing.md` §6d once Phase 2 is up.
+PR #17's current design handles this with Ollama's own settings —
+`OLLAMA_GPU_OVERHEAD` (2 GiB reserved), `MAX_LOADED_MODELS=1`,
+`NUM_PARALLEL=1`, `KEEP_ALIVE=60s`, q8_0 KV cache — rather than active
+preemption. That is a static reservation: it cannot fail, but it also cannot
+adapt, so **staying under the VRAM budget is a sizing discipline, not something
+enforced at runtime.** Hence the model-size point above.
 
-RAM is the softer constraint: memory *limits* across the fully-merged stack sum
-to roughly **25 GB on a 32 GB box**. Limits are ceilings, not reservations, so
-this is not an overcommit failure — but Plex (8 G) + coach (6 G) + SAB (2 G)
-concurrently is 16 G before Unraid itself, page cache, and Ollama's host-side
-footprint. Watch it after Phase 4, which is when coach's 6 G arrives.
+**RAM is the tighter constraint, and it is tighter than earlier drafts of this
+document claimed.** Measured on the fully-merged tree, memory *limits* sum to
+**31.2 GB on a 32 GB box** — Plex 8 G + Ollama 8 G + coach 6 G is 22 GB from
+three services alone.
 
----
+Limits are ceilings, not reservations, so this is not an overcommit failure and
+the box will not refuse to start. But there is now effectively no headroom left
+for Unraid itself, page cache, or ZFS/BTRFS overhead if all three heavy tenants
+are busy simultaneously — a Plex transcode during a coach backfill while Ollama
+has a model resident. Watch it after Phase 4, and treat Ollama's 8 G limit as
+the first one to trim: it is a ceiling for a service that should be using ~3 GB
+with a 3B model.
 
 ## Phase 0 — Maintenance window and backup
 
@@ -173,27 +188,31 @@ one phase that touches the pipeline you already depend on.
 
 ---
 
-## Phase 2 — Ollama + GPU arbitration (PR #17)
+## Phase 2 — Ollama (PR #17)
 
 Goes before finance because finance consumes it, and next to Phase 1 because
 both touch Caddy while that context is fresh.
 
-**Merge resolution — the one that needs thought.** Three files conflict:
+> **This PR was redesigned mid-review.** Its description still documents an
+> `ollama-gate` (Caddy policy proxy), a `gpu-arbiter` (Plex-polling preemption
+> daemon), an `ai_backend` network and an `ollama.lan` hostname. The commit
+> `4ace134 "Simplify GPU sharing to Ollama's own settings; drop tailnet
+> exposure"` removed all of it. **The branch now adds exactly one service** —
+> `ollama` on the `ai` network, published on `127.0.0.1:11434`, with GPU
+> pressure handled by Ollama's own env settings. Read the diff, not the
+> description. (PR #16's description is stale in the same way; see Phase 3.)
 
-- **`generate-configs.py`** (2 hunks). Both branches fix the Caddyfile bug;
-  PR #17's version is a superset (it adds `CADDY_STREAMING` and a
-  `flush_interval -1` branch for Ollama's ndjson). Take **PR #17's loop body**,
-  and keep **Phase 1's `caddy_services()` function** — then change PR #17's
-  `for name, … in CADDY_SERVICES.items()` to `caddy_services(env).items()` so
-  `unraid.lan` survives. The two additions are adjacent, not competing.
-- **`docker-compose.yml`** — network-plane comments merge by keeping both. The
-  real one is the `caddy` service: PR #17 adds `ai` to `caddy.networks`, but
-  Phase 1 gives Caddy `network_mode: service:ts-caddy` and **no `networks:` of
-  its own**. Those are incompatible as written. Correct resolution: **add `ai`
-  to `ts-caddy`'s network list**, not Caddy's. Caddy inherits it through the
-  shared namespace, which is exactly how it already reaches the other three
-  planes.
-- **`docs/software.md`** — one hunk, prose and table rows. Keep both.
+**Merge resolution** — four files, all mechanical:
+
+- `docker-compose.yml` — network-plane *comments* only. Keep both. PR #17's
+  note that "caddy is deliberately NOT on `ai`" stays true and needs no change,
+  since Ollama has no `.lan` hostname to serve.
+- `generate-configs.py` — both branches fix the same Caddyfile bug with
+  different comments. **Take Phase 1's version**: it calls `caddy_services(env)`
+  instead of `CADDY_SERVICES`, which is what keeps `unraid.lan` in the route
+  table. PR #17 adds `ensure_ollama_appdata()` elsewhere in the file, which
+  merges cleanly.
+- `docs/decisions.md`, `docs/software.md` — additive, keep both.
 
 Then:
 
@@ -202,24 +221,20 @@ git merge --no-ff origin/claude/ollama-plex-gpu-sharing-7mjmd0
 #   → resolve as above
 python3 scripts/generate-configs.py --force-overwrite
 docker run --rm -v "$PWD/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-    caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile   # expect "Valid configuration"
-docker compose --env-file .env.docker up -d
+    caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile   # "Valid configuration"
+docker compose --env-file .env.docker up -d ollama
 docker exec ollama ollama pull llama3.2:3b
 ```
 
-Note `bootstrap.py` in PR #17 recreates `gpu-arbiter` after writing
-`PLEX_TOKEN` — Compose resolves env at create time, so a plain restart would
-keep the empty value. If you bootstrapped in Phase 1, the token is already in
-`generated.env` and the arbiter picks it up on first create.
+Exclude `/mnt/user/appdata/ollama` from Appdata Backup before the next weekly
+run — model blobs are multi-GB and re-pullable, and would otherwise inflate
+every archive.
 
-Also exclude `/mnt/user/appdata/ollama` from Appdata Backup before the next
-weekly run — model blobs are multi-GB and re-pullable, and would otherwise
-inflate every archive.
-
-**Gate:** `http://ollama.lan/api/tags` lists the model from the Mac;
-`curl -X POST http://ollama.lan/api/pull` returns 403; start a Plex transcode
-and confirm the hold engages and VRAM drops (`docs/pre-deploy-testing.md` §6d);
-confirm `docker exec <any consumer> getent hosts ollama` returns nothing.
+**Gate:** from the Unraid host, `curl -s 127.0.0.1:11434/api/tags` lists the
+model. Confirm it is *not* reachable from anywhere else — nothing publishes it
+beyond loopback, and it has no `.lan` name. Then run a generation while a Plex
+transcode is active and confirm both complete: `nvidia-smi` should show the
+model resident alongside the encoder, well under 6 GB.
 
 ---
 
@@ -229,13 +244,22 @@ Merges clean against Phase 1. Follow the finance install runbook, with three
 amendments from the integration findings above:
 
 1. Its prerequisite "an Ollama server, anywhere" is satisfied by Phase 2 — set
-   `OLLAMA_URL=http://ollama-gate:11434/api`, and **add `ai` to `actual-ai`'s
+   `OLLAMA_URL=http://ollama:11434/api`, and **add `ai` to `actual-ai`'s
    networks** in `docker-compose.yml`.
 2. Its `ollama pull llama3.1:8b` becomes `docker exec ollama ollama pull
-   llama3.2:3b` (host operation; smaller model — see above).
+   llama3.2:3b` — host operation, and the smaller model is the one that fits
+   in the VRAM left after Ollama's 2 GiB reservation.
 3. `git merge origin/feat/finance-plane` will conflict with Phase 4's branch
    later in `.env.example` and `setup-unraid.sh` if you reorder these; in this
    order it's clean.
+
+Note PR #16's description is also stale — it documents a `tailscale cert` +
+renewal-script design that its final diff replaced with `tailscale serve`. The
+diff and the install runbook agree; the PR body does not.
+
+Also worth knowing: `actual-ai` is the one service in the merged stack with **no
+healthcheck**, so `update-stack.sh`'s health gate only checks that it is
+running, not that it is working. Read its logs after a deploy.
 
 **Console prerequisite:** HTTPS Certificates enabled for the tailnet (admin
 console → DNS), or `tailscale serve` can't provision Actual's cert.
@@ -332,8 +356,9 @@ Three things need deciding as part of it, not after:
   and bypasses all of this. Seerr is family-facing; it can take a sidecar or
   keep its publish, but it should not keep *both* a publish and a vhost, which
   is the current inconsistency.
-- **`ollama-gate` stays.** It enforces policy (403 / 503), not naming. It sits
-  behind its own sidecar like anything else.
+- **Ollama needs no sidecar.** It has no `.lan` hostname and is loopback-only;
+  its consumers reach it over the `ai` bridge by container name. Phase 5 does
+  not touch it.
 
 Cheap fixes worth doing before Phase 5, independent of it:
 
@@ -349,7 +374,7 @@ Cheap fixes worth doing before Phase 5, independent of it:
 | Phase | Reversible? |
 |-------|-------------|
 | 1 | **Hardest.** Image pull migrates DBs one-way; bootstrap rewrites `*arr` rows. Recovery is the Phase 0 backup — runbook Section 5. |
-| 2 | Easy. Stop `ollama`/`ollama-gate`/`gpu-arbiter`, revert the merge, regenerate configs. Models re-pull. Note the arbiter fails open by design, so removing it degrades to the static VRAM reservation rather than breaking Plex. |
+| 2 | Easy. Stop `ollama`, revert the merge, regenerate configs. Models re-pull in minutes. Nothing else depends on it until Phase 3. |
 | 3 | Easy. Stop both containers, `tailscale serve reset`, revert. Budget data is in `/mnt/user/appdata/actual` and reconstructible from bank OFX exports. |
 | 4 | Easy. Stop and remove `coach`, revert the merge. Nothing else references it. |
 

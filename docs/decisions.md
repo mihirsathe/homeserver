@@ -140,10 +140,15 @@ hostname-to-port mapping, which MagicDNS does for free. The domain approach
 becomes the better answer if a genuine central policy point is ever wanted, and
 it is the right choice for anyone not already all-in on Tailscale.
 
-**What survives either way: `ollama-gate`.** That Caddy enforces real policy —
-403 on model-management endpoints, 503 while the GPU hold is held — and is not
-substitutable by DNS. The useful tell is that after this change the only reverse
-proxy left is the one doing policy rather than naming.
+**Nothing in the stack needs a reverse proxy for its own sake.** An earlier
+draft of this entry expected `ollama-gate` — a policy-enforcing Caddy in front
+of the inference engine — to survive as the one proxy that earned its keep. That
+service was removed from PR #17 before merge; Ollama is loopback-only on a
+private bridge, so network membership is its access control. With it gone,
+Caddy's entire remaining job here is hostname-to-port mapping, which is exactly
+the job MagicDNS does for free. If a genuine policy point is ever wanted — auth,
+rate limiting, shared middleware — that is the argument for reintroducing a
+proxy, and it should be made on those terms rather than inherited from naming.
 
 **Not yet.** Four changes are in flight against a deployment still running its
 first-setup state; re-architecting ingress mid-rollout means re-testing
