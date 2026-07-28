@@ -76,7 +76,16 @@ cd ~/homeserver
 shellcheck homeserver/scripts/*.sh
 
 # Python scripts: syntax-only check
-python3 -m py_compile homeserver/scripts/generate-configs.py homeserver/scripts/bootstrap.py
+python3 -m py_compile homeserver/scripts/generate-configs.py homeserver/scripts/bootstrap.py \
+                      homeserver/scripts/gpu-arbiter.py
+
+# Both Caddyfiles must adapt. The Caddyfile grammar has no statement
+# separator, so this catches the class of error where a site block parses
+# visually but the adapter rejects the file and the proxy won't start.
+for cf in configs/caddy/Caddyfile configs/ollama-gate/Caddyfile; do
+  docker run --rm -v "$PWD/homeserver/$cf:/etc/caddy/Caddyfile:ro" \
+    caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+done
 
 # Help output — catches argparse breakage
 python3 homeserver/scripts/generate-configs.py --help
@@ -86,7 +95,7 @@ python3 homeserver/scripts/bootstrap.py --help
 yamllint homeserver/docker-compose.yml || true
 ```
 
-**Exit criteria** — `docker compose config` exits 0 and emits a fully-resolved compose document. Shellcheck exits 0 (or you triage each warning and decide to ignore). Both `--help` invocations print usage without traceback.
+**Exit criteria** — `docker compose config` exits 0 and emits a fully-resolved compose document. Shellcheck exits 0 (or you triage each warning and decide to ignore). Both `--help` invocations print usage without traceback. Both Caddyfiles print `Valid configuration`.
 
 ---
 
@@ -218,7 +227,7 @@ for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adg
 done
 ```
 
-**Inter-container DNS** (across the `downloaders` / `automation` / `frontend` networks)
+**Inter-container DNS** (across the `downloaders` / `automation` / `frontend` / `ai` networks)
 
 ```bash
 # radarr shares `downloaders` with gluetun (which owns SAB's netns —
@@ -227,9 +236,17 @@ docker exec radarr curl -fsS http://gluetun:8080/api?mode=version
 
 # seerr shares `frontend` with plex
 docker exec seerr wget -qO- http://plex:32400/identity | head -c 200
+
+# caddy shares `ai` with the gate — this is what backs ollama.lan
+docker exec caddy nc -z ollama-gate 11434 && echo "gate reachable"
+
+# The engine must NOT be resolvable from the consumer plane. If this
+# succeeds, a consumer could bypass the GPU arbitration entirely.
+docker exec caddy nslookup ollama 2>&1 | grep -q "can't resolve\|NXDOMAIN" \
+  && echo "OK: engine not exposed on ai" || echo "BUG: ollama resolvable from ai"
 ```
 
-If these fail: check `docker network inspect downloaders automation frontend` and `docker compose logs <svc>`.
+If these fail: check `docker network inspect downloaders automation frontend ai ai_backend` and `docker compose logs <svc>`.
 
 ---
 
@@ -270,6 +287,69 @@ docker logs plex 2>&1 | grep -i 'transcode\|nvenc' | tail
 ### 6c · Concurrent session stress (optional)
 
 Open 6-10 playback sessions from different clients / devtools tabs, each forced to transcode. The RTX 3050 is rated for 12 concurrent NVENC sessions — you should see all 10 encode simultaneously with no "insufficient resources" errors from NVENC.
+
+### 6d · Ollama ↔ Plex GPU sharing
+
+This is the part that can't be tested without a real GPU, so it's worth doing carefully. Sub-steps 1–3 are testable anywhere; step 4 needs the transcode from 6b running.
+
+**1 · Engine up, gate in front of it.**
+
+```bash
+docker exec ollama ollama pull llama3.2:3b
+curl -s http://127.0.0.1:11434/api/tags | head -c 200      # via the gate
+docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+```
+
+Expected: the model lists. `memory.used` is near-idle until the first inference.
+
+**2 · Model management is refused over the network, allowed on the host.**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:11434/api/pull  -d '{"model":"llama3.2:3b"}'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:11434/api/delete -d '{"model":"llama3.2:3b"}'
+```
+
+Expected: `403` for both. The model must still be present afterwards (`ollama list`).
+
+**3 · Streaming isn't buffered.** A buffering bug here looks like "it works" in a non-streaming test and like a hang in every real client.
+
+```bash
+curl -sN http://127.0.0.1:11434/api/chat \
+  -d '{"model":"llama3.2:3b","messages":[{"role":"user","content":"count to twenty slowly"}]}' \
+  | while read -r l; do printf '%s %s\n' "$(date +%s.%N)" "${l:0:60}"; done | head -5
+```
+
+Expected: timestamps increment across lines. If every line lands at the same instant, `flush_interval -1` isn't taking effect — check both `configs/caddy/Caddyfile` (for the `ollama.lan` path) and `configs/ollama-gate/Caddyfile`.
+
+**4 · Preemption during a live transcode.** Start the 6b transcode, then in another terminal:
+
+```bash
+watch -n 1 'ls -l /mnt/user/appdata/ollama-gate/hold 2>/dev/null && echo HELD || echo free; \
+            curl -s http://127.0.0.1:11434/api/ps; \
+            nvidia-smi --query-gpu=memory.used --format=csv,noheader'
+```
+
+Expected sequence:
+
+| When | Hold | `/api/ps` | Inference request |
+|------|------|-----------|-------------------|
+| Before playback, after a warm-up prompt | free | model listed, `size_vram` > 0 | `200` |
+| Within ~5s of the transcode starting | HELD | empty (evicted) | `503` + `Retry-After: 15` |
+| While transcoding | HELD | empty | `503`; `/api/tags` still `200` |
+| ~60s after stopping playback | free | empty | `200`, first request re-loads the model |
+
+`docker logs gpu-arbiter` should narrate each transition. VRAM should drop by roughly the model's size within a second or two of the hold engaging — that drop is the actual thing being verified.
+
+**5 · Fail-open behaviour.** Stop the arbiter and confirm inference keeps working rather than wedging:
+
+```bash
+docker stop gpu-arbiter
+ls /mnt/user/appdata/ollama-gate/hold 2>/dev/null && echo "BUG: hold left behind" || echo "hold released on stop"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:11434/api/tags   # expect 200
+docker start gpu-arbiter
+```
+
+**Exit criteria** — model management is refused over the network; streaming arrives incrementally; the hold engages within ~5s of a video transcode and releases ~60s after it ends; VRAM measurably drops on eviction; stopping the arbiter releases the hold rather than stranding it.
 
 ---
 
@@ -452,6 +532,7 @@ sudo rm -rf /mnt/user  # destroys the sandbox; do not run on the real Unraid box
 | Tailscale ACLs under real admin load | Partial — can configure ACLs locally but cannot emulate multi-device SSO posture without real Tailscale users |
 | Plex Pass features (HW transcoding gating) | Requires a real Plex Pass on the claimed server |
 | AV1 encode absence on RTX 3050 | Untestable positive, testable negative: try and fail |
+| Ollama/Plex VRAM contention at the real 6 GB limit | Testable in shape but not in magnitude — a desktop GPU with more VRAM will never hit the ceiling that makes `OLLAMA_GPU_OVERHEAD` matter. §6d verifies the *mechanism* (hold engages, model evicts, VRAM drops); the actual "does a 4K transcode still start with a model loaded" question needs the 3050 |
 
 ---
 

@@ -21,6 +21,10 @@ COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 # could blank out the value generated.env provides.
 DOCKER_ENV="$STACK_DIR/.env.docker"
 CADDYFILE="$STACK_DIR/configs/caddy/Caddyfile"
+# The ollama-gate Caddyfile is what enforces the GPU hold and blocks model
+# management over the network. A syntax error there fails the gate open or
+# closed depending on where it breaks, so it gets the same pre-flight.
+GATE_CADDYFILE="$STACK_DIR/configs/ollama-gate/Caddyfile"
 LOCK_FILE="/var/lock/homeserver-update.lock"
 LOG_FILE="/var/log/homeserver-update.log"
 MIN_FREE_MB=5120  # 5 GB free required on appdata before pulling
@@ -54,7 +58,7 @@ if ! flock -n 9; then
 fi
 
 # Pre-flight: verify the files we need actually exist before touching Docker.
-for f in "$COMPOSE_FILE" "$DOCKER_ENV" "$CADDYFILE"; do
+for f in "$COMPOSE_FILE" "$DOCKER_ENV" "$CADDYFILE" "$GATE_CADDYFILE"; do
     [[ -f "$f" ]] || { echo "[$(ts)] ERROR: required file not found: $f"; exit 1; }
 done
 
@@ -64,17 +68,19 @@ done
 # disk because the stack is up) so the check works whether or not the live
 # caddy container is currently running. This deliberately runs before the
 # dry-run branch — a syntax error should fail in dry-run too.
-echo "[$(ts)] Pre-flight: validating Caddyfile..."
-if ! /usr/bin/docker run --rm \
-        -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
-        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-    echo "[$(ts)] ERROR: Caddyfile failed to validate. Output:"
-    /usr/bin/docker run --rm \
-        -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
-        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile 2>&1 | sed 's/^/    /'
-    exit 1
-fi
-echo "[$(ts)] Pre-flight: Caddyfile OK"
+echo "[$(ts)] Pre-flight: validating Caddyfiles..."
+for cf in "$CADDYFILE" "$GATE_CADDYFILE"; do
+    if ! /usr/bin/docker run --rm \
+            -v "$cf:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+        echo "[$(ts)] ERROR: $cf failed to validate. Output:"
+        /usr/bin/docker run --rm \
+            -v "$cf:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile 2>&1 | sed 's/^/    /'
+        exit 1
+    fi
+    echo "[$(ts)] Pre-flight: $(basename "$(dirname "$cf")")/Caddyfile OK"
+done
 
 # Pre-flight: appdata must have room for fresh image layers.
 # df reports 1K blocks; convert to MB. /mnt/user/appdata is a share, not a

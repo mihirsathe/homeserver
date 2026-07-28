@@ -78,6 +78,28 @@ SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustain
 
 This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
+### Local AI on the transcode GPU
+
+Running Ollama on the same RTX 3050 that Plex transcodes on means picking a policy for a shared, non-partitionable resource. The policy is: **Plex always wins, and the contention is about VRAM, not compute.**
+
+NVENC and NVDEC are dedicated ASIC blocks on the die. A CUDA inference workload doesn't steal encoder time from them; what it *does* steal is VRAM capacity, and the card has 6 GB. So every mechanism in the design caps Ollama's memory footprint rather than trying to schedule GPU compute.
+
+**Static reservation is the primary mechanism, not preemption.** `OLLAMA_GPU_OVERHEAD` reserves 1.5 GiB that Ollama will never allocate into. It needs no daemon, survives every other component failing, and — critically — degrades gracefully: a model that doesn't fit in the remaining ~4.5 GB gets its overflow layers placed on CPU rather than OOMing the card. With a 3–4B model at ~2.5 GB and a 4K HDR transcode at ~1 GB, the common case has no conflict at all. Preemption exists for the tail (a 7B model plus three simultaneous 4K streams), which is why it's allowed to be a best-effort, 5-second-granularity poll loop instead of something that has to be exactly right.
+
+**Why poll Plex instead of watching `nvidia-smi`.** Device-level NVENC session counters are unreliable on GeForce parts, and they only tell you the encoder is already running. Plex's session list is authoritative, distinguishes a real re-encode from a Direct Play or Direct Stream (neither touches the encoder), and is the same API Tautulli already reads. The cost is a dependency on `PLEX_TOKEN`.
+
+**The arbiter fails open, deliberately.** No token, Plex unreachable, or a malformed response means no hold and Ollama keeps serving. Failing closed would mean an expired Plex token silently bricks local AI for every container on the stack — in order to protect against a contention case the static reservation already covers. A stale hold from an unclean stop is cleared at startup and released on SIGTERM, because nothing else on the stack would ever remove that file.
+
+**Why a gate container instead of exposing Ollama directly.** Ollama has no authentication and no read-only mode: reaching `:11434` means being able to delete every model on the box. It also has no notion of "don't use the GPU right now." Both gaps are closed by fencing the engine onto a private network with no published port and putting a small Caddy in front, which 403s the model-management endpoints and 503s inference while the hold file exists. Using Caddy's `file` matcher for the hold means the arbiter and the gate need no control socket, no shared secret, and no way to authenticate to each other — one creates a file, the other stats it. The gate mounts the directory read-only.
+
+**Consumers get the gate, not the engine.** If containers could reach Ollama directly they could load a model mid-transcode and the arbitration would be advisory. So the engine's DNS name doesn't exist on the consumer network at all, and a container that guesses `http://ollama:11434` gets NXDOMAIN — a loud failure rather than a silent bypass.
+
+**Tailnet-only, matching every other admin service.** `ollama.lan` goes through Caddy like the *arrs; nothing binds `0.0.0.0` and the router still forwards only 32400. Ollama is not exposed to the LAN. That's a deliberate match to the existing trust model (tailnet membership is the boundary), not a technical constraint — publishing on the LAN would be a one-line change if the trust model ever changed.
+
+**Considered and rejected: a CPU-only fallback instance.** A second, GPU-less Ollama that the gate routes to during a hold would degrade instead of 503ing, and the dual Xeon 6146s (24c/48t) would manage roughly 15–20 tok/s on a 3B model. It was dropped because it doubles the Ollama surface area and adds a second 8 GB memory ceiling on a box where [32 GB RAM is already the documented constraint](hardware.md#compute--dell-poweredge-r640) — to buy availability during a window that the static reservation makes rare and that hysteresis already keeps short. Worth revisiting after a RAM upgrade.
+
+**q8_0 KV cache is on by default.** KV cache VRAM scales linearly with context length and can exceed the weights themselves at 16K context on a 6 GB card. Quantising it to q8_0 halves that for a quality difference that isn't measurable at 3–8B. It requires flash attention, which is enabled unconditionally. `OLLAMA_KV_CACHE_TYPE=f16` in `.env` opts back out.
+
 ### Single parity (for now)
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.
@@ -142,7 +164,8 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 
 | Upgrade | Benefit | Notes |
 |---------|---------|-------|
-| GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams | Must be LP form factor |
+| GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams, and enough headroom that Ollama and Plex stop competing for VRAM at all | Must be LP form factor. At 12–16 GB the GPU hold becomes vestigial — raise `OLLAMA_GPU_OVERHEAD_BYTES` and leave the arbiter running as cheap insurance |
+| CPU-fallback Ollama instance | Local AI degrades to CPU during a transcode instead of returning 503 | Needs the RAM upgrade first — see "Local AI on the transcode GPU" above |
 | RAM to 128 GB+ | Comfortable headroom for everything | DDR4 RDIMM, verify DIMM config for 6146 dual-socket |
 | Second MD1400 | 12 more drive bays via daisy-chain | LSI 9300-8e supports it; drops into U5–6 |
 | Managed switch + 10G LAN | Saturate X710 SFP+; dedicated networking rack; VLAN segregation | Candidate: **Ubiquiti USW-Pro-Max-16** (12×1GbE + 4×2.5GbE + 2×10G SFP+, fanless, UniFi-managed) — SFP+ #1 → R640 X710, SFP+ #2 → uplink to networking rack. Alternatives considered: USW-Enterprise-8-PoE (bundled PoE is wasted here), MikroTik CRS310-8G+2S+IN ($50 cheaper but loses UniFi integration), USW-Flex-2.5G-8 (only one SFP+, can't do both 10G server and 10G uplink simultaneously). |

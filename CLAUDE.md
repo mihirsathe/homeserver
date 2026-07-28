@@ -1,6 +1,6 @@
 # CLAUDE.md — Home Media Server Repo
 
-Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. One open router port (TCP 32400 → Plex); all admin access via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
+Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. One open router port (TCP 32400 → Plex); all admin access via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Ollama shares the transcode GPU with Plex and yields VRAM to it automatically.
 
 ---
 
@@ -29,6 +29,7 @@ homeserver/
 └── scripts/
     ├── generate-configs.py    ← run before first boot
     ├── bootstrap.py           ← run once after first boot
+    ├── gpu-arbiter.py         ← runs in-container: yields the GPU to Plex transcodes
     ├── setup-unraid.sh        ← Unraid-specific setup (plugins, shares, folder structure)
     ├── setup-fan-control.sh   ← opt-in iDRAC fan control (run only if needed)
     ├── update-stack.sh        ← monthly image-pull + redeploy + health gate
@@ -45,6 +46,7 @@ homeserver/
 - **Networks defined in Compose, not `external: true`** — Docker restarts on every Unraid boot
 - **Never commit `.env`** — use `.env.example` as the template
 - **No Compose Manager plugin** — Unraid ships `docker compose`; we run it from `media_stack_up` User Script instead
+- **Local-AI consumers connect to `ollama-gate:11434`, never `ollama:11434`** — the engine has no DNS name on the `ai` network on purpose, so nothing can bypass the GPU arbitration. Join the `ai` network and use the gate.
 
 ---
 
@@ -58,3 +60,5 @@ homeserver/
 | Downloads complete | `/mnt/user/data/usenet/complete/{movies,tv,music}/` |
 | Media library | `/mnt/user/data/media/{movies,tv,music}/` |
 | Plex database | `/mnt/user/appdata/plex/` |
+| Ollama models | `/mnt/user/appdata/ollama/` (exclude from Appdata Backup — re-pullable) |
+| GPU hold flag | `/mnt/user/appdata/ollama-gate/hold` (written by `gpu-arbiter`, read by `ollama-gate`) |
