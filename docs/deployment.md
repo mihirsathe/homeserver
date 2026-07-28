@@ -176,7 +176,13 @@ docker run --rm --network ai curlimages/curl -s http://ollama:11434/api/tags
 
 **Exclude the model store from backups.** Appdata Backup → Settings → add `/mnt/user/appdata/ollama` to the exclusion list. Model blobs are multi-GB and re-pullable in minutes; including them grows every weekly archive by tens of GB for no recovery value.
 
-Note that Ollama has **no authentication** — anything on the `ai` network can also delete models. That network is isolated from the media planes and nothing outside the host can reach it (no `*.lan` hostname, no `0.0.0.0` bind), but it's worth knowing before you add a container there.
+**Attaching an AI app.** Nothing reaches Ollama by default — access is opt-in per container. For a service in this Compose file, add `ai` to its `networks:` list. For a container installed from Community Applications, Docker tab → Edit → **Network Type** → `ai` (the network appears in that dropdown once the stack has been up once, because it's declared `name: ai` rather than taking Compose's project prefix). Point the app at `http://ollama:11434`, and verify from inside it:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+Note that Ollama has **no authentication** — anything on the `ai` network can also delete models. That network is isolated from the media planes and nothing outside the host can reach it (no `*.lan` hostname, no `0.0.0.0` bind), but it's why access is opt-in rather than stack-wide.
 
 ---
 

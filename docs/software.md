@@ -127,7 +127,9 @@ Ollama also serves an OpenAI-compatible API at `/v1`, so most SDKs work unmodifi
 
 ### Adding an AI-consuming container
 
-Join the `ai` network and point at Ollama. There's a commented template in `docker-compose.yml` directly below the `ollama` service:
+**Access is opt-in.** Nothing reaches Ollama by default — not Radarr, not Plex, not anything else in the stack. Every existing container lives on `downloaders` / `automation` / `frontend`; Ollama is alone on `ai`. A container has to join `ai` explicitly, which is a one-line change either way.
+
+**If it's a service in this Compose file** — there's a commented template directly below the `ollama` service:
 
 ```yaml
   some-ai-app:
@@ -140,9 +142,21 @@ Join the `ai` network and point at Ollama. There's a commented template in `dock
       - OPENAI_API_KEY=unused
 ```
 
+**If it's an Unraid template container** (installed from Community Applications, not in this Compose file) — Docker tab → the container → Edit → **Network Type** → `ai`, then Apply. Set its Ollama URL to `http://ollama:11434`.
+
+That works because the network is declared with `name: ai` in `docker-compose.yml` rather than taking Compose's default project prefix (`homeserver_ai`). The short, stable name is deliberate: it's what makes the network selectable from the Unraid UI and joinable by `docker run --network ai`, so template containers are first-class consumers rather than a special case. The network has to exist first — bring the stack up once before the dropdown will list it.
+
+Either way, verify from the consumer's own point of view rather than the host's:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+If that returns `NXDOMAIN` or hangs, the container isn't on `ai`. Note that `localhost:11434` will never work from inside a consumer — that's the container's own loopback, not Ollama's.
+
 If the app has an admin UI, add a row to `CADDY_SERVICES` in `generate-configs.py` and re-run it for `<name>.lan` routing — that publishes the *app's* UI to the tailnet, not Ollama's API.
 
-**Ollama has no authentication and no read-only mode**, so anything on the `ai` network can also delete models. Network membership is the access control. That's an accepted trade while every member is a container we deliberately put there, and models re-pull in minutes — but it's the reason the `ai` network is isolated from the media planes, and the reason to think before adding something to it.
+**Ollama has no authentication and no read-only mode**, so anything on the `ai` network can also delete models and occupy the GPU. Network membership is the access control, which is exactly why access is opt-in rather than stack-wide: the media containers — especially the internet-facing downloaders — have no reason to be trusted with the model store. Models re-pull in minutes so the blast radius is small, but think before adding something to this network.
 
 ### Folder Structure on Server
 

@@ -45,7 +45,7 @@ homeserver/
 - **Networks defined in Compose, not `external: true`** — Docker restarts on every Unraid boot
 - **Never commit `.env`** — use `.env.example` as the template
 - **No Compose Manager plugin** — Unraid ships `docker compose`; we run it from `media_stack_up` User Script instead
-- **Local-AI consumers join the `ai` network and use `http://ollama:11434`** — Ollama has no auth, so network membership is the access control. Caddy is deliberately not on `ai`, so there is no `ollama.lan` and nothing on the tailnet can reach it.
+- **Local-AI consumers join the `ai` network and use `http://ollama:11434`** — access is opt-in; no existing stack container is on `ai`. Ollama has no auth, so network membership is the access control. The network is declared `name: ai` (not the Compose-prefixed default) so Unraid-template containers can join it from the Docker tab. Caddy is deliberately not on `ai`, so there is no `ollama.lan` and nothing on the tailnet can reach it.
 
 ---
 

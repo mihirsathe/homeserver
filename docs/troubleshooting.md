@@ -241,7 +241,18 @@ curl -s http://127.0.0.1:11434/api/tags
 docker inspect -f '{{json .NetworkSettings.Networks}}' <container> | tr ',' '\n' | grep -o '"[a-z_]*"' | head
 ```
 
-If the container isn't on `ai`, add `ai` to its `networks:` list in `docker-compose.yml` and `docker compose --env-file .env.docker up -d <service>`. Use `http://ollama:11434` — not `localhost`, and not the host LAN IP.
+Expect `ai` in that list. This is the normal cause — access is opt-in, and **no container is on `ai` by default**. Fix depends on where the container is defined:
+
+- **A service in `docker-compose.yml`** — add `ai` to its `networks:` list, then `docker compose --env-file .env.docker up -d <service>`.
+- **An Unraid template container** — Docker tab → Edit → **Network Type** → `ai` → Apply. If `ai` isn't in the dropdown, the stack has never been up; start it once so Compose creates the network.
+
+Then confirm from inside the consumer, not from the host:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+Use `http://ollama:11434` — not `localhost:11434` (that's the consumer's own loopback), and not the host LAN IP (nothing is bound there).
 
 ---
 
