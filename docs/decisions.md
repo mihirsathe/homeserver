@@ -78,6 +78,80 @@ SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustain
 
 This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
+### Admin ingress: `*.lan` behind Caddy today, Tailscale-native next
+
+This was never recorded when it was built, so both halves go here: what the
+current design is, and why it's being unwound.
+
+**What exists.** Every admin UI is a plain-HTTP vhost at `<name>.lan` on a
+single Caddy, reached over the tailnet. Three pieces make that work: Caddy
+routes by `Host` header to each backend's docker-DNS name; AdGuard Home answers
+`*.lan` with a wildcard rewrite; and a Tailscale split-DNS rule restricted to
+the `lan` domain sends those queries to AdGuard. Backends bind `127.0.0.1` only,
+so Caddy is the sole ingress. Caddy itself runs inside a `ts-caddy` sidecar's
+network namespace, giving it a tailnet address of its own — because the Unraid
+web GUI owns the host's `:80` and must keep it, being the one admin surface that
+survives Docker being down.
+
+Two costs surfaced only after the pieces were assembled.
+
+**`auto_https off` forecloses Secure Context, which is not the same as
+"unencrypted."** The original reasoning — Tailscale already provides
+authenticated, encrypted transport, so TLS on top would only buy a private CA to
+install on every device — is correct about *eavesdropping* and wrong about
+*browser capability*. Browsers gate a widening set of APIs on Secure Context,
+not on whether the bytes are encrypted in transit. Actual Budget is the first
+service here that simply will not load over plain HTTP (its SQLite engine needs
+`SharedArrayBuffer`), and it required building a second, parallel ingress path —
+`tailscale serve` on the host node — for exactly one app. Service workers,
+WebCrypto's subtle API and WASM threads sit behind the same gate. Actual is not
+an exception to the design; it is the design's first bill arriving.
+
+**The mechanism count grew without anyone choosing it.** Reaching a service now
+has five different answers: Caddy vhosts, the Unraid GUI on host `:80`,
+`tailscale serve` on host `:443`, raw `0.0.0.0` publishes (Plex, Seerr,
+AdGuard), and eight loopback publishes that exist only so `bootstrap.py` can
+talk to `localhost:<port>` from the host. Each was locally correct. They do not
+compose, and the drift shows: Seerr is published on `0.0.0.0:5055` *and* has a
+`seerr.lan` vhost.
+
+**Direction: give each exposed service its own Tailscale node and delete the
+middle layer.** The repository already proves both halves independently —
+`ts-caddy` proves the sidecar pattern, and the finance plane proves
+`tailscale serve` provisions free, auto-renewing, publicly-trusted certificates
+for a node's MagicDNS name. Generalising that removes Caddy, AdGuard, the
+Caddyfile generator, `CADDY_SERVICES`, the split-DNS console rule, the wildcard
+rewrite, and `CADDY_TAILNET_IP` bookkeeping. Every service gets a real
+certificate, so Secure Context stops being a special case. ACLs become
+per-service (`tag:admin → tag:radarr:443`) instead of one blunt port list. Host
+port contention stops existing. Ergonomics likely improve rather than regress:
+MagicDNS puts the tailnet domain in the client search path on most platforms, so
+bare `http://radarr/` resolves — shorter than `radarr.lan`.
+
+The cost is one sidecar container per exposed service (~30 MB each, noise
+against 32 GB), a reusable auth key, a state directory per sidecar, and one
+tailnet device each against the plan's cap.
+
+**Alternative considered: a real domain plus a wildcard certificate.**
+`*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and a single cert,
+and also solves Secure Context. Rejected for this box because Caddy here
+performs no middleware — no auth, no rate limiting, nothing shared. It is doing
+hostname-to-port mapping, which MagicDNS does for free. The domain approach
+becomes the better answer if a genuine central policy point is ever wanted, and
+it is the right choice for anyone not already all-in on Tailscale.
+
+**What survives either way: `ollama-gate`.** That Caddy enforces real policy —
+403 on model-management endpoints, 503 while the GPU hold is held — and is not
+substitutable by DNS. The useful tell is that after this change the only reverse
+proxy left is the one doing policy rather than naming.
+
+**Not yet.** Four changes are in flight against a deployment still running its
+first-setup state; re-architecting ingress mid-rollout means re-testing
+everything at once. It is also a deletion, and deletions migrate incrementally —
+a sidecar can be stood up for one service and verified while its Caddy vhost
+still works, so the two paths coexist during the transition. Sequenced as
+Phase 5 in [rollout-2026-07.md](rollout-2026-07.md).
+
 ### Single parity (for now)
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.

@@ -289,6 +289,61 @@ backfill; Plex still transcodes on GPU during it.
 
 ---
 
+## Phase 5 — Tailscale-native ingress (sketch, after the rollout)
+
+Not part of this rollout. Recorded here so the reasoning doesn't go stale — the
+full argument is in [decisions.md](decisions.md#admin-ingress-lan-behind-caddy-today-tailscale-native-next).
+
+The short version: each exposed service gets its own Tailscale node instead of a
+Caddy vhost, which deletes Caddy, AdGuard, the Caddyfile generator, the
+split-DNS rule and the wildcard rewrite, and gives every service a real
+certificate so Secure Context stops being a special case.
+
+**This is a deletion, and it migrates one service at a time.** Both paths work
+simultaneously during the transition, so there is no cutover moment and no
+rollback cliff. Migrate the least important service first.
+
+Per service:
+
+1. Add a `ts-<name>` sidecar (same shape as `ts-caddy`: reusable non-ephemeral
+   auth key, `TS_ACCEPT_DNS=false`, state on appdata, `tag:server`).
+2. Move the service to `network_mode: "service:ts-<name>"` and drop its
+   `networks:` and loopback `ports:`. The sidecar carries the networks the
+   service used to hold.
+3. `tailscale serve --bg http://127.0.0.1:<port>` inside that node.
+4. Verify `https://<name>.<tailnet>.ts.net` and bare `http://<name>/`.
+5. Only then remove its row from `CADDY_SERVICES` and re-run
+   `generate-configs.py --force-overwrite`.
+
+When the last row is gone: drop `caddy`, `ts-caddy` and `adguard` from compose,
+delete `write_caddy` / `write_adguard` / `CADDY_SERVICES` / `caddy_services()`,
+drop the Caddyfile pre-flight from `update-stack.sh`, remove `TAILNET_HOST_IP`
+and `CADDY_TAILNET_IP` from `.env`, and delete the split-DNS nameserver rule
+from the Tailscale console.
+
+Three things need deciding as part of it, not after:
+
+- **`bootstrap.py` talks to `localhost:<port>`**, which is the only reason eight
+  loopback publishes exist. Either keep those publishes (harmless — loopback is
+  not reachable from anywhere) or run bootstrap as a container on the
+  `automation` + `downloaders` networks and address services by name. The second
+  is cleaner and removes the last host-port coupling.
+- **Plex and Seerr stay as they are.** Plex is deliberately public on `:32400`
+  and bypasses all of this. Seerr is family-facing; it can take a sidecar or
+  keep its publish, but it should not keep *both* a publish and a vhost, which
+  is the current inconsistency.
+- **`ollama-gate` stays.** It enforces policy (403 / 503), not naming. It sits
+  behind its own sidecar like anything else.
+
+Cheap fixes worth doing before Phase 5, independent of it:
+
+- Seerr → `127.0.0.1:5055` (it already has `seerr.lan`; the `0.0.0.0` publish is
+  leftover).
+- Collapse `finance` into `ai` — `actual-ai` has to join `ai` anyway for Ollama,
+  so a separate two-member plane may not be earning its keep.
+
+---
+
 ## Rollback posture per phase
 
 | Phase | Reversible? |
