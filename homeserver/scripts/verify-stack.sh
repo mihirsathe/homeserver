@@ -182,10 +182,18 @@ for d in /mnt/user/appdata/*/; do
     [[ -d "$d" ]] || continue
     case "$d" in
         */homeserver/|*/chess-coach/) continue ;;   # git repo; deploy key + checkout
+        # plexinc/pms-docker runs its entrypoint as root by design and manages
+        # ownership internally via PLEX_UID/PLEX_GID, so root-owned paths here
+        # are correct rather than broken. `docker inspect plex` shows an empty
+        # .Config.User, which is the tell.
+        */plex/) continue ;;
     esac
-    # Three levels deep: a correctly-owned parent can hide a root-owned child,
-    # which is exactly how Bazarr was found crash-looping behind s6 while
-    # docker reported it Up.
+    # Directories only, three levels deep. A correctly-owned parent can hide a
+    # root-owned child — exactly how Bazarr was found crash-looping behind s6
+    # while docker reported it Up. Do not drop `-type d`: single files under
+    # appdata are usually bind-mount TARGETS that docker creates as root and
+    # the compose file then shadows, so their host-side ownership is irrelevant
+    # and reporting it is pure noise.
     badown=$(find "$d" -maxdepth 2 -type d ! -user nobody 2>/dev/null | head -3)
     if [[ -n "$badown" ]]; then
         bad "root-owned under $(basename "$d"): $(echo "$badown" | tr '\n' ' ')"
