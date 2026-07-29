@@ -1301,8 +1301,27 @@ cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker build coach
 ```
 
-This compiles Stockfish and is the slowest single step in the run — several
-minutes, and it is CPU-bound on all 24 cores. Expect the box to get loud.
+**Check `docker.img` headroom first — this build needs roughly 10 GB free and
+the Unraid default vDisk is only 20 GB:**
+
+```bash
+df -h /var/lib/docker
+```
+
+The chess-coach Dockerfile builds lc0 in a stage based on
+`nvidia/cuda:*-cudnn-devel`, which is 8–10 GB extracted. That is entirely
+separate from the array: hundreds of GB free on `/mnt/user` tells you nothing
+about the vDisk, and the failure is a bare `no space left on device` several
+minutes into a build.
+
+lc0 is **phase 2** and unused at first deploy, so the cheap answer is to not
+build it — drop the `COPY --from=lc0` in the final stage and Docker skips the
+unreferenced stage entirely. Growing `docker.img` (Settings → Docker, service
+stopped) is the alternative and may require recreating the vDisk, which drops
+every image and forces a full re-pull.
+
+Then the build itself compiles Stockfish — the slowest single step in the run,
+CPU-bound on all 24 cores. Expect the box to get loud.
 
 ### 7c Start it
 

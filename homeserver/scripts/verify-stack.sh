@@ -44,6 +44,18 @@ fi
 
 docker info >/dev/null 2>&1 && ok "docker responding" || bad "docker not responding"
 
+# docker.img is a fixed-size loop-mounted vDisk, entirely separate from the
+# array — appdata having hundreds of GB free tells you nothing about it. When
+# it fills, running containers' writes start failing with no obvious cause, and
+# builds die with "no space left on device" while df on /mnt/user looks fine.
+dfree=$(df -BM --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc '0-9')
+if [[ -n "$dfree" ]]; then
+    if   [[ "$dfree" -lt 2048 ]]; then bad  "docker.img only ${dfree}MiB free — container writes will start failing"
+    elif [[ "$dfree" -lt 5120 ]]; then warn "docker.img ${dfree}MiB free — tight; a large image pull or build will fail"
+    else ok "docker.img ${dfree}MiB free"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 sec "Containers"
 
@@ -112,17 +124,25 @@ else
     [[ "$tags" -gt 0 ]] && ok "host carries tag:server" || bad "host missing tag:server — ACL and approvals key off it"
 
     if [[ -n "$TAILNET" ]]; then
+        # A node generally cannot reach the TailVIP of a service it advertises
+        # itself, so curling these URLs from here reports "unreachable" for
+        # every service even when all of them work perfectly from any other
+        # tailnet device. That produced 11 permanent false warnings and taught
+        # the reader to skim the section, which is worse than not checking.
+        #
+        # What IS verifiable from the advertising host is that tailscaled holds
+        # a proxy mapping for each service. Reachability and certificate
+        # validity have to be checked from a different device.
+        serve_json=$(tailscale serve status --json 2>/dev/null)
         for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach; do
-            # --max-time keeps an unadvertised service from stalling the run.
-            # No -k: an invalid cert must fail, since the certificate is the
-            # entire reason this ingress design was chosen.
-            code=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 8 "https://$s.$TAILNET/" 2>/dev/null)
-            case "$code" in
-                2*|3*|401) ok "https://$s.$TAILNET -> $code (cert valid)" ;;
-                ""|000)    warn "https://$s.$TAILNET unreachable (not published, or cert invalid)" ;;
-                *)         bad "https://$s.$TAILNET -> $code" ;;
-            esac
+            if grep -q "svc:$s" <<<"$serve_json"; then
+                ok "svc:$s advertised by this host"
+            else
+                warn "svc:$s not advertised here (python3 scripts/sync-tailscale-services.py)"
+            fi
         done
+        printf '  \033[36m·\033[0m %s\n' \
+            "URLs + certs must be checked from ANOTHER tailnet device:  https://radarr.$TAILNET/"
     else
         warn "TAILNET_NAME unset in .env — skipping Service URL checks"
     fi
