@@ -96,46 +96,47 @@ ls -lah /mnt/user/usenet-incomplete/
 
 ## Admin UIs unreachable over Tailscale
 
-`radarr.lan` (or any `*.lan`) doesn't load from a tailnet device. Two
-distinct failure modes — DNS or HTTP — diagnose separately.
-
-**First, narrow the layer:**
+`https://radarr.<tailnet>.ts.net/` doesn't load from a tailnet device.
+There is no DNS layer and no proxy layer to bisect any more — a service either
+resolves and serves, or its advertisement isn't active.
 
 ```bash
-nslookup radarr.lan        # DNS layer
-curl -v http://radarr.lan/ # HTTP layer
+tailscale serve status          # is svc:radarr advertised and active?
+tailscale status                # is this host still on the tailnet?
+curl -fsS http://127.0.0.1:7878/ping   # is the backend itself alive?
 ```
 
-If `nslookup` fails or returns the wrong IP, it's a DNS problem (most
-common). If it returns `<TAILNET_HOST_IP>` but `curl` hangs, it's
-network/Caddy.
+Work the three in that order; they isolate cleanly.
 
-### DNS layer
-
-1. On the admin device: `tailscale status` — is the device itself connected? If not, Tailscale app → sign in again.
-2. Tailscale admin console → DNS — verify "Restrict to domain `lan`" is set with `<TAILNET_HOST_IP>` as the nameserver. (Per Step 6.5 of `deployment.md`.)
-3. From the Unraid host: `docker compose ps adguard` — must be `(healthy)`. If not: `docker compose logs adguard` — look for port-bind conflicts on `:53`.
-4. Direct-test AdGuard from a tailnet device: `nslookup radarr.lan <TAILNET_HOST_IP>` — should answer with the same IP regardless of the device's normal DNS.
-5. AdGuard UI → `http://adguard.lan/` (or `http://<TAILNET_HOST_IP>:80/` via Caddy) → Filters → DNS rewrites — verify `*.lan → <TAILNET_HOST_IP>` is present. If missing, re-run `python3 scripts/generate-configs.py --force-overwrite` and `docker restart adguard`.
-
-### HTTP / Caddy layer
-
-1. From the Unraid host: `docker compose ps caddy` — must be `(healthy)`.
-2. `docker compose logs caddy` — look for upstream connection errors (`dial tcp ...`).
-3. ACL sanity: Tailscale console → Access controls — confirm `tag:admin → tag:server:80` is permitted.
-4. Direct hit Caddy on the tailnet IP with a Host header to bypass DNS:
+1. **Backend dead** (`curl` to loopback fails) → the container is the problem,
+   not ingress. `docker compose ps radarr` / `docker compose logs radarr`.
+2. **Backend fine, service not listed by `tailscale serve status`** → the
+   advertisement was lost. Re-issue it:
    ```bash
-   curl -v -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+   tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
    ```
-   If this works but `radarr.lan` doesn't, the problem is purely DNS.
+3. **Advertised but inactive** → host approval. Check admin console →
+   **Services** → the service → **Service hosts**. Approve if pending. Services
+   is in public beta and the daemon does not always pick up an approval that
+   lands after the advertisement, so if the console shows it approved and the
+   daemon disagrees:
+   ```bash
+   tailscale down && tailscale up --ssh --advertise-tags=tag:server
+   ```
+4. **Certificate warning in the browser** → MagicDNS or HTTPS is disabled at
+   the tailnet level. Admin console → **DNS** → both must be on.
 
-Plex (port 32400) doesn't ride Caddy or AdGuard — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
+**The Unraid GUI is unaffected by all of the above.** `http://<server-name>/`
+and Tailscale SSH do not depend on Docker or on any service advertisement — if
+those are down too, the problem is the host or the tailnet, not ingress.
+
+Plex (port 32400) is fronted by nothing — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
 
 ---
 
 ## Gluetun kill-switch engaged (SAB / Prowlarr offline)
 
-SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan/` and `http://prowlarr.lan/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+SAB UI doesn't load, Prowlarr UI doesn't load — `https://sab.<tailnet>.ts.net/` and `https://prowlarr.<tailnet>.ts.net/` hang or refuse. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
 This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 

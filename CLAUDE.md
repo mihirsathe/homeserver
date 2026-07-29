@@ -1,6 +1,6 @@
-# CLAUDE.md — Home Media Server Repo
+# CLAUDE.md — Home Server Repo
 
-Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. One open router port (TCP 32400 → Plex); all admin access via Tailscale. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
+Self-hosted **platform** on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. Its tenants — media automation, local LLM inference, personal finance, and a chess webapp — are peers; media is the oldest, not the privileged one. One open router port (TCP 32400 → Plex); every other service is a Tailscale Service (`svc:<name>`) with its own MagicDNS name and certificate, advertised by the host's tailscaled. No reverse proxy. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
 
 ---
 
@@ -11,6 +11,7 @@ Self-hosted media automation stack on Dell PowerEdge R640 + MD1400 DAS, running 
 | [docs/hardware.md](docs/hardware.md) | Rack layout, compute, storage, GPU specs |
 | [docs/software.md](docs/software.md) | OS, plugins, Docker stack, folder structure, external access, Usenet |
 | [docs/deployment.md](docs/deployment.md) | Step-by-step deployment and scheduled maintenance setup |
+| [docs/upgrade-2026-07.md](docs/upgrade-2026-07.md) | The live run: catch-up to `master`, ingress move to Tailscale Services, and landing all four tenants in one sitting — with gates and rollback |
 | [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, monitoring, secret rotation |
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, Tailscale/Gluetun outages |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |

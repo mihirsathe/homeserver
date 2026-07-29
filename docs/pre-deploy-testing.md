@@ -207,14 +207,13 @@ curl -fsS http://localhost:6767/                    # Bazarr
 curl -fsS http://localhost:32400/identity | head -c 200
 ```
 
-**Through Caddy + AdGuard split-DNS** (from any tailnet device, after
+**Through Tailscale Services** (from any tailnet device, after
 Step 6.5):
 
 ```bash
-nslookup radarr.lan                     # expect TAILNET_HOST_IP
-for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
+for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr; do
   printf "%-12s " "$svc"
-  curl -fsS -o /dev/null -w "%{http_code}\n" "http://${svc}.lan/"
+  curl -fsS -o /dev/null -w "%{http_code}\n" "https://${svc}.<tailnet>.ts.net/"
 done
 ```
 
@@ -308,15 +307,14 @@ Expected: a `MediaContainer` XML identity blob. If it times out, the router port
 **(b) Tailscale admin plane.** On an admin device on the tailnet (and *only* on the tailnet) once Step 6.5's split DNS is configured:
 
 ```bash
-# DNS resolves automatically via Tailscale split-DNS → AdGuard
-nslookup radarr.lan                        # expect TAILNET_HOST_IP
+# MagicDNS resolves each service name directly — no split DNS, no AdGuard
 
-# Each admin UI responds through Caddy on :80
-curl -fsS http://radarr.lan/ping
-curl -fsS http://sonarr.lan/ping
-curl -fsS http://prowlarr.lan/ping
-curl -fsS http://sab.lan/api?mode=version
-curl -fsS http://seerr.lan/api/v1/status | jq .
+# Each admin UI responds over HTTPS with a real Tailscale certificate
+curl -fsS https://radarr.<tailnet>.ts.net/ping
+curl -fsS https://sonarr.<tailnet>.ts.net/ping
+curl -fsS https://prowlarr.<tailnet>.ts.net/ping
+curl -fsS https://sab.<tailnet>.ts.net/api?mode=version
+curl -fsS https://seerr.<tailnet>.ts.net/api/v1/status | jq .
 ```
 
 All should succeed. Drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin services are tailnet-only.
@@ -324,8 +322,9 @@ All should succeed. Drop off the tailnet (`tailscale down` or disable the client
 **Boundary property check** — backend ports must NOT be reachable from anywhere except host loopback. From a tailnet device that is *not* the Unraid host:
 
 ```bash
-# Direct backend ports must time out / refuse — only :80 (Caddy), :32400
-# (Plex), :5055 (Seerr), and :53 (AdGuard) listen on a non-loopback interface.
+# Direct backend ports must time out / refuse. On the HOST's tailnet IP only
+# :80 (Unraid GUI) and :32400 (Plex) answer. Everything else is an
+# HTTPS Tailscale Service on :443, not a host port.
 for p in 6767 6868 7878 8080 8181 8686 8989 9696; do
   printf "%-5s " "$p"
   timeout 3 bash -c "</dev/tcp/<TAILNET_HOST_IP>/$p" 2>&1 | head -c 60; echo
