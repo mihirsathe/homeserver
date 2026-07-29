@@ -149,6 +149,24 @@ class Api:
     def service_devices(self, name: str):
         return self._call("GET", f"/services/{urllib.parse.quote(name)}/devices")
 
+    def is_approved(self, name: str, device_id: str) -> bool:
+        # Read back rather than trusting the POST. An approval that silently
+        # did not take looks identical to one that did, and the cost of being
+        # wrong here is a service that is "green" in this output and dead in a
+        # browser.
+        try:
+            r = self._call(
+                "GET",
+                f"/services/{urllib.parse.quote(name)}/device/{urllib.parse.quote(device_id)}/approved",
+            )
+        except RuntimeError:
+            return False
+        if isinstance(r, bool):
+            return r
+        if isinstance(r, dict):
+            return bool(r.get("approved", False))
+        return False
+
     def approve(self, name: str, device_id: str):
         return self._call(
             "POST",
@@ -281,8 +299,18 @@ def main() -> int:
             continue
 
         try:
-            api.approve(svc, device_id)
-            print(f"      approve     approved ({device_id})")
+            if api.is_approved(svc, device_id):
+                print(f"      approve     already approved ({device_id})")
+            else:
+                api.approve(svc, device_id)
+                # Approval is not always readable back instantly.
+                confirmed = any(api.is_approved(svc, device_id) or time.sleep(2)
+                                for _ in range(5))
+                if confirmed:
+                    print(f"      approve     approved + verified ({device_id})")
+                else:
+                    print(f"      approve     POSTed but NOT confirmed — re-run to check")
+                    failures += 1
         except RuntimeError as e:
             print(f"      approve     FAILED: {e}")
             failures += 1
@@ -296,9 +324,36 @@ def main() -> int:
                 api.delete_service(svc)
                 print(f"\n  {svc:<18} DELETED (not in SERVICES)")
 
-    print()
+    # Final pass. Everything above reports what this run *did*; this reports
+    # what is actually true now, which is the only thing worth trusting.
+    print("\nVerifying actual state:")
+    live = 0
+    for name in SERVICES:
+        svc = normalise(name)
+        try:
+            devs = api.service_devices(svc)
+        except RuntimeError as e:
+            print(f"  {svc:<18} could not read: {e}")
+            continue
+        entries = (devs.get("devices", devs) if isinstance(devs, dict) else devs) or []
+        mine = [d for d in entries if isinstance(d, dict) and host.lower() in json.dumps(d).lower()]
+        if not mine:
+            print(f"  {svc:<18} NOT advertised by {host}")
+            continue
+        did = mine[0].get("id") or mine[0].get("nodeId") or mine[0].get("deviceId")
+        if api.is_approved(svc, did):
+            print(f"  {svc:<18} advertised + approved")
+            live += 1
+        else:
+            print(f"  {svc:<18} advertised, NOT approved")
+
+    print(f"\n{live}/{len(SERVICES)} services live.")
     if failures:
-        print(f"{failures} step(s) failed. Nothing here is destructive — fix and re-run.")
+        print(f"{failures} step(s) reported a problem. Nothing here is destructive — fix and re-run.")
+        return 1
+    if live < len(SERVICES):
+        print("Some services are not live yet. Re-running is safe and usually resolves it —")
+        print("advertisements take a moment to reach the control plane.")
         return 1
 
     print("All services reconciled.\n")
