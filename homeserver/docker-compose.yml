@@ -37,8 +37,7 @@
 #   downloaders  — gluetun, sabnzbd, prowlarr. SAB and Prowlarr share
 #                  gluetun's netns so all their outbound traffic exits via
 #                  Mullvad with a kill-switch. Only gluetun publishes ports.
-#   frontend     — plex, seerr, tautulli, bazarr, adguard. Family-facing
-#                  services + the tailnet DNS resolver.
+#   frontend     — plex, seerr, tautulli, bazarr. Family-facing services.
 #   automation   — sonarr, radarr, lidarr. Dual-homed to frontend (for
 #                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
 #                  Prowlarr via gluetun). Blocks a popped frontend container
@@ -48,18 +47,34 @@
 #                  has a reason to reach the *arrs or the downloaders, and
 #                  Ollama has no auth of its own, so network membership is
 #                  the access control.
-#   caddy        — joined to the three media planes so the reverse proxy can
-#                  reach every admin backend by docker-DNS name. Deliberately
-#                  NOT on `ai` — Ollama has no *.lan hostname because nothing
-#                  on the tailnet needs to reach it.
 #
-# ADMIN INGRESS (the only way into admin UIs from the tailnet):
-#   tailnet device → tailscale → host:80 → caddy → backend by name.
-#   Backend ports are bound to 127.0.0.1 only (loopback) — they exist for
-#   bootstrap.py + host-side debugging, never for direct LAN/Tailscale
-#   access. AdGuard Home (in the stack) answers *.lan DNS queries via a
-#   wildcard rewrite to TAILNET_HOST_IP, configured as a Tailscale
-#   restricted nameserver in the admin console.
+# ADMIN INGRESS — Tailscale Services, no reverse proxy:
+#   Every admin UI is a Tailscale Service (`svc:<name>`) advertised by the
+#   HOST's tailscaled — the one the Unraid Tailscale plugin already runs.
+#   Each service gets its own TailVIP, its own MagicDNS name, and its own
+#   publicly-trusted auto-renewing certificate, so every admin URL is https://
+#   and Secure Context is never a special case.
+#
+#   tailnet device → https://<name>.<tailnet>.ts.net → host tailscaled
+#                  → 127.0.0.1:<port> → container
+#
+#   That is why every backend keeps a 127.0.0.1 publish: those loopback ports
+#   are simultaneously bootstrap.py's probe target and the serve backend.
+#   Nothing binds 0.0.0.0 except plex.
+#
+#   THERE IS NO REVERSE PROXY AND NO *.lan. Caddy, ts-caddy, AdGuard, the
+#   Caddyfile generator and the Tailscale split-DNS rule are all deleted.
+#   Caddy performed no middleware — no auth, no rate limiting — so its only
+#   job was hostname-to-port mapping, which MagicDNS does for free and with a
+#   real certificate. A proxy earns its place again when it becomes a policy
+#   point (SSO), not a naming layer. See docs/decisions.md.
+#
+# THE UNRAID GUI KEEPS THE HOST'S :80:
+#   http://DellBox/Main and http://<host tailnet IP>/ have no Docker
+#   dependency, so they survive a stopped array or a broken image pull — the
+#   situations where you most need a way in. On Unraid, stopping the array
+#   stops Docker, which is exactly why the GUI must never sit behind anything
+#   containerised.
 #
 # PUBLIC-FACING:
 #   Only plex is reachable from the internet — TCP 32400 is port-forwarded
@@ -423,7 +438,7 @@ services:
     volumes:
       - /mnt/user/appdata/seerr:/app/config
     ports:
-      - "5055:5055"
+      - "127.0.0.1:5055:5055"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:5055/api/v1/status || exit 1"]

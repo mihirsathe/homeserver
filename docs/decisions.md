@@ -78,6 +78,98 @@ SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustain
 
 This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
+### Admin ingress: Tailscale Services, no reverse proxy
+
+**Decided and implemented.** An earlier revision of this entry sequenced this
+as a deferred "Phase 5". That deferral is withdrawn — the reasoning is below,
+including why deferring turned out to cost more than doing it.
+
+**What existed.** Every admin UI was a plain-HTTP vhost at `<name>.lan` on a
+single Caddy. Three mechanisms made that work: Caddy routed by `Host` header
+to each backend's docker-DNS name; AdGuard Home answered `*.lan` with a
+wildcard rewrite; and a Tailscale split-DNS rule sent `.lan` queries to
+AdGuard. A fourth propped it up — Caddy could not bind the host's `:80`
+(Unraid's GUI owns it), so it ran inside a `ts-caddy` sidecar's network
+namespace to get a tailnet address of its own.
+
+**Why it was replaced.**
+
+*`auto_https off` forecloses Secure Context, which is not the same as
+"unencrypted."* The original reasoning — Tailscale already provides
+authenticated, encrypted transport, so TLS on top would only buy a private CA
+to install on every device — is correct about *eavesdropping* and wrong about
+*browser capability*. Browsers gate a widening set of APIs on Secure Context,
+not on whether bytes are encrypted in transit. Actual Budget will not load
+over plain HTTP at all (its SQLite engine needs `SharedArrayBuffer`), and it
+forced a second, parallel ingress path — `tailscale serve` on the host — for
+exactly one app. Service workers, WebCrypto's subtle API and WASM threads sit
+behind the same gate. Actual was not an exception to the design; it was the
+design's first bill arriving.
+
+*The mechanism count grew without anyone choosing it.* Reaching a service had
+five answers: Caddy vhosts, the Unraid GUI on host `:80`, `tailscale serve` on
+host `:443`, raw `0.0.0.0` publishes, and loopback publishes for
+`bootstrap.py`. Each was locally correct; they did not compose. The drift
+showed — Seerr was published on `0.0.0.0:5055` *and* had a `seerr.lan` vhost.
+
+**What replaced it.** Each exposed service is a Tailscale Service (`svc:<name>`)
+advertised by the host's existing tailscaled. Each gets a TailVIP, a MagicDNS
+name and a real auto-renewing certificate. This deletes Caddy, `ts-caddy`,
+AdGuard, the Caddyfile, `write_caddy()`, `write_adguard()`, `CADDY_SERVICES`,
+`CADDY_TAILNET_IP`, `TS_AUTHKEY` and the split-DNS console rule.
+
+**Why Services rather than a Tailscale sidecar per container.** Both give every
+service its own name and certificate. The deciding factor was blast radius in
+the compose file. Under the sidecar model a backend joins its sidecar's netns
+via `network_mode: service:ts-<name>`, which means it *loses its own*
+`networks:` — so each sidecar has to replicate its backend's plane membership
+(Radarr still needs to reach Prowlarr and SAB). That is a rewrite of every
+service's internal networking, plus one container and one state directory each.
+Services needs none of it: the host daemon already exists, and the loopback
+publishes it proxies to were already there for `bootstrap.py`. The compose
+change is a pure deletion.
+
+Services also improves the emergency path. Caddy was a *container*, so Docker
+trouble took every admin UI with it. The host daemon survives Docker entirely —
+you lose backends, not the route to them.
+
+The costs: Tailscale Services is in public beta, and service definitions plus
+host approval live in the admin console rather than in this repo. The second is
+mitigated by a huJSON serve-config file and by `autoApprovers` keyed on
+`tag:server` in the ACL policy, both of which are versionable.
+
+**Alternative considered: a real domain plus a wildcard certificate.**
+`*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and one cert, and
+also solves Secure Context. Rejected *for now* because Caddy here performs no
+middleware — it maps hostnames to ports, which MagicDNS does for free. The
+domain becomes the better answer when any one of these fires:
+
+1. A non-Tailscale person needs *routine* access to something. One-off sharing
+   is covered by Tailscale Funnel without a domain.
+2. Single sign-on across services is wanted. This is the big one, and it is
+   also what brings a reverse proxy back — a proxy earns its place as a policy
+   point, never as a naming layer.
+3. Something external must call in: webhooks, OAuth redirect URIs.
+4. Vendor independence — today the URLs contain `ts.net`.
+
+None are true today. Buying the domain early is still cheap insurance: the
+expensive part was never the registration, it is re-teaching every device and
+person a new set of URLs. A domain does not replace Tailscale either; the
+tailnet stays the transport for everything private.
+
+**Plex is deliberately untouched by all of this.** It keeps its single
+forwarded port, its own authentication and its own `*.plex.direct`
+certificates. Proxying it would add a hop and break direct-connection
+negotiation, and Funnel's relayed bandwidth is unsuitable for video.
+
+**AdGuard was deleted rather than kept.** Its wildcard rewrite existed to serve
+Caddy, and ad-blocking was configured but dormant — split DNS only routed
+`*.lan` to it, so it filtered nothing. Keeping it would have meant adding a
+loopback publish for its admin UI and pointing the tailnet's *global* DNS at a
+container, making name resolution for every device depend on Docker being up —
+the same class of mistake as putting the Unraid GUI behind Caddy. Network-wide
+ad-blocking, if wanted later, is a clean standalone decision.
+
 ### Local AI on the transcode GPU
 
 Running Ollama on the same RTX 3050 that Plex transcodes on means picking a policy for a shared, non-partitionable resource. The policy is: **Plex always wins, and the contention is about VRAM, not compute.**
@@ -86,13 +178,13 @@ NVENC and NVDEC are dedicated ASIC blocks on the die. A CUDA inference workload 
 
 **Two settings, not a scheduler.** `OLLAMA_GPU_OVERHEAD` reserves 2 GiB that Ollama never allocates into — that reservation is what actually guarantees a transcode can start, it needs nothing running to enforce it, and it degrades gracefully: a model that doesn't fit in the remaining ~4 GB gets its overflow layers placed on CPU rather than OOMing the card. `OLLAMA_KEEP_ALIVE=60s` is Ollama's own eviction, returning VRAM a minute after the last request instead of the upstream default of five. The bounded-footprint knobs (one loaded model, one parallel request, capped context, q8_0 KV cache) exist so the reservation is meaningful — without them, VRAM use would scale with concurrent callers and "2 GiB is free for Plex" would stop being true.
 
-**Rejected: a Plex-watching preemption daemon.** An earlier revision of this design polled Plex's `/status/sessions` every 5s and, on a real video transcode, wrote a hold file that a Caddy gate matched on (503ing inference so nothing could re-load a model) and evicted resident models via `keep_alive: 0`. It worked — three containers, a poll loop, a hold-file protocol between them, and a dependency on `PLEX_TOKEN`.
+**Rejected: a Plex-watching preemption daemon.** An earlier revision of this design polled Plex's `/status/sessions` every 5s and, on a real video transcode, wrote a hold file that a proxy gate matched on (503ing inference so nothing could re-load a model) and evicted resident models via `keep_alive: 0`. It worked — three containers, a poll loop, a hold-file protocol between them, and a dependency on `PLEX_TOKEN`.
 
 It was dropped because it only closed a narrow gap. `keep_alive` is an idle timer with no awareness of Plex, so a transcode starting seconds after an inference finds VRAM still held. But the reservation means Plex gets its headroom regardless, so that gap only bites when Plex needs *more* than the reservation at that instant — roughly two or more concurrent 4K HDR tone-mapping transcodes — where the extra sessions fall back to CPU transcoding rather than failing outright. That is the far tail for a household Plex server, the degradation is graceful, and the mitigations are one-line config changes. Immediate eviction was not worth three containers and ~400 lines of code to buy.
 
 If it ever stops being the tail, the escalation ladder in order of cost is: raise `OLLAMA_GPU_OVERHEAD_BYTES`, shorten `OLLAMA_KEEP_ALIVE`, run a smaller model, then reintroduce preemption.
 
-**Access is by network membership, not authentication.** Ollama has no auth and no read-only mode: reaching `:11434` means being able to delete every model on the box. There is no token to configure, so the boundary has to be the network. Ollama sits on an isolated `ai` bridge with only a loopback port publish; consumers join that network and use `http://ollama:11434`. Caddy is deliberately *not* on it, so there is no `ollama.lan` and nothing on the tailnet can reach the API — the stack's AI consumers are containers on this host, and that's the whole intended client set. The cost is that any container added to `ai` is fully trusted with the model store; models re-pull in minutes, so that's acceptable, but it's the reason to think before adding something there. If tailnet access is ever wanted, adding `ai` to Caddy's networks and a `CADDY_SERVICES` row is the change — and at that point a gate in front of the model-management endpoints becomes worth reconsidering.
+**Access is by network membership, not authentication.** Ollama has no auth and no read-only mode: reaching `:11434` means being able to delete every model on the box. There is no token to configure, so the boundary has to be the network. Ollama sits on an isolated `ai` bridge with only a loopback port publish; consumers join that network and use `http://ollama:11434`. Ollama is deliberately given no Tailscale Service, so nothing on the tailnet can reach the API — the stack's AI consumers are containers on this host, and that's the whole intended client set. The cost is that any container added to `ai` is fully trusted with the model store; models re-pull in minutes, so that's acceptable, but it's the reason to think before adding something there. If tailnet access is ever wanted, the change is one `tailscale serve --service=svc:ollama` line — and at that point a gate in front of the model-management endpoints becomes worth reconsidering, because a Service would expose an unauthenticated API to every tagged device.
 
 **Not exposed on the LAN.** Nothing binds `0.0.0.0` and the router still forwards only 32400, matching the existing trust model where the LAN is not a trusted plane.
 

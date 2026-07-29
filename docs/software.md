@@ -33,27 +33,46 @@
 
 All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/homeserver/homeserver/` on the server).
 
-All admin UIs are reached at `http://<name>.lan/` through Caddy on `:80`.
-Backend ports bind `127.0.0.1:` only — they exist for `bootstrap.py` and
-host-side debugging, never direct LAN/Tailscale access. Plex bypasses
-Caddy and is the one publicly-forwarded service.
+All admin UIs are reached at `https://<name>.<tailnet>.ts.net/` as
+**Tailscale Services**. Each service is advertised by the host's own
+tailscaled — the daemon the Unraid Tailscale plugin already runs — and gets
+its own TailVIP, its own MagicDNS name, and its own publicly-trusted,
+auto-renewing certificate. MagicDNS puts the tailnet domain in most clients'
+search path, so bare `https://radarr/` usually resolves too.
 
-| Container | Image | Admin URL | Backend port (loopback) | Role |
+Backend ports bind `127.0.0.1:` only. Those loopback publishes do double duty:
+they are `bootstrap.py`'s probe target *and* the backend that
+`tailscale serve` proxies to. Plex is the one publicly-forwarded service and
+is not fronted by anything.
+
+**There is no reverse proxy.** Caddy, its `ts-caddy` sidecar, AdGuard Home,
+the Caddyfile generator and the Tailscale split-DNS rule were all removed.
+Caddy performed no middleware — no auth, no rate limiting, no shared policy —
+so its entire job was mapping hostnames to ports, which MagicDNS does for free
+and with a real certificate. That certificate also retires a bug the old
+design had no answer for: browsers gate an expanding set of APIs behind
+Secure Context, and Actual Budget simply will not load over plain HTTP.
+
+The Unraid GUI remains the emergency path, and now the *only* thing on host
+`:80`. `http://<server-name>/` on the LAN and `http://<host tailnet IP>/` over
+Tailscale have no Docker dependency, so they keep working with the array
+stopped. On Unraid, stopping the array stops Docker — which is exactly why the
+GUI must never sit behind anything containerised.
+
+| Container | Image | Admin URL (Tailscale Service) | Backend port (loopback) | Role |
 |-----------|-------|-----------|-------------------------|------|
-| caddy | `caddy:2-alpine` | — | `:80` (LAN/Tailscale ingress) | Reverse proxy: Host-header routes `<name>.lan` → each backend |
-| adguard | `adguard/adguardhome` | adguard.lan | `:53/udp+tcp` (Tailscale split-DNS resolver) | Wildcard `*.lan → TAILNET_HOST_IP`; tailnet-wide ad-blocking freebie |
 | gluetun | `qmcgaw/gluetun` | — | 8080, 9696 (loopback) | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
-| sabnzbd | `hotio/sabnzbd` | sab.lan | (in gluetun's netns) | Usenet downloader |
-| prowlarr | `hotio/prowlarr` | prowlarr.lan | (in gluetun's netns) | Indexer manager |
-| radarr | `hotio/radarr` | radarr.lan | 7878 (loopback) | Movie automation |
-| sonarr | `hotio/sonarr` | sonarr.lan | 8989 (loopback) | TV automation |
-| lidarr | `hotio/lidarr` | lidarr.lan | 8686 (loopback) | Music automation |
-| plex | `plexinc/pms-docker` | direct on `:32400` | 32400 (PUBLIC) | Media server + GPU transcode (only public service; bypasses Caddy) |
-| seerr | `ghcr.io/seerr-team/seerr` | seerr.lan | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
-| bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
-| tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
-| profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
-| ollama | `ollama/ollama` | — (no `.lan` name) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
+| sabnzbd | `hotio/sabnzbd` | `svc:sab` | (in gluetun's netns) | Usenet downloader |
+| prowlarr | `hotio/prowlarr` | `svc:prowlarr` | (in gluetun's netns) | Indexer manager |
+| radarr | `hotio/radarr` | `svc:radarr` | 7878 (loopback) | Movie automation |
+| sonarr | `hotio/sonarr` | `svc:sonarr` | 8989 (loopback) | TV automation |
+| lidarr | `hotio/lidarr` | `svc:lidarr` | 8686 (loopback) | Music automation |
+| plex | `plexinc/pms-docker` | — (direct on `:32400`) | 32400 (PUBLIC) | Media server + GPU transcode (only public service; fronted by nothing) |
+| seerr | `ghcr.io/seerr-team/seerr` | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
+| bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
+| tautulli | `hotio/tautulli` | `svc:tautulli` | 8181 (loopback) | Plex analytics, stream history, notifications |
+| profilarr | `santiagosayshey/profilarr` | `svc:profilarr` | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+| ollama | `ollama/ollama` | — (no ingress by design) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
 
 ### Networks
 

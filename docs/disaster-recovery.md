@@ -129,7 +129,7 @@ Tailscale-side outages (rare) resolve without intervention. During an outage you
 
 ## Gluetun tunnel down (SAB + Prowlarr offline)
 
-**Symptom**: SAB UI (`sab.lan`) and Prowlarr UI (`prowlarr.lan`) return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
+**Symptom**: SAB UI (`svc:sab`) and Prowlarr UI (`svc:prowlarr`) hang or refuse. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
 
 This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
 
@@ -142,56 +142,46 @@ Mullvad-side outages (rare) resolve without intervention. SAB/Prowlarr stay offl
 
 ---
 
-## AdGuard / Caddy down — admin URLs stop resolving
+## Admin URLs stop resolving
 
-**Symptom**: `radarr.lan`, `sonarr.lan`, etc. don't resolve or 502 from
-admin devices. Plex (port 32400) and SSH still work. The stack itself is
-running — the admin ingress layer broke.
+**Symptom**: `https://radarr.<tailnet>.ts.net/` and friends don't load.
 
-Two failure modes; check both quickly via `docker compose ps`:
-
-1. **AdGuard `(unhealthy)` or stopped** → DNS layer broken; `*.lan`
-   resolution fails everywhere on the tailnet.
-2. **Caddy `(unhealthy)` or stopped** → DNS still resolves to
-   `TAILNET_HOST_IP` but :80 doesn't answer or doesn't proxy.
-
-**Fallback path (works regardless of AdGuard/Caddy state)** — every
-backend is still bound to host loopback. From an SSH session on the host:
+Ingress is now a single layer — the host's tailscaled advertising each service
+— so there is no DNS-vs-proxy bisection to do. Either the host is off the
+tailnet, or an advertisement is inactive.
 
 ```bash
-# Direct API hits while admin ingress is broken:
-curl http://localhost:7878/ping             # radarr
-curl http://localhost:8989/ping             # sonarr
-curl 'http://localhost:8080/api?mode=version'  # sab
-# etc.
+tailscale status                # host still on the tailnet?
+tailscale serve status          # which services are advertised and active?
 ```
 
-For UI access during an outage, you can also bypass DNS by sending the
-Host header to the host directly from any tailnet device:
+**Fallback path (works regardless of any service state)** — every backend
+keeps a loopback publish, so from the Unraid host or over Tailscale SSH:
 
 ```bash
-curl -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+curl -fsS http://127.0.0.1:7878/ping     # radarr
+ssh -L 7878:127.0.0.1:7878 root@<server> # then browse http://localhost:7878
 ```
 
-**Recovery**:
+That fallback is why the loopback publishes exist and why losing ingress is
+never an emergency.
+
+**Re-advertise a lost service:**
 
 ```bash
-docker compose restart adguard caddy
+tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
 ```
 
-If AdGuard's config got corrupted, restore from appdata backup
-([Appdata corruption (single service)](#appdata-corruption-single-service))
-or regenerate from the templated YAML:
+**If the console shows a service approved but the daemon disagrees** (a known
+public-beta issue):
 
 ```bash
-python3 scripts/generate-configs.py --force-overwrite
-docker compose restart adguard
+tailscale down && tailscale up --ssh --advertise-tags=tag:server
 ```
 
-The YAML is templated from `CADDY_SERVICES` in `generate-configs.py`, so
-re-running the generator always rebuilds a known-good config.
-
----
+**The Unraid GUI and Tailscale SSH are unaffected.** Neither depends on Docker
+or on a service advertisement. If those are also down, the problem is the host
+or the tailnet itself — start there, not here.
 
 ## Seerr down / Watchlist still queues
 

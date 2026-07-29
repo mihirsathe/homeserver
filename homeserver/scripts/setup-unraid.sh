@@ -256,7 +256,7 @@ if [[ ! -d /mnt/user ]]; then
     echo ""
     echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
     echo "  mkdir -p /mnt/user/usenet-incomplete"
-    echo "  mkdir -p /mnt/user/appdata/plex-transcode"
+    echo "  mkdir -p /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama"
     echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
@@ -265,8 +265,15 @@ else
     mkdir -p /mnt/user/usenet-incomplete
     mkdir -p /mnt/user/appdata/plex-transcode
 
+    # ollama runs as PUID:PGID with HOME=/ollama on a stock image that has no
+    # chown-at-start entrypoint, unlike the hotio/linuxserver images. If docker
+    # creates this bind dir itself it lands root-owned and every `ollama pull`
+    # fails on a permission error that reads like a network problem.
+    mkdir -p /mnt/user/appdata/ollama
+
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
+    chown -R nobody:users /mnt/user/appdata/ollama
     chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 
     ok "Folder structure created:"
