@@ -662,7 +662,14 @@ services:
         limits:
           # Headroom to stage a model into VRAM, and to hold one in system RAM
           # if Ollama spills layers to CPU because a transcode has the card.
-          memory: 8G
+          #
+          # 4G, not 8G: the pinned model is llama3.2:3b (~2.5 GB), and memory
+          # ceilings across the stack sum close to the box's 32 GB once finance
+          # and chess land. This is the first ceiling to trim because it is the
+          # least load-bearing — the spill case it covers is already the
+          # graceful-degradation path, so a tighter ceiling costs speed in a
+          # situation that is itself the fallback.
+          memory: 4G
 
   # --- Adding a local-AI consumer ---------------------------------------------
   # Join the `ai` network and point at Ollama. It serves an OpenAI-compatible
