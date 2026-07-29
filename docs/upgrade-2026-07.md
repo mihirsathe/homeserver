@@ -68,8 +68,9 @@ If a doc still asks for one, it is stale.
 
 ### The one-way step, stated plainly
 
-Everything before **3.7** (`bootstrap.py`) is reversible from the Section 2.3
-backup. `bootstrap.py` rewrites the *arr databases and **3.9** migrates them
+Sections 5–7 (Ollama, finance, chess) come after the gate and are additive and
+reversible. Everything before **3.7** (`bootstrap.py`) is reversible from the
+Section 2.3 backup. `bootstrap.py` rewrites the *arr databases and **3.9** migrates them
 forward with new images. After that, rollback means restoring appdata, not
 re-running a script. Section 4 is the gate between the two halves — do not
 start it late at night.
@@ -707,7 +708,7 @@ added for the first time. Run it a second time — everything should report
 `already connected` / `already added` / `already set`. It is idempotent by
 design; a second run that still says "reconciled" means a PUT isn't sticking.
 
-Any `⚠ failed to reconcile` → stop, and go to Section 5.
+Any `⚠ failed to reconcile` → stop, and go to Section 9.
 
 ### 3.8 Fix the array-start User Script if 2.10 flagged it
 
@@ -876,13 +877,13 @@ curl -fsS http://radarr.lan/ping              # from the Mac
 
 ---
 
-## Section 4.5 — Ollama
+## Section 5 — Ollama
 
 Only start this once Section 4 is green. Ollama is additive and reversible —
 it touches no existing service — but there is no reason to debug two things at
 once.
 
-### 4.5a Bring it up
+### 5a Bring it up
 
 ```bash
 cd /mnt/user/appdata/homeserver/homeserver
@@ -893,7 +894,7 @@ docker compose --env-file .env.docker ps ollama
 **Gate:** `(healthy)`. First start unpacks CUDA libraries before the API
 answers, so allow the 60s `start_period` — "starting" is not a failure yet.
 
-### 4.5b Confirm it actually got the GPU
+### 5b Confirm it actually got the GPU
 
 ```bash
 docker exec ollama nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
@@ -903,7 +904,7 @@ docker exec ollama nvidia-smi --query-gpu=name,memory.total,memory.used --format
 CPU-only — everything below still "works" but at unusable speed, and the
 failure is silent otherwise.
 
-### 4.5c Pull the model
+### 5c Pull the model
 
 ```bash
 docker exec ollama ollama pull llama3.2:3b
@@ -921,7 +922,7 @@ chown -R nobody:users /mnt/user/appdata/ollama
 docker compose --env-file .env.docker restart ollama
 ```
 
-### 4.5d Prove inference works and VRAM comes back
+### 5d Prove inference works and VRAM comes back
 
 ```bash
 docker exec ollama ollama run llama3.2:3b "Reply with exactly: ok" --verbose 2>&1 | tail -20
@@ -934,7 +935,7 @@ nvidia-smi --query-gpu=memory.used --format=csv    # should have dropped
 `OLLAMA_KEEP_ALIVE=60s` doing its job — it is what keeps Plex's headroom
 available, so it is worth seeing once rather than trusting.
 
-### 4.5e Confirm Plex still has room
+### 5e Confirm Plex still has room
 
 ```bash
 nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv
@@ -951,12 +952,12 @@ is the access control. Do not "just add a service to test it."
 
 ---
 
-## Section 5 — Rollback
+## Section 9 — Rollback
 
 Work backwards from whichever step failed. Anything above the failure point
 stays applied.
 
-### 5.1 Withdraw the services (do this first if you got past 3.6)
+### 9.1 Withdraw the services (do this first if you got past 3.6)
 
 ```bash
 tailscale serve reset
@@ -967,20 +968,20 @@ deleted in the admin console afterwards; leaving them defined but unadvertised
 is harmless. Nothing about this touches the host's tailnet membership, so SSH
 and the Unraid GUI stay up throughout — which is what makes rollback safe.
 
-### 5.2 Stop the stack
+### 9.2 Stop the stack
 
 ```bash
 cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker down
 ```
 
-### 5.3 Go back to the old commit
+### 9.3 Go back to the old commit
 
 ```bash
 git checkout <the hash you recorded in 1.1>
 ```
 
-### 5.4 Restore env and configs
+### 9.4 Restore env and configs
 
 ```bash
 cp -a /boot/homeserver-preupgrade/.env \
@@ -990,7 +991,7 @@ rm -rf configs
 cp -a /boot/homeserver-preupgrade/configs-* ./configs
 ```
 
-### 5.5 Restore appdata — required if 3.7 ran
+### 9.5 Restore appdata — required if 3.7 ran
 
 This is the only way to undo the *arr DB rewrites.
 
@@ -1011,7 +1012,7 @@ tar -xzf "$BK" -C /mnt/user/appdata
 chown -R nobody:users /mnt/user/appdata/{radarr,sonarr,lidarr,prowlarr,bazarr,tautulli,sabnzbd,seerr,profilarr}
 ```
 
-### 5.6 Restore images — only if 3.9 ran
+### 9.6 Restore images — only if 3.9 ran
 
 ```bash
 cat /boot/homeserver-preupgrade/image-digests.txt
@@ -1022,7 +1023,7 @@ docker tag  <repo>@sha256:<digest> <repo>:<tag>
 Restore that service's appdata from `$BK` in the same operation — a newer *arr
 or Plex will have migrated its DB, and the old binary can't read it.
 
-### 5.7 Bring it back and verify against 2.8
+### 9.7 Bring it back and verify against 2.8
 
 ```bash
 docker compose --env-file .env.docker up -d
