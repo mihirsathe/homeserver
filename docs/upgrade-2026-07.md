@@ -96,12 +96,16 @@ RAM-backed and rebuilt from the USB stick on every boot. A key in `/root/.ssh`
 survives until the next reboot and then silently disappears, taking your
 ability to update `coach` with it. On the array it persists.
 
-Optional, both fine to leave blank:
+Optional, fine to leave blank:
 
 | Variable | What it buys |
 |----------|--------------|
 | `LICHESS_TOKEN` | Publishing annotated studies back to Lichess (scope `study:write`). Game sync works without it via the public API. |
-| `ANTHROPIC_API_KEY` | Only if you want the *hosted* Claude backend instead of the local Ollama. The default is Ollama, which needs no key. |
+
+**No LLM API key is involved anywhere in this run.** Coach's inference backend
+is pinned to the in-stack Ollama in `docker-compose.yml` and is not overridable
+from `.env`. There is no hosted provider configured, no fallback, and no
+credential to set — the only key this whole stack takes for AI is none.
 
 ### You will NOT be asked for these
 
@@ -1137,8 +1141,10 @@ docker exec coach python -c "import urllib.request;print(urllib.request.urlopen(
 
 This check exists because the failure is invisible from the UI. If `coach`
 can't reach Ollama it falls back to facts-only template reports, which look
-exactly like `CHESS_COACH_LLM_BACKEND=none` working correctly — no error, no
-warning, just narrative reports that never appear. Generate one report and
+exactly like a working facts-only run — no error, no warning, just narrative
+reports that never appear. There is no hosted fallback to silently pick up the
+slack either, which is the point: if Ollama is unreachable you get template
+reports, not an outbound API call. Generate one report and
 confirm it has prose in it, not only move lists.
 
 ### 7f Know how updates work

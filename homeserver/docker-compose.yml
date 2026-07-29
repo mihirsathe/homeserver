@@ -718,9 +718,14 @@ services:
   # compute,utility only — no video/graphics needed (same CVE-2024-0132
   # minimal-surface reasoning as plex).
   #
-  # LICHESS_TOKEN / ANTHROPIC_API_KEY are optional: sync of public games
-  # works untokened; the token adds study publishing, the API key enables
-  # LLM coach reports. `:-` defaults keep compose happy until they're set.
+  # LICHESS_TOKEN is optional: sync of public games works untokened; the token
+  # only adds study publishing. `:-` default keeps compose happy until it's set.
+  #
+  # THERE IS NO HOSTED-LLM BACKEND AND NO API KEY. Inference is the in-stack
+  # Ollama, full stop — no fallback provider, no second configuration to keep
+  # in sync, and no path by which game data or position analysis leaves this
+  # box. The app supports other backends; this deployment deliberately does not
+  # plumb them, so there is no key here to leak, rotate, or accidentally set.
   #
   # Reachable at https://coach.<tailnet>.ts.net as a Tailscale Service; the
   # loopback publish is both that Service's backend and the host debug path.
@@ -745,18 +750,19 @@ services:
       - CHESS_COACH_ENGINE_HASH_MB=4096
       - CHESS_COACH_SCAN_MOVETIME_MS=250
       - CHESS_COACH_DEEP_MOVETIME_MS=3000
-      # LLM coach narrative backend. Defaults to `ollama`: the container is in
-      # this stack and coach is on the `ai` plane, so the docker-DNS name
-      # resolves. `none` = facts-only template reports, fully functional.
+      # Pinned, not configurable. The only inference backend is the in-stack
+      # Ollama: coach is on the `ai` plane, so the docker-DNS name resolves.
       #
-      # This comment previously said "same frontend network" — true when this
-      # branch was written, false once ollama landed on its own `ai` plane.
-      # coach would have resolved nothing and silently produced template-only
-      # reports that look identical to the `none` backend working correctly.
-      - CHESS_COACH_LLM_BACKEND=${CHESS_COACH_LLM_BACKEND:-ollama}
-      - CHESS_COACH_OLLAMA_URL=${CHESS_COACH_OLLAMA_URL:-http://ollama:11434}
+      # Hardcoded rather than ${...}-overridable on purpose — an env override
+      # is exactly how a hosted provider gets switched on by accident, and the
+      # point of local inference is that nothing leaves the box.
+      #
+      # (An earlier revision said ollama was on `frontend`. True when written,
+      # false once it landed on its own `ai` plane — coach resolved nothing and
+      # silently produced template-only reports indistinguishable from working.)
+      - CHESS_COACH_LLM_BACKEND=ollama
+      - CHESS_COACH_OLLAMA_URL=http://ollama:11434
       - LICHESS_TOKEN=${LICHESS_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
