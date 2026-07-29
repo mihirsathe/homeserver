@@ -850,13 +850,30 @@ Any 2xx/3xx/401 is a pass — the backend answered. This is the gate for 3.6:
 
 Console prep already happened in 3.2, so this is the box side only.
 
-**Do one first and prove the certificate**, because the whole point of the
-change is the cert:
+**Define each service in the admin console first.** This is not optional and
+not inferable from the CLI: a Tailscale Service is an object that must exist in
+the tailnet before any host can advertise it. Advertise first and the host
+reports *"approval from an admin is required"* while the console shows nothing
+at all to approve — there is no object for the pending advertisement to attach
+to, and it looks like a broken advertisement rather than a missing definition.
+
+Admin console → **Services** → create one per admin UI, named for the service
+(`radarr` becomes `svc:radarr`). If the Services page is absent from the
+sidebar, check **Settings → Feature previews** — Services is in public beta.
+
+**Then advertise one and prove the certificate**, because the certificate is
+the whole point of the change:
 
 ```bash
 tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
-tailscale serve status
 ```
+
+Note that `tailscale serve status` will report `No serve config`. That is
+correct and not a failure: service proxies are tracked separately from ordinary
+serve entries and do not appear in that listing.
+
+Approve the host: admin console → Services → `svc:radarr` → **Service hosts** →
+Approve.
 
 Open `https://radarr.<tailnet>.ts.net/` from a tagged admin device. **Gate: a
 padlock with no warning.** Do not proceed until you see it — if the cert is

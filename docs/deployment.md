@@ -225,7 +225,18 @@ Each admin UI becomes a Tailscale Service advertised by the host's tailscaled,
 pointing at the loopback port the container already publishes. Those loopback
 publishes are not debug leftovers — they are the serve backends.
 
-### Do one service first
+### Define the services in the admin console first
+
+A Tailscale Service is an object that must exist in the tailnet before a host
+can advertise it. Admin console → **Services** → create one per admin UI, named
+for the service (`radarr` → `svc:radarr`). If the page is missing from the
+sidebar, look under **Settings → Feature previews**; Services is in public beta.
+
+Skipping this does not produce a useful error. The host reports that admin
+approval is required, and the console shows nothing to approve — because the
+object the advertisement would attach to does not exist.
+
+### Then do one service
 
 The syntax is worth confirming on a single service before batching the rest:
 
