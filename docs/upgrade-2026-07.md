@@ -53,6 +53,22 @@ No API key, no account, no token. `ollama pull` fetches from
 `internal: true` for exactly that reason. Budget bandwidth and ~2.5 GB of disk
 for `llama3.2:3b`, not attention.
 
+### Actual Budget: two values, both created *during* the run
+
+These cannot be gathered in advance — they do not exist yet. Flagged so the
+pause is expected rather than a surprise:
+
+| What | When it exists | How you get it |
+|------|----------------|----------------|
+| **`ACTUAL_PASSWORD`** | You choose it on the first visit to `svc:actual` | Pick it now, write it down, set it at 4.6b |
+| **`ACTUAL_BUDGET_ID`** | Only after you create a budget file | Actual → Settings → **Show advanced settings** → **Sync ID** |
+
+Leave both blank in `.env` until then. `actual-ai` will not work without the
+Sync ID, and — this is the trap — it will not *complain* either.
+
+**Bank import is deliberately manual (OFX/QFX).** No credentials, no
+aggregator, no outbound calls. Nothing to gather.
+
 ### You will NOT be asked for these
 
 They existed for the old ingress and are gone: **`TS_AUTHKEY`**,
@@ -948,6 +964,80 @@ this reservation holds.
 **Ollama gets no Tailscale Service.** It has no authentication, so reaching
 `:11434` means being able to delete every model on the box. Network membership
 is the access control. Do not "just add a service to test it."
+
+---
+
+## Section 4.6 — Finance plane
+
+Requires 4.5 green: `actual-ai` reaches Ollama over the `ai` plane.
+
+### 4.6a Bring up the server only
+
+```bash
+docker compose --env-file .env.docker up -d actual_server
+docker compose --env-file .env.docker ps actual_server
+```
+
+**Gate:** `(healthy)`.
+
+### 4.6b Publish it and set the password
+
+```bash
+tailscale serve --service=svc:actual --bg 127.0.0.1:5006
+```
+
+Open `https://actual.<tailnet>.ts.net/` and set the server password.
+
+**Gate — and this one is the whole reason the ingress changed:** Actual must
+*load*, not just respond. Its SQLite engine needs `SharedArrayBuffer`, which
+browsers gate behind Secure Context. A padlock means the certificate is real
+and the app will work. Plain HTTP would fail here even though the bytes were
+already encrypted by Tailscale.
+
+Put the password in `.env` as `ACTUAL_PASSWORD`.
+
+### 4.6c Create a budget, then read the Sync ID
+
+In the Actual UI: create a budget file. Then **Settings → Show advanced
+settings → Sync ID**. Copy it into `.env` as `ACTUAL_BUDGET_ID`.
+
+Then regenerate the merged env file and start the worker:
+
+```bash
+python3 scripts/generate-configs.py
+docker compose --env-file .env.docker up -d actual-ai
+```
+
+### 4.6d Verify — you must read the logs
+
+```bash
+docker compose --env-file .env.docker logs actual-ai --tail 50
+```
+
+**`actual-ai` has no healthcheck.** `docker compose ps` shows "running" whether
+it is working or silently failing every cycle, so the logs are the only signal.
+
+**Gate:** the log shows it connected to Actual, connected to Ollama, and ran a
+classification pass. `FEATURES` includes `classifyOnStartup`, so a run happens
+immediately rather than waiting for the 4-hourly cron.
+
+**If it logs connection errors to Ollama**, it is on the wrong network — the
+exact bug this branch fixes. Confirm:
+
+```bash
+docker inspect actual-ai --format '{{json .NetworkSettings.Networks}}' | python3 -m json.tool | grep -E '"(ai|finance)"'
+docker exec actual-ai wget -qO- http://ollama:11434/api/tags || echo "CANNOT REACH OLLAMA"
+```
+
+Both `ai` and `finance` must be present.
+
+### 4.6e Leave dryRun on
+
+`FEATURES=["dryRun", "classifyOnStartup"]` means it logs proposed categories
+without touching the budget. **Leave it on for several runs.** Read what it
+proposes first; an LLM confidently miscategorising months of transactions is
+tedious to unpick, and the whole point of the tag pair (`#actual-ai` /
+`#actual-ai-miss`) is that you can filter and audit before trusting it.
 
 ---
 
