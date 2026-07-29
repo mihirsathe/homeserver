@@ -220,8 +220,25 @@ tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
 **If the console shows a service approved but the daemon disagrees** (a known
 public-beta issue):
 
+> ⚠️ **Never run this over a Tailscale SSH session.** `tailscale down` drops the
+> tunnel your shell is running through, the shell dies before `tailscale up`
+> executes, and the machine is left off the tailnet with no remote way back in.
+> If your only route to the box is Tailscale, you will need someone physically
+> on the LAN to recover it. Run it from the **Unraid web terminal over the
+> LAN**, from **iDRAC's virtual console**, or from a **LAN SSH session** — and
+> use `;` rather than `&&` so `up` still fires if the shell is killed mid-command.
+
+**Try the cheap fix first**, which touches nothing and cannot disconnect you —
+re-issue the advertisement after approving the host:
+
 ```bash
-tailscale down && tailscale up --ssh --advertise-tags=tag:server
+tailscale serve --service=svc:<name> --bg 127.0.0.1:<port>
+```
+
+Only if that fails, and only from a non-Tailscale console:
+
+```bash
+tailscale down ; tailscale up --ssh --advertise-tags=tag:server
 ```
 
 **The Unraid GUI and Tailscale SSH are unaffected.** Neither depends on Docker

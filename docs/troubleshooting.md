@@ -118,10 +118,18 @@ Work the three in that order; they isolate cleanly.
 3. **Advertised but inactive** → host approval. Check admin console →
    **Services** → the service → **Service hosts**. Approve if pending. Services
    is in public beta and the daemon does not always pick up an approval that
-   lands after the advertisement, so if the console shows it approved and the
-   daemon disagrees:
+   lands after the advertisement. Re-issue the advertisement first — this is
+   safe from any shell and cannot disconnect you:
    ```bash
-   tailscale down && tailscale up --ssh --advertise-tags=tag:server
+   tailscale serve --service=svc:<name> --bg 127.0.0.1:<port>
+   ```
+   Only if that fails, restart the daemon — and **never over a Tailscale SSH
+   session**. `tailscale down` drops the tunnel your shell runs through, so the
+   shell dies before `up` executes and the box is left off the tailnet with no
+   remote way back in. Use the Unraid web terminal over the LAN, iDRAC's
+   virtual console, or a LAN SSH session:
+   ```bash
+   tailscale down ; tailscale up --ssh --advertise-tags=tag:server
    ```
 4. **Certificate warning in the browser** → MagicDNS or HTTPS is disabled at
    the tailnet level. Admin console → **DNS** → both must be on.
