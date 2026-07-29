@@ -23,6 +23,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 | Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
+| Prune unused Ollama models | Quarterly | `docker exec ollama ollama list`, then `ollama rm <model>` — model blobs sit on the 480 GB cache pool |
 | SMART check (cache SSDs) | Quarterly | iDRAC storage view or PERC UI (SMART not available via Unraid) |
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |
 | UPS self-test / battery health | Quarterly | `apcaccess status` for a quick read; `apctest` walks an interactive battery/calibration test |
@@ -40,6 +41,23 @@ docker exec plex nvidia-smi
 
 # Watch GPU during a transcode
 watch -n 2 'docker exec plex nvidia-smi'
+
+# Who is holding VRAM right now (Plex transcode vs Ollama model)?
+docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+
+# Is Ollama holding a model in VRAM? (size_vram > 0 means yes; empty = idle,
+# already unloaded by OLLAMA_KEEP_ALIVE)
+curl -s http://127.0.0.1:11434/api/ps
+
+# Force Ollama to hand the GPU back right now, without waiting out keep_alive
+curl -s http://127.0.0.1:11434/api/generate -d '{"model":"llama3.2:3b","keep_alive":0}'
+
+# Local AI end-to-end (expect a completion)
+curl -s http://127.0.0.1:11434/api/generate \
+     -d '{"model":"llama3.2:3b","prompt":"say hi","stream":false}'
+
+# How much cache pool the model store is eating
+du -sh /mnt/user/appdata/ollama
 
 # Check Gluetun tunnel health (Mullvad WireGuard)
 docker logs gluetun --tail 20
@@ -105,6 +123,15 @@ The array uses single parity (one 16 TB disk). Protects against one drive failur
 
 At current RAM, heavy simultaneous workloads (many active transcodes + downloads + metadata scanning) can feel constrained. The Xeon Gold 6146 dual-socket platform supports up to 768 GB (24× DIMM slots). Adding RAM is the single highest-ROI upgrade.
 
+### Local AI is capped by 6 GB of VRAM, and yields to Plex
+
+Ollama is the second-priority tenant of the RTX 3050. Two consequences worth knowing before debugging something as "broken":
+
+- **Models much over ~4 GB spill layers to CPU** and run several times slower, because 2 GiB of VRAM is reserved for Plex and never handed to Ollama. This is deliberate — it's what guarantees a transcode can always start. Sizing guidance is in [software.md](software.md#model-sizing); the reservation is tunable via `OLLAMA_GPU_OVERHEAD_BYTES`.
+- **Ollama does not react to Plex starting a transcode.** `OLLAMA_KEEP_ALIVE` is an idle timer, so a model loaded seconds before playback keeps its VRAM for the rest of that minute. The reservation covers it in every normal case; the exception is two or more concurrent 4K HDR tone-mapping transcodes, where the extra sessions fall back to CPU. If that shows up in practice, raise the reservation or shorten keep-alive — see [decisions.md](decisions.md#local-ai-on-the-transcode-gpu) for the preemption design that was considered and set aside.
+
+Both go away with a larger GPU; see [decisions.md#expansion-paths](decisions.md#expansion-paths).
+
 ### Plex data collection
 
 Plex requires an account and phones home for relay coordination, metadata, and licensing. Optionally disabled in server config: playback data, crash reports, push notifications, relay service. Account-level ad tracking and watch history sharing must be opted out at plex.tv manually. If full no-phone-home operation is ever needed, Jellyfin is a drop-in replacement in the Compose file.
@@ -126,6 +153,7 @@ No dedicated metrics stack — the goal is low operational cost, not an observab
 | Gluetun tunnel down (SAB/Prowlarr offline) | `docker logs gluetun` | Container healthcheck flips to `unhealthy`; Fix Common Problems surfaces it. SAB + Prowlarr will stay unreachable until Mullvad reconnects (that's the kill-switch doing its job) |
 | Tailscale offline | `tailscale status` from an admin device | If admin URLs stop resolving, check tailnet membership in the Tailscale admin console |
 | Stream activity / client issues | Tautulli | Tautulli → Settings → Notification Agents — email, Discord, Telegram, etc. |
+| Ollama model store growth | `du -sh /mnt/user/appdata/ollama` | Counts against the same cache-pool threshold as everything else in appdata; the 75% warning covers it |
 
 **Unraid notification agent**: CA Notification Agent plugin gives email / Pushover / Discord delivery of Unraid events. Configure it once and the SMART/parity/cache alerts above route through it.
 
