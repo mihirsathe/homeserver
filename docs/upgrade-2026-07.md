@@ -85,11 +85,45 @@ Generate it on the server **before** the run:
 mkdir -p /mnt/user/appdata/chess-coach
 ssh-keygen -t ed25519 -N "" -C "chess-coach deploy" \
     -f /mnt/user/appdata/chess-coach/deploy_key
+chmod 600 /mnt/user/appdata/chess-coach/deploy_key
 cat /mnt/user/appdata/chess-coach/deploy_key.pub
 ```
 
 Paste that public key into GitHub → the repo → **Settings → Deploy keys → Add
 deploy key**. Leave "Allow write access" **unchecked**.
+
+Then **verify it authenticates before the run**, so a credential problem
+surfaces now rather than at Section 7a:
+
+```bash
+ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes -T git@github.com
+```
+
+Expect `Hi mihirsathe/chess-coach! You've successfully authenticated, but
+GitHub does not provide shell access.` The "no shell access" half is normal.
+Note it greets you by **repository**, not by username — that is the deploy key
+being correctly scoped. A key that greeted you by username would be one that
+could reach every repo you own, which is the thing this avoids.
+
+Pass `-i` to `ssh` directly here. Setting `GIT_SSH_COMMAND` does **not** work
+for a bare `ssh` invocation — that variable is read by `git`, not by `ssh`, so
+ssh would fall back to the default keys in `~/.ssh/` and fail with
+`Permission denied (publickey)` even though the deploy key is registered
+correctly. The `GIT_SSH_COMMAND` form in Section 7 is right, because there it
+is `git clone` consuming it.
+
+`IdentitiesOnly=yes` matters too: without it ssh offers every key it can find
+before this one, and GitHub can cut the connection off after too many
+attempts — which also presents as a bad key.
+
+If it fails:
+
+| Symptom | Cause |
+|---------|-------|
+| `No such file or directory` | The key was generated on your Mac, not the server. |
+| Offers the key, still denied | GitHub doesn't have it — usually `deploy_key` pasted instead of `deploy_key.pub`, or it landed in account-wide **Settings → SSH keys** rather than the repo's **Deploy keys**. |
+| `Key is already in use` when adding | GitHub refuses one deploy key on two repos. Generate a separate key. |
+| Times out before any auth | Outbound port 22 is blocked. Use `ssh -p 443 git@ssh.github.com` and add `-p 443` plus that host to `GIT_SSH_COMMAND` in Section 7. |
 
 **Why `/mnt/user/appdata` and not `/root/.ssh`:** Unraid's root filesystem is
 RAM-backed and rebuilt from the USB stick on every boot. A key in `/root/.ssh`
