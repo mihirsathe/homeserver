@@ -600,15 +600,42 @@ cd /mnt/user/appdata/homeserver
 
 ### 3.1 Pull the repo
 
+**Do not merge the pull requests before the run.** The changes ship as a stack
+of four PRs, and `master` does not contain them yet — deliberately. The box
+checks out the tip of the stack, the run validates it on real hardware, and the
+PRs are merged *afterwards*. If the run turns up a problem, `master` was never
+touched and there is nothing to revert.
+
 ```bash
-git fetch origin master
-git --no-pager log --oneline HEAD..origin/master   # exactly what you're about to apply
-git merge --ff-only origin/master
-git --no-pager log -1 --format='%h %s'             # expect fb50978
+git fetch origin
+git checkout add-chess-coach          # tip of the stack: contains all four changes
+git --no-pager log --oneline -6
 ```
 
-`--ff-only` refuses to create a merge commit — if it fails, the working tree
-diverged and you should resolve that (see 2.1) rather than force it.
+`add-chess-coach` sits on top of finance, which sits on Ollama, which sits on
+the ingress branch — so checking it out gets all four in one step, in the order
+they are meant to apply.
+
+Confirm you got what you expect before going further:
+
+```bash
+grep -cE '^  (caddy|ts-caddy|adguard):' docker-compose.yml   # expect 0
+grep -cE '^  (ollama|actual_server|actual-ai|coach):' docker-compose.yml  # expect 4
+```
+
+`0` and `4`. If you see anything else, the checkout didn't land — stop rather
+than improvising.
+
+**After the run succeeds**, merge the PRs in stack order (#18 → #17 → #16 →
+#15) and return the box to `master`:
+
+```bash
+git checkout master && git pull --ff-only origin master
+```
+
+That is a no-op in content terms — merging the stack produces a tree identical
+to the branch tip, verified — so it is purely bookkeeping to get the box back
+on a normal branch.
 
 ### 3.2 Tailscale console prep — do this before touching the stack
 
