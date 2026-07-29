@@ -186,7 +186,7 @@ def prompt_for_missing(env: dict) -> dict:
 
     missing = [
         k for k in [
-            "TZ", "TAILNET_HOST_IP",
+            "TZ", "TAILNET_NAME",
             "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
             "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
             "USENET_HOST", "USENET_USER", "USENET_PASS",
@@ -208,12 +208,17 @@ def prompt_for_missing(env: dict) -> dict:
                    hint="e.g. America/New_York, America/Los_Angeles, Europe/London",
                    validator=validate_tz)
 
-    if "TAILNET_HOST_IP" in missing:
+    if "TAILNET_NAME" in missing:
         print("--- Tailscale ---")
-        if "TAILNET_HOST_IP" in missing:
-            get_or_ask("TAILNET_HOST_IP", "Unraid host's tailnet IPv4",
-                       hint="run `tailscale ip -4` on the Unraid host (e.g. 100.64.1.7)",
-                       validator=validate_ip)
+        # Required, not optional: write_sabnzbd() puts this in SAB's
+        # host_whitelist. SAB returns 403 for any Host header it does not know,
+        # and `tailscale serve` passes the original Host through — so a blank
+        # value produces a SAB that works perfectly on loopback and 403s from
+        # every tailnet device. Prompting is the only thing that stops that
+        # being discovered days later.
+        get_or_ask("TAILNET_NAME", "Tailnet MagicDNS domain",
+                   hint="`tailscale status` or admin console -> DNS, "
+                        "no leading dot (e.g. tail1a2b3.ts.net)")
 
     # Network / Plex
     net_missing = [k for k in ["PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
