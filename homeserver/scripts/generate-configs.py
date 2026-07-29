@@ -336,6 +336,15 @@ def write_sabnzbd(env: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     api_key  = env["SABNZBD_API_KEY"]
+
+    # Tailscale Services pass the original Host header through, so SAB's
+    # host_whitelist has to contain the Service FQDN or the UI 403s from the
+    # tailnet while working on loopback. Both the bare and fully-qualified
+    # MagicDNS forms are listed because MagicDNS puts the tailnet domain in the
+    # search path on most platforms, so browsers reach it either way.
+    tailnet = env.get("TAILNET_NAME", "").strip().lstrip(".")
+    sab_serve_hosts = f",sab,sab.{tailnet}" if tailnet else ""
+
     host     = env["USENET_HOST"]
     port     = env.get("USENET_PORT", "563")
     ssl      = env.get("USENET_SSL", "1")
@@ -371,13 +380,15 @@ def write_sabnzbd(env: dict):
 host = 0.0.0.0
 port = 8080
 url_base =
-# host_whitelist blocks requests from hostnames not listed here. SAB
-# rejects any request whose Host header isn't on this list — the
-# The proxied hostname must be present or every reverse-proxied
-# request returns 403. Localhost + service name + gluetun cover internal
-# health checks and host-loopback access; mediaserver.local is the legacy
-# mDNS alias.
-host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local,sab.lan
+# host_whitelist blocks requests from hostnames not listed here: SAB returns
+# 403 for any request whose Host header isn't on the list. `tailscale serve`
+# passes the original Host through, so the Service FQDN must be present or the
+# SAB UI is a hard 403 from the tailnet while working fine on loopback — which
+# looks like an ingress bug and isn't one.
+#
+# TAILNET_NAME comes from .env (e.g. tail1a2b3.ts.net). If it's blank the
+# FQDN entries are simply omitted and SAB is reachable on loopback only.
+host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local{sab_serve_hosts}
 api_key = {api_key}
 nzo_ids = {api_key}
 wizard_step = 10
@@ -490,8 +501,8 @@ def write_arr_config(name: str, port: int, api_key: str):
   <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
   <Branch>main</Branch>
   <LogLevel>info</LogLevel>
-  <!-- UrlBase empty so each *arr serves at root. tailscale serve fronts them at
-       <name>.lan/. -->
+  <!-- UrlBase empty so each *arr serves at root. tailscale serve fronts them
+       at https://<name>.<tailnet>.ts.net/ without a path prefix. -->
   <UrlBase></UrlBase>
   <UpdateMechanism>Docker</UpdateMechanism>
 </Config>
@@ -546,8 +557,9 @@ def write_bazarr(env: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     # base_url left empty for both Bazarr's own listener and its sonarr/radarr
-    # client URLs — every app in the stack now serves at root, with tailscale serve
-    # fronting them on <name>.lan. Keep the keys present (not absent) because
+    # client URLs — every app in the stack serves at root, and Tailscale
+    # Services front them without a path prefix. Keep the keys present (not
+    # absent) because
     # Bazarr's loader can fall back to legacy defaults (/sonarr, /radarr) when
     # a key is missing entirely.
     content = f"""[general]

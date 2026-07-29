@@ -85,7 +85,7 @@ Four bridge networks carve the stack into blast-radius zones so a compromised co
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
-| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. `caddy` is deliberately absent, which is why Ollama has no `*.lan` hostname. |
+| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
 
@@ -141,7 +141,7 @@ docker exec ollama ollama rm <model>     # blobs live on the cache pool
 |------|----------|
 | Another container on the stack | `http://ollama:11434` (join the `ai` network) |
 | The Unraid host | `http://127.0.0.1:11434` |
-| The tailnet | **Not reachable.** Ollama has no `*.lan` hostname — Caddy is not on the `ai` network. |
+| The tailnet | **Not reachable.** Ollama is advertised as no Tailscale Service, by design — it has no authentication. |
 | The LAN or the internet | **Not reachable.** Nothing binds `0.0.0.0`, and the router still forwards only 32400. |
 
 Ollama also serves an OpenAI-compatible API at `/v1`, so most SDKs work unmodified against `http://ollama:11434/v1` with a placeholder API key.
@@ -175,7 +175,7 @@ docker exec <container> curl -fsS http://ollama:11434/api/tags
 
 If that returns `NXDOMAIN` or hangs, the container isn't on `ai`. Note that `localhost:11434` will never work from inside a consumer — that's the container's own loopback, not Ollama's.
 
-If the app has an admin UI, add a row to `CADDY_SERVICES` in `generate-configs.py` and re-run it for `<name>.lan` routing — that publishes the *app's* UI to the tailnet, not Ollama's API.
+If the app has an admin UI, publish it with `tailscale serve --service=svc:<name> --bg 127.0.0.1:<port>` — that exposes the *app's* UI to the tailnet, not Ollama's API.
 
 **Ollama has no authentication and no read-only mode**, so anything on the `ai` network can also delete models and occupy the GPU. Network membership is the access control, which is exactly why access is opt-in rather than stack-wide: the media containers — especially the internet-facing downloaders — have no reason to be trusted with the model store. Models re-pull in minutes so the blast radius is small, but think before adding something to this network.
 
