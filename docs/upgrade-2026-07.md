@@ -84,6 +84,86 @@ Sync ID, and — this is the trap — it will not *complain* either.
 **Bank import is deliberately manual (OFX/QFX).** No credentials, no
 aggregator, no outbound calls. Nothing to gather.
 
+### Chess coach: a credential for the private repo — get this first
+
+`coach` is the one service built from source, and
+[mihirsathe/chess-coach](https://github.com/mihirsathe/chess-coach) is
+**private**, so the server needs its own read access. No PR covers this; it is
+the most likely thing to stall the run.
+
+**Use a deploy key, not a PAT** — scoped to this one repo, read-only, and it
+cannot be replayed against the rest of your account.
+
+Generate it on the server **before** the run:
+
+```bash
+mkdir -p /mnt/user/appdata/chess-coach
+ssh-keygen -t ed25519 -N "" -C "chess-coach deploy" \
+    -f /mnt/user/appdata/chess-coach/deploy_key
+chmod 600 /mnt/user/appdata/chess-coach/deploy_key
+cat /mnt/user/appdata/chess-coach/deploy_key.pub
+```
+
+Paste that public key into GitHub → the repo → **Settings → Deploy keys → Add
+deploy key**. Leave "Allow write access" **unchecked**.
+
+Then **verify it authenticates before the run**, so a credential problem
+surfaces now rather than at Section 7a:
+
+```bash
+ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes -T git@github.com
+```
+
+Expect `Hi mihirsathe/chess-coach! You've successfully authenticated, but
+GitHub does not provide shell access.` The "no shell access" half is normal.
+Note it greets you by **repository**, not by username — that is the deploy key
+being correctly scoped. A key that greeted you by username would be one that
+could reach every repo you own, which is the thing this avoids.
+
+Pass `-i` to `ssh` directly here. Setting `GIT_SSH_COMMAND` does **not** work
+for a bare `ssh` invocation — that variable is read by `git`, not by `ssh`, so
+ssh would fall back to the default keys in `~/.ssh/` and fail with
+`Permission denied (publickey)` even though the deploy key is registered
+correctly. The `GIT_SSH_COMMAND` form in Section 7 is right, because there it
+is `git clone` consuming it.
+
+`IdentitiesOnly=yes` matters too: without it ssh offers every key it can find
+before this one, and GitHub can cut the connection off after too many
+attempts — which also presents as a bad key.
+
+If it fails:
+
+| Symptom | Cause |
+|---------|-------|
+| `No such file or directory` | The key was generated on your Mac, not the server. |
+| Offers the key, still denied | GitHub doesn't have it — usually `deploy_key` pasted instead of `deploy_key.pub`, or it landed in account-wide **Settings → SSH keys** rather than the repo's **Deploy keys**. |
+| `Key is already in use` when adding | GitHub refuses one deploy key on two repos. Generate a separate key. |
+| Times out before any auth | Outbound port 22 is blocked. Use `ssh -p 443 git@ssh.github.com` and add `-p 443` plus that host to `GIT_SSH_COMMAND` in Section 7. |
+
+**Why `/mnt/user/appdata` and not `/root/.ssh`:** Unraid's root filesystem is
+RAM-backed and rebuilt from the USB stick on every boot. A key in `/root/.ssh`
+survives until the next reboot and then silently disappears, taking your
+ability to update `coach` with it. On the array it persists.
+
+**Leave this directory root-owned.** `setup-unraid.sh` chowns only
+`/mnt/user/appdata/chess-coach/**data**` — never the parent — because the
+parent also holds this key and the repo checkout. OpenSSH refuses a private key
+owned by another user (`bad ownership or modes`), so a recursive
+`chown -R nobody:users /mnt/user/appdata/chess-coach` silently breaks every
+future `git pull` for coach updates. `data/` is the only path bind-mounted into
+the container, so it is the only path that needs to change hands.
+
+Optional, fine to leave blank:
+
+| Variable | What it buys |
+|----------|--------------|
+| `LICHESS_TOKEN` | Publishing annotated studies back to Lichess (scope `study:write`). Game sync works without it via the public API. |
+
+**No LLM API key is involved anywhere in this run.** Coach's inference backend
+is pinned to the in-stack Ollama in `docker-compose.yml` and is not overridable
+from `.env`. There is no hosted provider configured, no fallback, and no
+credential to set — the only key this whole stack takes for AI is none.
+
 ### You will NOT be asked for these
 
 They existed for the old ingress and are gone: **`TS_AUTHKEY`**,
@@ -1137,6 +1217,96 @@ without touching the budget. **Leave it on for several runs.** Read what it
 proposes first; an LLM confidently miscategorising months of transactions is
 tedious to unpick, and the whole point of the tag pair (`#actual-ai` /
 `#actual-ai-miss`) is that you can filter and audit before trusting it.
+
+---
+
+## Section 7 — Chess coach
+
+Requires Section 5 green (Ollama is `coach`'s LLM backend) and the deploy key from
+Section 0 already registered on GitHub.
+
+### 7a Clone the private repo
+
+```bash
+export GIT_SSH_COMMAND="ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes"
+git clone git@github.com:mihirsathe/chess-coach.git \
+    /mnt/user/appdata/chess-coach/repo
+```
+
+**Gate:** the clone completes. `Permission denied (publickey)` means the deploy
+key isn't registered or `GIT_SSH_COMMAND` isn't exported in *this* shell.
+
+### 7b Build
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker build coach
+```
+
+This compiles Stockfish and is the slowest single step in the run — several
+minutes, and it is CPU-bound on all 24 cores. Expect the box to get loud.
+
+### 7c Start it
+
+```bash
+docker compose --env-file .env.docker up -d coach
+docker compose --env-file .env.docker ps coach
+```
+
+**Gate:** `(healthy)`.
+
+**If it restart-loops with a permissions error**, the data bind is root-owned:
+
+```bash
+chown -R nobody:users /mnt/user/appdata/chess-coach
+docker compose --env-file .env.docker restart coach
+```
+
+### 7d Publish it
+
+```bash
+tailscale serve --service=svc:coach --bg 127.0.0.1:8000
+```
+
+**Gate:** `https://coach.<tailnet>.ts.net/` loads.
+
+### 7e Verify it reaches Ollama — the silent one
+
+```bash
+docker inspect coach --format '{{json .NetworkSettings.Networks}}' | python3 -m json.tool | grep -E '"(ai|frontend)"'
+docker exec coach python -c "import urllib.request;print(urllib.request.urlopen('http://ollama:11434/api/tags').status)"
+```
+
+**Gate:** both networks present, and `200`.
+
+This check exists because the failure is invisible from the UI. If `coach`
+can't reach Ollama it falls back to facts-only template reports, which look
+exactly like a working facts-only run — no error, no warning, just narrative
+reports that never appear. There is no hosted fallback to silently pick up the
+slack either, which is the point: if Ollama is unreachable you get template
+reports, not an outbound API call. Generate one report and
+confirm it has prose in it, not only move lists.
+
+### 7f Know how updates work
+
+`update-stack.sh` will **never** update `coach`. It is a `build:` service with
+no `image:`, so the monthly image pull skips it entirely and always will.
+Updating is manual:
+
+```bash
+export GIT_SSH_COMMAND="ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes"
+cd /mnt/user/appdata/chess-coach/repo && git pull
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker build coach
+docker compose --env-file .env.docker up -d coach
+```
+
+### 7g GPU note
+
+`coach` requests the nvidia runtime for lc0 + Maia, which is **phase 2** and
+not active at first deploy. Stockfish is CPU-only. So at this point three
+containers hold a GPU claim but only Plex and Ollama actually allocate VRAM —
+worth knowing before reading `nvidia-smi` and being alarmed by the process list.
 
 ---
 
