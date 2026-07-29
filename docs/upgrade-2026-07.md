@@ -322,6 +322,36 @@ ls -la /boot/homeserver-preupgrade/
 a full Docker reset. Take a Flash Backup afterwards (Main → Flash → Flash Backup)
 and you have an off-server copy too.
 
+### 2.2b Appdata ownership — the silent crash-looper
+
+```bash
+ls -ld /mnt/user/appdata/*/ | awk '{print $3":"$4, $9}'
+docker ps --filter health=unhealthy --format '{{.Names}}'
+```
+
+Every app directory should be `nobody:users`. A `root:root` entry means Docker
+created that bind mount before anything chowned it, and the container — which
+runs as `${PUID}:${PGID}` — cannot write to it.
+
+This does **not** reliably show up as a stopped container. Images built on s6
+(the hotio family) keep the supervisor running while the actual application
+crash-loops behind it, so `docker ps` reports `Up 5 days` for a service that
+has never once served a request. The tell is a `PermissionError` in the logs:
+
+```bash
+docker logs <name> --tail 20
+```
+
+Fix and restart just that service:
+
+```bash
+chown -R nobody:users /mnt/user/appdata/<name>
+docker restart <name>
+```
+
+Do this **before** the backup in 2.3 — there is no point capturing a broken
+state as your rollback target.
+
 ### 2.3 A restorable appdata backup exists
 
 This is the hard rollback for the *arr DB mutations in Section 3.7. Do not skip it.
