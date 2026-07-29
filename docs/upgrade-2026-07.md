@@ -850,49 +850,53 @@ Any 2xx/3xx/401 is a pass — the backend answered. This is the gate for 3.6:
 
 Console prep already happened in 3.2, so this is the box side only.
 
-**Define each service in the admin console first.** This is not optional and
-not inferable from the CLI: a Tailscale Service is an object that must exist in
-the tailnet before any host can advertise it. Advertise first and the host
-reports *"approval from an admin is required"* while the console shows nothing
-at all to approve — there is no object for the pending advertisement to attach
-to, and it looks like a broken advertisement rather than a missing definition.
+**Use the sync script.** All three parts of standing a service up are
+API-driven, so none of this needs the console:
 
-Admin console → **Services** → create one per admin UI, named for the service
-(`radarr` becomes `svc:radarr`). If the Services page is absent from the
-sidebar, check **Settings → Feature previews** — Services is in public beta.
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+python3 scripts/sync-tailscale-services.py --dry-run   # read this first
+python3 scripts/sync-tailscale-services.py
+```
 
-**Then advertise one and prove the certificate**, because the certificate is
-the whole point of the change:
+For each service it creates the object (`PUT`), advertises it from this host
+(`tailscale serve`), and approves this host for it
+(`POST .../device/{id}/approved`). Idempotent — re-running reconciles rather
+than duplicating, so it is safe to run whenever you are unsure of the state.
+
+Needs `TS_API_KEY` in `.env` (admin console → Settings → Keys → API access
+token). Nothing at runtime reads it; it is used only here.
+
+**Why all three steps matter.** A Tailscale Service is an object that must
+exist in the tailnet before any host can advertise it. Advertise without
+creating it and the host reports *"approval from an admin is required"* while
+the console shows nothing to approve — there is no object for the pending
+advertisement to attach to, and no error text points at the real cause. That
+failure is the reason this script exists.
+
+**Then prove the certificate on one**, because the certificate is the point of
+the entire change. From a tagged admin device:
+
+```
+https://radarr.<tailnet>.ts.net/
+```
+
+**Gate: a padlock with no warning, and Radarr's UI loads at root.** That
+confirms three things at once — the certificate provisioned, MagicDNS
+resolved, and the empty `UrlBase` means it serves at `/` instead of 404ing.
+
+### Doing it by hand instead
+
+If you would rather not put an API token on the box: create each service in
+admin console → **Services**, then per service run
 
 ```bash
 tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
 ```
 
-Note that `tailscale serve status` will report `No serve config`. That is
-correct and not a failure: service proxies are tracked separately from ordinary
-serve entries and do not appear in that listing.
-
-Approve the host: admin console → Services → `svc:radarr` → **Service hosts** →
-Approve.
-
-Open `https://radarr.<tailnet>.ts.net/` from a tagged admin device. **Gate: a
-padlock with no warning.** Do not proceed until you see it — if the cert is
-wrong, every remaining service will be wrong the same way.
-
-Then the rest:
-
-```bash
-tailscale serve --service=svc:sonarr    --bg 127.0.0.1:8989
-tailscale serve --service=svc:lidarr    --bg 127.0.0.1:8686
-tailscale serve --service=svc:prowlarr  --bg 127.0.0.1:9696
-tailscale serve --service=svc:sab       --bg 127.0.0.1:8080
-tailscale serve --service=svc:bazarr    --bg 127.0.0.1:6767
-tailscale serve --service=svc:seerr     --bg 127.0.0.1:5055
-tailscale serve --service=svc:tautulli  --bg 127.0.0.1:8181
-tailscale serve --service=svc:profilarr --bg 127.0.0.1:6868
-```
-
-Plex is deliberately absent — own port, own auth, own `*.plex.direct` certs.
+and approve the host in the console. Note that `tailscale serve status` then
+reports `No serve config` — correct, not a failure. Service proxies are
+tracked separately from ordinary serve entries.
 
 **If a service advertises but never goes active**, it is host approval —
 expected, since auto-approval is deliberately not configured (see 3.2).

@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Reconcile this host's Tailscale Services with the desired set.
+
+Admin ingress is one Tailscale Service per admin UI, advertised by the host's
+own tailscaled. Standing one up has three parts, and this script does all
+three so none of them is a console click:
+
+  1. The service OBJECT must exist in the tailnet   -> PUT via the API
+  2. This host must ADVERTISE it                    -> `tailscale serve`
+  3. An admin must APPROVE this host for it         -> POST via the API
+
+Miss step 1 and step 2 reports "approval from an admin is required" while the
+admin console shows nothing to approve — there is no object for the pending
+advertisement to attach to, and no error text points at the real cause.
+
+Idempotent by design, like bootstrap.py. The API uses PUT rather than POST for
+creation, so re-running reconciles rather than duplicating; re-advertising an
+existing serve mapping is a no-op; and approval is checked before it is set.
+Run it as often as you like.
+
+    python3 scripts/sync-tailscale-services.py            # reconcile
+    python3 scripts/sync-tailscale-services.py --dry-run  # show, change nothing
+    python3 scripts/sync-tailscale-services.py --prune    # also delete strays
+
+Requires TAILNET_NAME and TS_API_KEY in .env. Stdlib only — no pip install, so
+this works on a box where nothing has been bootstrapped yet.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+API_ROOT = "https://api.tailscale.com/api/v2"
+
+STACK_DIR = Path(__file__).resolve().parent.parent
+ENV_FILES = [STACK_DIR / ".env", STACK_DIR / "generated.env"]
+
+# The single source of truth for "which admin UI is published, and what does it
+# proxy to". Adding a service is one row here plus a re-run.
+#
+# The port is the LOOPBACK publish from docker-compose.yml. Those publishes are
+# load-bearing twice over: bootstrap.py probes them, and tailscale serve
+# proxies to them. Do not "tidy them up" out of the compose file.
+#
+# sab and prowlarr point at gluetun's published ports because both share
+# gluetun's network namespace and have no host port of their own.
+#
+# Deliberately absent:
+#   plex   — own auth, own *.plex.direct certs, own forwarded port. Proxying it
+#            adds a hop and breaks direct-connection negotiation.
+#   ollama — no authentication of any kind. Reaching :11434 means being able to
+#            delete every model on the box, so its access control is membership
+#            of the `ai` docker network. Publishing it would hand an
+#            unauthenticated API to every tagged device on the tailnet.
+SERVICES: dict[str, int] = {
+    "radarr":    7878,
+    "sonarr":    8989,
+    "lidarr":    8686,
+    "prowlarr":  9696,   # via gluetun
+    "sab":       8080,   # via gluetun
+    "bazarr":    6767,
+    "seerr":     5055,
+    "tautulli":  8181,
+    "profilarr": 6868,
+    "actual":    5006,
+    "coach":     8000,
+}
+
+# Services are tagged so the existing ACL grant (tag:admin -> tag:server)
+# covers them without a second rule.
+SERVICE_TAG = "tag:server"
+
+
+# --------------------------------------------------------------------------
+# env
+# --------------------------------------------------------------------------
+
+def load_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for path in ENV_FILES:
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            # strip trailing inline comments, then quotes
+            v = v.split("#", 1)[0].strip().strip('"').strip("'")
+            if v:
+                env[k.strip()] = v
+    return env
+
+
+# --------------------------------------------------------------------------
+# api
+# --------------------------------------------------------------------------
+
+class Api:
+    def __init__(self, tailnet: str, token: str):
+        self.tailnet = tailnet
+        self.token = token
+
+    def _call(self, method: str, path: str, body: dict | None = None):
+        url = f"{API_ROOT}/tailnet/{urllib.parse.quote(self.tailnet)}{path}"
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {self.token}")
+        if data:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read().decode()
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:400]
+            raise RuntimeError(f"{method} {path} -> {e.code} {e.reason}: {detail}") from None
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"{method} {path} -> cannot reach API: {e.reason}") from None
+
+    # Service objects. PUT is create-or-update, which is what makes this safe
+    # to re-run; there is no separate create call to guard against.
+    def list_services(self):
+        return self._call("GET", "/services")
+
+    def put_service(self, name: str, ports: list[str], comment: str):
+        # `addrs` is deliberately omitted so Tailscale assigns the TailVIPs.
+        # Pinning them here would mean hand-picking unused addresses and
+        # keeping them unique forever, for no benefit.
+        return self._call("PUT", f"/services/{urllib.parse.quote(name)}", {
+            "name": name,
+            "comment": comment,
+            "ports": ports,
+            "tags": [SERVICE_TAG],
+        })
+
+    def delete_service(self, name: str):
+        return self._call("DELETE", f"/services/{urllib.parse.quote(name)}")
+
+    # Host approval.
+    def service_devices(self, name: str):
+        return self._call("GET", f"/services/{urllib.parse.quote(name)}/devices")
+
+    def approve(self, name: str, device_id: str):
+        return self._call(
+            "POST",
+            f"/services/{urllib.parse.quote(name)}/device/{urllib.parse.quote(device_id)}/approved",
+            {"approved": True},
+        )
+
+
+# --------------------------------------------------------------------------
+# host side
+# --------------------------------------------------------------------------
+
+def ts(*args: str) -> tuple[int, str]:
+    p = subprocess.run(["tailscale", *args], capture_output=True, text=True)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def self_hostname() -> str:
+    rc, out = ts("status", "--json")
+    if rc != 0:
+        raise RuntimeError(f"tailscale status failed: {out}")
+    return json.loads(out)["Self"]["HostName"]
+
+
+def advertise(name: str, port: int, dry: bool) -> str:
+    """Point svc:<name> at 127.0.0.1:<port> on this host."""
+    if dry:
+        return "would advertise"
+    rc, out = ts("serve", f"--service=svc:{name}", "--bg", f"127.0.0.1:{port}")
+    if rc != 0:
+        raise RuntimeError(f"tailscale serve failed for {name}: {out}")
+    return "advertised"
+
+
+# --------------------------------------------------------------------------
+
+def normalise(name: str) -> str:
+    return name if name.startswith("svc:") else f"svc:{name}"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="report what would change, touch nothing")
+    ap.add_argument("--prune", action="store_true",
+                    help="delete tailnet services not in SERVICES (destructive)")
+    args = ap.parse_args()
+
+    env = load_env()
+    tailnet, token = env.get("TAILNET_NAME", ""), env.get("TS_API_KEY", "")
+
+    if not tailnet or not token:
+        print("ERROR: TAILNET_NAME and TS_API_KEY must both be set in .env\n", file=sys.stderr)
+        print("  TAILNET_NAME  `tailscale status`, or admin console -> DNS -> Tailnet name", file=sys.stderr)
+        print("  TS_API_KEY    admin console -> Settings -> Keys -> API access token.", file=sys.stderr)
+        print("                Prefer an OAuth client: access tokens expire (90 days),", file=sys.stderr)
+        print("                which breaks a rebuild-from-scratch long after you have", file=sys.stderr)
+        print("                forgotten this file exists.", file=sys.stderr)
+        return 1
+
+    api = Api(tailnet, token)
+    host = self_hostname()
+    print(f"Tailnet: {tailnet}   Host: {host}"
+          f"{'   [DRY RUN]' if args.dry_run else ''}\n")
+
+    try:
+        existing_raw = api.list_services()
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    services_list = existing_raw.get("services", existing_raw) if isinstance(existing_raw, dict) else existing_raw
+    existing = {s.get("name") for s in services_list or [] if isinstance(s, dict)}
+
+    failures = 0
+
+    for name, port in SERVICES.items():
+        svc = normalise(name)
+        print(f"  {svc:<18} -> 127.0.0.1:{port}")
+
+        # 1. object
+        try:
+            if svc in existing:
+                print("      object      already exists")
+            elif args.dry_run:
+                print("      object      would create")
+            else:
+                api.put_service(svc, ["tcp:443"], f"{name} admin UI")
+                print("      object      created")
+        except RuntimeError as e:
+            print(f"      object      FAILED: {e}")
+            failures += 1
+            continue
+
+        # 2. advertisement
+        try:
+            print(f"      advertise   {advertise(name, port, args.dry_run)}")
+        except RuntimeError as e:
+            print(f"      advertise   FAILED: {e}")
+            failures += 1
+            continue
+
+        if args.dry_run:
+            print("      approve     would approve this host")
+            continue
+
+        # 3. approval. The advertisement takes a moment to reach the control
+        # plane, so the device list is polled rather than read once.
+        device_id = None
+        for _ in range(10):
+            try:
+                devs = api.service_devices(svc)
+            except RuntimeError:
+                devs = None
+            entries = (devs.get("devices", devs) if isinstance(devs, dict) else devs) or []
+            for d in entries:
+                if not isinstance(d, dict):
+                    continue
+                if host.lower() in json.dumps(d).lower():
+                    device_id = d.get("id") or d.get("nodeId") or d.get("deviceId")
+                    break
+            if device_id:
+                break
+            time.sleep(2)
+
+        if not device_id:
+            print("      approve     host not listed yet — re-run in a moment")
+            failures += 1
+            continue
+
+        try:
+            api.approve(svc, device_id)
+            print(f"      approve     approved ({device_id})")
+        except RuntimeError as e:
+            print(f"      approve     FAILED: {e}")
+            failures += 1
+
+    if args.prune:
+        strays = existing - {normalise(n) for n in SERVICES}
+        for svc in sorted(strays):
+            if args.dry_run:
+                print(f"\n  {svc:<18} would DELETE (not in SERVICES)")
+            else:
+                api.delete_service(svc)
+                print(f"\n  {svc:<18} DELETED (not in SERVICES)")
+
+    print()
+    if failures:
+        print(f"{failures} step(s) failed. Nothing here is destructive — fix and re-run.")
+        return 1
+
+    print("All services reconciled.\n")
+    print(f"  https://<name>.{tailnet}/   e.g. https://radarr.{tailnet}/")
+    print("  MagicDNS usually puts the tailnet domain in the DNS search path,")
+    print("  so bare https://radarr/ resolves too.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

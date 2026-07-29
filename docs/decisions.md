@@ -135,13 +135,19 @@ you lose backends, not the route to them.
 
 The costs: Tailscale Services is in public beta, and service definitions plus
 host approval live in the admin console rather than in this repo. The second is
-partly mitigated by a huJSON serve-config file, which is versionable. Host
-approval is deliberately not automated: `autoApprovers` is documented for
-`routes` and `exitNode`, and while Tailscale's Services material refers to
-auto-approving service hosts, that key's schema was not verifiable when this
-was written. An unrecognised policy key can be accepted silently while doing
-nothing, which is worse than omitting it — you would trust a control that
-isn't there. Approving hosts by hand is nine clicks, once.
+**not** in practice a cost, because all three steps are API-driven:
+`PUT /tailnet/{tailnet}/services/{svc}` creates the object,
+`tailscale serve --service=` advertises it, and
+`POST /tailnet/{tailnet}/services/{svc}/device/{id}/approved` approves the
+host. `scripts/sync-tailscale-services.py` does all three from one table, so
+the service set is version-controlled and a rebuild-from-scratch is a script
+run rather than a sequence of console clicks. PUT-for-create makes it
+idempotent for free.
+
+`autoApprovers` is deliberately not used: it is documented for `routes` and
+`exitNode`, and an unrecognised policy key can be accepted silently while
+doing nothing — a control you would wrongly trust. Approving via the API is
+explicit and verifiable, so the ambiguity is avoided rather than papered over.
 
 **Alternative considered: a real domain plus a wildcard certificate.**
 `*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and one cert, and
