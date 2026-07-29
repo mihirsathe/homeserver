@@ -309,13 +309,27 @@ and you have an off-server copy too.
 ### 2.2b Appdata ownership — the silent crash-looper
 
 ```bash
-ls -ld /mnt/user/appdata/*/ | awk '{print $3":"$4, $9}'
+find /mnt/user/appdata -maxdepth 3 -type d ! -user nobody -printf '%u:%g  %p\n' 2>/dev/null
 docker ps --filter health=unhealthy --format '{{.Names}}'
 ```
 
-Every app directory should be `nobody:users`. A `root:root` entry means Docker
-created that bind mount before anything chowned it, and the container — which
-runs as `${PUID}:${PGID}` — cannot write to it.
+**Walk three levels, not one.** A top-level directory can be `nobody:users`
+while a directory *inside* it is root-owned, and that is enough to break the
+app. This is not hypothetical — it is exactly how Bazarr was found dead on this
+box: `/mnt/user/appdata/bazarr` was correctly owned, `/mnt/user/appdata/bazarr/config`
+was not, and a one-level check reported everything fine.
+
+A `root:root` entry means Docker created that path before anything chowned it,
+and the container — which runs as `${PUID}:${PGID}` — cannot write to it.
+
+**Two root-owned paths are expected and must stay that way:**
+
+| Path | Why |
+|------|-----|
+| `/mnt/user/appdata/homeserver` | The git repo. Not a bind mount. |
+| `/mnt/user/appdata/chess-coach` and `.../repo` | Holds the GitHub deploy key and the checkout. OpenSSH refuses a key owned by another user. Only `chess-coach/data` is bind-mounted and only it should be `nobody:users`. |
+
+Anything else in that output is a bug.
 
 This does **not** reliably show up as a stopped container. Images built on s6
 (the hotio family) keep the supervisor running while the actual application
