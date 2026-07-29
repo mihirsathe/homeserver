@@ -136,10 +136,9 @@ services:
       - downloaders
     ports:
       # SAB and Prowlarr are owned by gluetun's netns; their UIs are
-      # published only on host loopback. Caddy reaches them via docker DNS
-      # (gluetun:8080 / gluetun:9696) on the downloaders network — these
-      # publishes are kept for bootstrap.py's localhost:* probes and
-      # host-side debugging, not for direct LAN/Tailscale access.
+      # published only on host loopback. These publishes are what
+      # `tailscale serve` proxies to for svc:sab and svc:prowlarr, and what
+      # bootstrap.py probes — not for direct LAN access.
       - "127.0.0.1:8080:8080"   # sabnzbd
       - "127.0.0.1:9696:9696"   # prowlarr
     restart: unless-stopped
@@ -186,7 +185,7 @@ services:
     restart: unless-stopped
     healthcheck:
       # Runs inside gluetun's netns, so localhost:8080 is SAB's own port.
-      # SAB serves at root (UrlBase stripped); Caddy fronts it at sab.lan.
+      # SAB serves at root (UrlBase stripped); svc:sab fronts it.
       test: ["CMD-SHELL", "curl -fsS 'http://localhost:8080/api?mode=version' || exit 1"]
       interval: 30s
       timeout: 10s
@@ -248,7 +247,7 @@ services:
       - ${STACK_DIR}/configs/radarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      # Loopback only — fronted by caddy at radarr.lan. Direct port access
+      # Loopback only. Backend for svc:radarr and the host debug path. Direct access
       # exists for bootstrap.py + host debugging, not LAN/Tailscale.
       - "127.0.0.1:7878:7878"
     restart: unless-stopped
@@ -285,7 +284,7 @@ services:
       - ${STACK_DIR}/configs/sonarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      # Loopback only — fronted by caddy at sonarr.lan.
+      # Loopback only. Backend for svc:sonarr and the host debug path.
       - "127.0.0.1:8989:8989"
     restart: unless-stopped
     depends_on:
@@ -321,7 +320,7 @@ services:
       - ${STACK_DIR}/configs/lidarr/config.xml:/config/config.xml
       - /mnt/user/data:/data
     ports:
-      # Loopback only — fronted by caddy at lidarr.lan.
+      # Loopback only. Backend for svc:lidarr and the host debug path.
       - "127.0.0.1:8686:8686"
     restart: unless-stopped
     depends_on:
@@ -473,7 +472,7 @@ services:
       - /mnt/user/appdata/tautulli:/config
       - ${STACK_DIR}/configs/tautulli/config.ini:/config/config.ini
     ports:
-      # Loopback only — fronted by caddy at tautulli.lan.
+      # Loopback only. Backend for svc:tautulli and the host debug path.
       - "127.0.0.1:8181:8181"
     restart: unless-stopped
     healthcheck:
@@ -513,7 +512,7 @@ services:
     volumes:
       - /mnt/user/appdata/profilarr:/config
     ports:
-      # Loopback only — fronted by caddy at profilarr.lan.
+      # Loopback only. Backend for svc:profilarr and the host debug path.
       - "127.0.0.1:6868:6868"
     restart: unless-stopped
     healthcheck:
@@ -548,7 +547,7 @@ services:
       - ${STACK_DIR}/configs/bazarr/config.ini:/config/config.ini
       - /mnt/user/data/media:/data/media
     ports:
-      # Loopback only — fronted by caddy at bazarr.lan.
+      # Loopback only. Backend for svc:bazarr and the host debug path.
       - "127.0.0.1:6767:6767"
     restart: unless-stopped
     healthcheck:
@@ -666,7 +665,14 @@ services:
         limits:
           # Headroom to stage a model into VRAM, and to hold one in system RAM
           # if Ollama spills layers to CPU because a transcode has the card.
-          memory: 8G
+          #
+          # 4G, not 8G: the pinned model is llama3.2:3b (~2.5 GB), and memory
+          # ceilings across the stack sum close to the box's 32 GB once finance
+          # and chess land. This is the first ceiling to trim because it is the
+          # least load-bearing — the spill case it covers is already the
+          # graceful-degradation path, so a tighter ceiling costs speed in a
+          # situation that is itself the fallback.
+          memory: 4G
 
   # --- Adding a local-AI consumer ---------------------------------------------
   # Join the `ai` network and point at Ollama. It serves an OpenAI-compatible
