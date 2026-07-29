@@ -31,6 +31,51 @@ covered below.
 
 ---
 
+## Section 0 — Everything you need in hand before we start
+
+The point of this section is that **nothing on this list gets discovered
+mid-run**. Gather it all first; the run is a paste-back loop over SSH and
+stopping to hunt for a token is how a two-hour session becomes a five-hour one.
+
+### Have these before typing anything
+
+| # | What | Where to get it | Used in |
+|---|------|-----------------|---------|
+| 1 | A browser logged into the **Tailscale admin console** | [login.tailscale.com](https://login.tailscale.com/) | 3.2 |
+| 2 | **`TAILNET_NAME`** — your MagicDNS domain, no leading dot | `tailscale status` on the host, or console → DNS → Tailnet name | 3.4 |
+| 3 | SSH to the host | `ssh root@<server>` — Tailscale SSH, no password | all |
+| 4 | Confirmation `.env` is still populated | 2.2 checks this for you | 2.2 |
+
+### You will NOT be asked for these
+
+They existed for the old ingress and are gone: **`TS_AUTHKEY`**,
+**`CADDY_TAILNET_IP`**, **`CADDY_TS_HOSTNAME`**, **AdGuard's admin password**.
+If a doc still asks for one, it is stale.
+
+### Only if something has gone wrong
+
+| What | When |
+|------|------|
+| **Plex claim token** ([plex.tv/claim](https://plex.tv/claim), 4-minute expiry) | Only if Plex's appdata is lost. Not expected — the existing server identity persists. |
+| **Unraid root password** | Only if Tailscale SSH fails and you need the web terminal. |
+
+### The one-way step, stated plainly
+
+Everything before **3.7** (`bootstrap.py`) is reversible from the Section 2.3
+backup. `bootstrap.py` rewrites the *arr databases and **3.9** migrates them
+forward with new images. After that, rollback means restoring appdata, not
+re-running a script. Section 4 is the gate between the two halves — do not
+start it late at night.
+
+### Access, throughout
+
+The Unraid GUI on host `:80` and Tailscale SSH are untouched by every step
+below. On Unraid, stopping the array stops Docker, so those two are
+deliberately the only paths that never depend on a container. If you ever feel
+lost, they are the way back in.
+
+---
+
 ## Section 1 — What changed
 
 ### 1.1 Find out where you actually are
