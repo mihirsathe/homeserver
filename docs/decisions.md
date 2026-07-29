@@ -78,84 +78,97 @@ SSL over Usenet encrypts **content**, not metadata. The ISP still sees a sustain
 
 This reverses an earlier position in this file that called Gluetun "unnecessary for Usenet (already SSL-encrypted)." That framing conflated confidentiality with traffic analysis; both matter here.
 
-### Admin ingress: `*.lan` behind Caddy today, Tailscale-native next
+### Admin ingress: Tailscale Services, no reverse proxy
 
-This was never recorded when it was built, so both halves go here: what the
-current design is, and why it's being unwound.
+**Decided and implemented.** An earlier revision of this entry sequenced this
+as a deferred "Phase 5". That deferral is withdrawn — the reasoning is below,
+including why deferring turned out to cost more than doing it.
 
-**What exists.** Every admin UI is a plain-HTTP vhost at `<name>.lan` on a
-single Caddy, reached over the tailnet. Three pieces make that work: Caddy
-routes by `Host` header to each backend's docker-DNS name; AdGuard Home answers
-`*.lan` with a wildcard rewrite; and a Tailscale split-DNS rule restricted to
-the `lan` domain sends those queries to AdGuard. Backends bind `127.0.0.1` only,
-so Caddy is the sole ingress. Caddy itself runs inside a `ts-caddy` sidecar's
-network namespace, giving it a tailnet address of its own — because the Unraid
-web GUI owns the host's `:80` and must keep it, being the one admin surface that
-survives Docker being down.
+**What existed.** Every admin UI was a plain-HTTP vhost at `<name>.lan` on a
+single Caddy. Three mechanisms made that work: Caddy routed by `Host` header
+to each backend's docker-DNS name; AdGuard Home answered `*.lan` with a
+wildcard rewrite; and a Tailscale split-DNS rule sent `.lan` queries to
+AdGuard. A fourth propped it up — Caddy could not bind the host's `:80`
+(Unraid's GUI owns it), so it ran inside a `ts-caddy` sidecar's network
+namespace to get a tailnet address of its own.
 
-Two costs surfaced only after the pieces were assembled.
+**Why it was replaced.**
 
-**`auto_https off` forecloses Secure Context, which is not the same as
-"unencrypted."** The original reasoning — Tailscale already provides
-authenticated, encrypted transport, so TLS on top would only buy a private CA to
-install on every device — is correct about *eavesdropping* and wrong about
+*`auto_https off` forecloses Secure Context, which is not the same as
+"unencrypted."* The original reasoning — Tailscale already provides
+authenticated, encrypted transport, so TLS on top would only buy a private CA
+to install on every device — is correct about *eavesdropping* and wrong about
 *browser capability*. Browsers gate a widening set of APIs on Secure Context,
-not on whether the bytes are encrypted in transit. Actual Budget is the first
-service here that simply will not load over plain HTTP (its SQLite engine needs
-`SharedArrayBuffer`), and it required building a second, parallel ingress path —
-`tailscale serve` on the host node — for exactly one app. Service workers,
-WebCrypto's subtle API and WASM threads sit behind the same gate. Actual is not
-an exception to the design; it is the design's first bill arriving.
+not on whether bytes are encrypted in transit. Actual Budget will not load
+over plain HTTP at all (its SQLite engine needs `SharedArrayBuffer`), and it
+forced a second, parallel ingress path — `tailscale serve` on the host — for
+exactly one app. Service workers, WebCrypto's subtle API and WASM threads sit
+behind the same gate. Actual was not an exception to the design; it was the
+design's first bill arriving.
 
-**The mechanism count grew without anyone choosing it.** Reaching a service now
-has five different answers: Caddy vhosts, the Unraid GUI on host `:80`,
-`tailscale serve` on host `:443`, raw `0.0.0.0` publishes (Plex, Seerr,
-AdGuard), and eight loopback publishes that exist only so `bootstrap.py` can
-talk to `localhost:<port>` from the host. Each was locally correct. They do not
-compose, and the drift shows: Seerr is published on `0.0.0.0:5055` *and* has a
-`seerr.lan` vhost.
+*The mechanism count grew without anyone choosing it.* Reaching a service had
+five answers: Caddy vhosts, the Unraid GUI on host `:80`, `tailscale serve` on
+host `:443`, raw `0.0.0.0` publishes, and loopback publishes for
+`bootstrap.py`. Each was locally correct; they did not compose. The drift
+showed — Seerr was published on `0.0.0.0:5055` *and* had a `seerr.lan` vhost.
 
-**Direction: give each exposed service its own Tailscale node and delete the
-middle layer.** The repository already proves both halves independently —
-`ts-caddy` proves the sidecar pattern, and the finance plane proves
-`tailscale serve` provisions free, auto-renewing, publicly-trusted certificates
-for a node's MagicDNS name. Generalising that removes Caddy, AdGuard, the
-Caddyfile generator, `CADDY_SERVICES`, the split-DNS console rule, the wildcard
-rewrite, and `CADDY_TAILNET_IP` bookkeeping. Every service gets a real
-certificate, so Secure Context stops being a special case. ACLs become
-per-service (`tag:admin → tag:radarr:443`) instead of one blunt port list. Host
-port contention stops existing. Ergonomics likely improve rather than regress:
-MagicDNS puts the tailnet domain in the client search path on most platforms, so
-bare `http://radarr/` resolves — shorter than `radarr.lan`.
+**What replaced it.** Each exposed service is a Tailscale Service (`svc:<name>`)
+advertised by the host's existing tailscaled. Each gets a TailVIP, a MagicDNS
+name and a real auto-renewing certificate. This deletes Caddy, `ts-caddy`,
+AdGuard, the Caddyfile, `write_caddy()`, `write_adguard()`, `CADDY_SERVICES`,
+`CADDY_TAILNET_IP`, `TS_AUTHKEY` and the split-DNS console rule.
 
-The cost is one sidecar container per exposed service (~30 MB each, noise
-against 32 GB), a reusable auth key, a state directory per sidecar, and one
-tailnet device each against the plan's cap.
+**Why Services rather than a Tailscale sidecar per container.** Both give every
+service its own name and certificate. The deciding factor was blast radius in
+the compose file. Under the sidecar model a backend joins its sidecar's netns
+via `network_mode: service:ts-<name>`, which means it *loses its own*
+`networks:` — so each sidecar has to replicate its backend's plane membership
+(Radarr still needs to reach Prowlarr and SAB). That is a rewrite of every
+service's internal networking, plus one container and one state directory each.
+Services needs none of it: the host daemon already exists, and the loopback
+publishes it proxies to were already there for `bootstrap.py`. The compose
+change is a pure deletion.
+
+Services also improves the emergency path. Caddy was a *container*, so Docker
+trouble took every admin UI with it. The host daemon survives Docker entirely —
+you lose backends, not the route to them.
+
+The costs: Tailscale Services is in public beta, and service definitions plus
+host approval live in the admin console rather than in this repo. The second is
+mitigated by a huJSON serve-config file and by `autoApprovers` keyed on
+`tag:server` in the ACL policy, both of which are versionable.
 
 **Alternative considered: a real domain plus a wildcard certificate.**
-`*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and a single cert,
-and also solves Secure Context. Rejected for this box because Caddy here
-performs no middleware — no auth, no rate limiting, nothing shared. It is doing
-hostname-to-port mapping, which MagicDNS does for free. The domain approach
-becomes the better answer if a genuine central policy point is ever wanted, and
-it is the right choice for anyone not already all-in on Tailscale.
+`*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and one cert, and
+also solves Secure Context. Rejected *for now* because Caddy here performs no
+middleware — it maps hostnames to ports, which MagicDNS does for free. The
+domain becomes the better answer when any one of these fires:
 
-**Nothing in the stack needs a reverse proxy for its own sake.** An earlier
-draft of this entry expected `ollama-gate` — a policy-enforcing Caddy in front
-of the inference engine — to survive as the one proxy that earned its keep. That
-service was removed from PR #17 before merge; Ollama is loopback-only on a
-private bridge, so network membership is its access control. With it gone,
-Caddy's entire remaining job here is hostname-to-port mapping, which is exactly
-the job MagicDNS does for free. If a genuine policy point is ever wanted — auth,
-rate limiting, shared middleware — that is the argument for reintroducing a
-proxy, and it should be made on those terms rather than inherited from naming.
+1. A non-Tailscale person needs *routine* access to something. One-off sharing
+   is covered by Tailscale Funnel without a domain.
+2. Single sign-on across services is wanted. This is the big one, and it is
+   also what brings a reverse proxy back — a proxy earns its place as a policy
+   point, never as a naming layer.
+3. Something external must call in: webhooks, OAuth redirect URIs.
+4. Vendor independence — today the URLs contain `ts.net`.
 
-**Not yet.** Four changes are in flight against a deployment still running its
-first-setup state; re-architecting ingress mid-rollout means re-testing
-everything at once. It is also a deletion, and deletions migrate incrementally —
-a sidecar can be stood up for one service and verified while its Caddy vhost
-still works, so the two paths coexist during the transition. Sequenced as
-Phase 5 in [rollout-2026-07.md](rollout-2026-07.md).
+None are true today. Buying the domain early is still cheap insurance: the
+expensive part was never the registration, it is re-teaching every device and
+person a new set of URLs. A domain does not replace Tailscale either; the
+tailnet stays the transport for everything private.
+
+**Plex is deliberately untouched by all of this.** It keeps its single
+forwarded port, its own authentication and its own `*.plex.direct`
+certificates. Proxying it would add a hop and break direct-connection
+negotiation, and Funnel's relayed bandwidth is unsuitable for video.
+
+**AdGuard was deleted rather than kept.** Its wildcard rewrite existed to serve
+Caddy, and ad-blocking was configured but dormant — split DNS only routed
+`*.lan` to it, so it filtered nothing. Keeping it would have meant adding a
+loopback publish for its admin UI and pointing the tailnet's *global* DNS at a
+container, making name resolution for every device depend on Docker being up —
+the same class of mistake as putting the Unraid GUI behind Caddy. Network-wide
+ad-blocking, if wanted later, is a clean standalone decision.
 
 ### Single parity (for now)
 

@@ -1,14 +1,19 @@
-# Upgrade Runbook — catching a first-setup box up to `master`
+# Live-run Runbook — first-setup box to full platform, in one sitting
 
-Everything the server needs to go from "whatever was deployed at first setup" to
-current `master` (`fb50978`) **plus the ingress rework on this branch**, in one
-supervised session over SSH.
+Everything the server needs to go from "whatever was deployed at first setup"
+to current `master` (`fb50978`) **plus the ingress rework and all three new
+tenants**, in one supervised session over SSH.
 
-**This runbook is Phase 1 of four.** Ollama (PR #17), the finance plane
-(PR #16) and chess coach (PR #15) are also in flight; see
-[rollout-2026-07.md](rollout-2026-07.md) for the phase order, the measured merge
-conflicts between them, and the two integration gaps neither of those PRs knows
-about. Finish this runbook and its Section 4 gate before starting any of them.
+**This is not phased across days.** The four changes land as a stack of PRs
+merged in order — ingress (this branch), then Ollama (#17), then finance
+(#16), then chess (#15). Ollama precedes the other two because both are now
+its consumers. Each PR extends the relevant sections below, so when all four
+are merged this runbook is complete and linear.
+
+**There is exactly one genuinely one-way step:** Section 3.7's `bootstrap.py`
+reconcile plus 3.9's image pull. Everything before it is reversible from the
+Section 2.3 backup; everything after it depends on it having gone green. Do
+not start the new tenants until Section 4 passes.
 
 **Read Section 2 before you type anything in Section 3.** The upgrade itself is
 low-risk for *media* — nothing in it writes to `/mnt/user/data`. The two things
@@ -19,9 +24,9 @@ covered below.
 
 | | |
 |---|---|
-| **Target** | `master` (`fb50978`) + this branch's ingress rework — see 1.5 |
-| **Expected duration** | ~45 min hands-on, plus image-pull time |
-| **Requires** | SSH to the Unraid host (Tailscale SSH), a browser for the Tailscale admin console |
+| **Target** | `master` (`fb50978`) + ingress rework + Ollama + finance + chess |
+| **Expected duration** | ~2 h hands-on, plus image-pull and model-pull time |
+| **Requires** | SSH to the Unraid host (Tailscale SSH), a browser logged into the Tailscale admin console, and the inputs listed in Section 0 |
 | **Hard rollback** | appdata backup taken in Section 2.3 + image digests recorded in 2.9 |
 
 ---
@@ -55,51 +60,33 @@ you're missing.
 | `56020e9` | PR #10 | `removeCompletedDownloads=False` on each *arr's SAB client |
 | `41fb166` | PR #13 | Prowlarr pushes TV/audio categories to Sonarr/Lidarr, not movie categories |
 | `fb50978` | PR #12 | **Caddy + AdGuard, UrlBase strip, loopback port binds** — current `master` |
-| *this branch* | — | Caddy moves to its own tailnet node so admin URLs lose the port and Unraid keeps `:80` — see 1.5 |
+| *this branch* | — | Caddy/AdGuard/`ts-caddy` **deleted**; admin ingress becomes Tailscale Services — see 1.5 |
 
 If your hash isn't in the table, you're on an intermediate commit inside one of
 those PRs — treat it as "at or before" the merge commit listed above it.
 
-### 1.2 The big one — PR #12 (Caddy + AdGuard split-DNS)
+### 1.2 The big one — PR #12 (Caddy + AdGuard) is being *deleted*, not deployed
 
-This is the only change that alters how you *reach* the stack, and the only one
-with a manual step outside the box.
+Your box never ran PR #12, and it never will. That PR built the `*.lan` ingress
+— a Caddy reverse proxy, an AdGuard wildcard rewrite, a `ts-caddy` sidecar and
+a Tailscale split-DNS rule. It merged to `master` months ago and sat undeployed.
 
-**Before:** every admin UI published on `0.0.0.0:<port>`, reachable at
-`http://<lan-ip>:7878/radarr`, `:8989/sonarr`, `:8080/sabnzbd`, and so on.
+This change removes all of it. That is a stroke of luck rather than wasted
+work: because the box never deployed it, you are not migrating away from a
+running ingress — you are going from *no* ingress directly to the final one.
+There is no cutover window and no old URLs to retire.
 
-**After:**
+Two things follow that matter for this run:
 
-- Three new containers: **`ts-caddy`** (a Tailscale sidecar that joins the
-  tailnet as its own node purely to hold an IP), **`caddy`** (runs inside that
-  sidecar's netns and binds `:80` there), and **`adguard`** (binds host `:53`
-  TCP+UDP, answers `*.lan` with the sidecar's IP). Admin URLs are
-  `http://radarr.lan` — no port.
-- **Caddy publishes nothing on the host.** Unraid's web GUI keeps `:80`
-  untouched, so `http://DellBox/Main` is unaffected — and stays working when
-  Docker is down (bad image pull, docker.img trouble, or an array stop, which
-  on Unraid tears Docker down because docker.img is loop-mounted from a pool).
-  That is why the GUI is deliberately not proxied. Two
-  services can't share one IP's port 80; giving Caddy its own address rather
-  than its own port is what buys port-free URLs without evicting the GUI.
-- Every admin backend port rebinds from `0.0.0.0:<port>` → **`127.0.0.1:<port>`**.
-  They become unreachable from the LAN and from Tailscale — only Caddy is.
-  Plex (`32400`) and Seerr (`5055`) stay published on all interfaces.
-- **UrlBases stripped everywhere.** `<UrlBase></UrlBase>` on all four *arrs,
-  `url_base =` in `sabnzbd.ini`, `base_url =` in Bazarr — apps now serve at root.
-  Healthchecks in compose drop the prefix to match. SAB's `host_whitelist` gains
-  `sab.lan`, without which every proxied request 403s.
-- `bootstrap.py` gains `reconcile_fields()`, which **rewrites the `urlBase` field
-  on each *arr's existing SABnzbd download client** (`/sabnzbd` → `""`) and
-  Prowlarr's `prowlarrUrl` on each app connection. This mutates the *arr SQLite
-  DBs — it is the one step in the upgrade that is not trivially reversible, and
-  the reason Section 2.3's backup is not optional.
-- New env var **`TAILNET_HOST_IP`**; new generated secret **`ADGUARD_ADMIN_PASS`**.
-- `update-stack.sh` gains a pre-flight `caddy validate` on the Caddyfile, so it
-  now **refuses to run if `configs/caddy/Caddyfile` doesn't exist**. Run
-  `generate-configs.py` before you ever run `update-stack.sh` again.
-
-Two console changes on tailscale.com are required — they're in Section 3.6.
+- **The generated Caddyfile on `master` is invalid.** Verified against a real
+  caddy 2.8.4 binary: the one-liner site form lexed `common;` as the import's
+  argument and the adapter rejected the *entire* file with
+  `File to import not found: common;`. Caddy refuses to start and
+  `update-stack.sh`'s pre-flight aborts, so `master` is undeployable as-is.
+  It is moot here — the file and its generator are deleted — but it explains
+  why deploying `master` first and then migrating was never an option.
+- **Nothing on the box depends on `*.lan`.** No bookmarks to retrain, no DNS
+  state to unwind. The split-DNS console rule was never created.
 
 ### 1.3 Everything else (PRs #1–#10, #13)
 
@@ -117,60 +104,65 @@ categories instead of movie categories (PR #13).
 
 ### 1.4 Obsolete docs
 
-`docs/PR12-test-plan.md` is now obsolete. It was written for pre-merge testing;
-its Section 4 revert path ("check out master") points at what is now the *new*
-state, so following it today would do the opposite of what it says. Ignore it —
-this document supersedes it.
+`docs/PR12-test-plan.md` and `docs/rollout-2026-07.md` are deleted by this
+change. The first tested the Caddy/AdGuard ingress that is now removed, and its
+revert path pointed at what is now the *new* state — following it today would
+do the opposite of what it says. The second phased this work across days, which
+the single-sitting decision supersedes. Their surviving technical findings are
+folded into 1.2, 1.6 and Section 2.
 
-### 1.5 The ingress rework on this branch
+### 1.5 The ingress on this branch — Tailscale Services
 
-`master` as merged has Caddy publishing host `:80`. That collides with Unraid's
-web GUI, which owns `:80` on a stock install — so deploying `fb50978`
-unmodified would leave `caddy` unable to bind and admin ingress dead. This
-branch fixes that rather than evicting the GUI:
+Admin ingress is a Tailscale Service per UI (`svc:radarr`, `svc:sonarr`, …),
+advertised by the host's **existing** tailscaled — the daemon the Unraid
+Tailscale plugin already runs. Each gets a TailVIP, a MagicDNS name, and a
+publicly-trusted auto-renewing certificate.
 
-- New **`ts-caddy`** container (`tailscale/tailscale`) joins the tailnet as its
-  own node. `caddy` runs in its netns (`network_mode: service:ts-caddy`) and
-  binds `:80` *there*, publishing nothing on the host.
-- AdGuard's wildcard answers `*.lan` with **`CADDY_TAILNET_IP`** (the sidecar's
-  address), not `TAILNET_HOST_IP`.
-- New `.env` values: `TS_AUTHKEY`, `CADDY_TAILNET_IP`, `CADDY_TS_HOSTNAME`.
-- `unraid.lan` joins the Caddy route table as a convenience alias for the GUI.
-- **The generated Caddyfile is fixed.** `master`'s one-liner site form
-  (`{ import common; reverse_proxy radarr:7878 }`) is invalid — the Caddyfile
-  grammar has no statement separator, so `common;` is read as the import's
-  argument and the adapter rejects the *entire* file with `File to import not
-  found: common;`. Caddy would refuse to start and `update-stack.sh`'s
-  pre-flight would abort. Sites are now emitted in block form, verified
-  `Valid configuration` against caddy 2.8.4. PR #17 fixes the same bug
-  independently; see the rollout plan for how the two reconcile.
+```
+tailnet device → https://radarr.<tailnet>.ts.net → host tailscaled
+               → 127.0.0.1:7878 → radarr
+```
 
-Sections 2 and 3 already assume this branch. Plain `master` fails two
-independent ways: `caddy` can't bind `:80` (Unraid's GUI owns it) and its
-generated Caddyfile doesn't parse at all. Both are fixed here.
+Three consequences worth internalising before the run:
 
-### 1.6 Interaction with PR #16 (finance plane) — not in this upgrade
+1. **Every loopback publish is load-bearing.** They were already there for
+   `bootstrap.py`'s probes; they are now also the serve backends. Do not
+   "tidy them up."
+2. **No new containers.** The alternative — a Tailscale sidecar per service —
+   would have forced every backend into its sidecar's netns via
+   `network_mode:`, which strips its own `networks:` and means each sidecar
+   must replicate its backend's plane membership. Services needs none of that.
+   The compose change is a pure deletion.
+3. **The client must support `--service`.** Verified on this box: tailscale
+   1.96.2 has it. Services is in public beta.
 
-PR #16 is open against the same base and adds Actual Budget + `actual-ai` on a
-new `finance` network. **It does not conflict with this upgrade's design**, and
-nothing here needs to change for it, but two things are worth knowing:
+### 1.6 The other three tenants land in the same sitting
 
-- It fronts Actual with **`tailscale serve`** on the *host* node's `:443`,
-  because Actual's `SharedArrayBuffer` SQLite engine requires a Secure Context
-  and so can't live behind Caddy's plain-HTTP `.lan` vhosts. That's the host
-  node; Caddy is on the `ts-caddy` node. Different nodes, no contention — the
-  host's `:443` is free because Unraid's SSL is off.
-- **Never run `tailscale serve --http=80` on the host node.** It would shadow
-  the Unraid GUI on the tailnet, which is the emergency path this whole design
-  is built to preserve. PR #16 uses the default (`:443`), which is fine.
+An earlier revision of this runbook treated the finance plane as out of scope
+and phased the work across days. That is superseded: Ollama, finance and chess
+land in this run, as a stack of PRs merged in order — ingress, then Ollama,
+then finance, then chess. Ollama has to precede the other two because both are
+now its consumers.
 
-Apply them one at a time: finish this upgrade, verify Section 4, *then* merge
-PR #16. Merging the two branches will conflict in `docker-compose.yml` (both
-touch the `networks:` block and the file tail) and in `docs/software.md` (both
-edit the service table) — both are small, mechanical resolutions.
+The integration bugs that only became visible with all four in view are fixed
+in their respective PRs, not here. Recorded so they are not rediscovered:
 
-
----
+- `actual-ai` and `coach` both reached Ollama on the wrong network. Each PR
+  was individually correct and jointly broken — `coach`'s own comment claimed
+  Ollama was on `frontend`, which was true when written and false after
+  Ollama landed on its own `ai` plane. Both fail *silently*: `actual-ai` logs
+  and retries forever by design.
+- `/mnt/user/appdata/ollama` was never created or chowned, but Ollama runs as
+  `99:100` — Docker would have created it root-owned and every model pull
+  would have failed.
+- `OLLAMA_MODEL` was `llama3.1:8b` (~5 GB at q4). Behind the 2 GiB
+  reservation on a 6 GB card that silently spills layers to CPU. Pinned to
+  `llama3.2:3b`.
+- Memory *ceilings* summed to 31.25 GB on a 32 GB box. Ollama's 8 G was the
+  least load-bearing and is now 4 G, bringing the total to 26.75 GB. Ceilings
+  are not reservations, and every one of these tenants is bursty or
+  schedulable, so this was never as alarming as the raw sum looks — but it had
+  no headroom for error.
 
 ## Section 2 — Pre-flight safety checks
 
@@ -299,7 +291,7 @@ and will be lost:
 | `configs/bazarr/config.ini` | **High risk.** Subtitle provider accounts and credentials, language profiles, scoring. |
 | `configs/tautulli/config.ini` | **Medium.** Notification agents, newsletter config, `pms_token`. Watch *history* lives in appdata SQLite and survives. |
 | `configs/{radarr,sonarr,lidarr,prowlarr}/config.xml` | **Low.** Only bind address, port, API key, auth method, UrlBase. Everything else is in the SQLite DB. Safe as long as 2.2 passed. |
-| `configs/caddy/Caddyfile`, `configs/adguard/AdGuardHome.yaml` | None — they don't exist yet on your box. |
+| `configs/caddy/Caddyfile`, `configs/adguard/AdGuardHome.yaml` | None — they never existed on your box, and this change deletes their generators. |
 
 Snapshot them, then diff after regeneration so you can consciously re-apply anything:
 
@@ -315,41 +307,19 @@ grep -A30 '^\[categories\]' configs/sabnzbd/sabnzbd.ini
 
 ### 2.5 No new host ports are claimed
 
-Caddy publishes nothing on the host — it binds `:80` inside the `ts-caddy`
-sidecar's network namespace, which is a separate tailnet node with its own IP.
-Confirm nothing you care about changes hands:
+Nothing new binds a host port. Ingress is the host's tailscaled on `:443`,
+which is already running — so the port map after this change is *smaller* than
+before, not larger.
 
-```bash
-ss -tlnp | grep -w ':80'    # expect nginx — Unraid's GUI. It KEEPS this.
-ss -tulnp | grep -w ':53'   # must be free — see 2.6
-```
+| What | Binds | Reachable at |
+|------|-------|--------------|
+| Unraid GUI | host `:80` | `http://<server-name>/`, `http://<host tailnet IP>/` |
+| Plex | host `:32400` | LAN, and the internet via the router forward |
+| Every admin UI | `127.0.0.1:<port>` only | `https://<name>.<tailnet>.ts.net/` via tailscaled |
 
-Three different things listen on "port 80" after this upgrade, on three
-different addresses, which is why none of them collide:
-
-| Listener | Address | Reachable as |
-|----------|---------|--------------|
-| Unraid nginx | the host's LAN + tailnet IPs | `http://DellBox/`, `http://<TAILNET_HOST_IP>/` |
-| Caddy | the `ts-caddy` node's tailnet IP | `http://radarr.lan` and every other `*.lan` |
-| AdGuard's own admin UI | its container IP on the `frontend` bridge | only via Caddy, at `adguard.lan` — never published to the host |
-
-You need a Tailscale auth key before Section 3 — see 3.3.
-
-### 2.6 Port 53 is free
-
-AdGuard binds `0.0.0.0:53` on TCP and UDP.
-
-```bash
-ss -tulnp | grep -w ':53' || echo "port 53 free"
-```
-
-Unraid doesn't bind 53 on a stock install. The realistic conflict is **libvirt's
-dnsmasq**, which appears when the VM service is enabled and binds
-`192.168.122.1:53`. A bind to `192.168.122.1:53` blocks a bind to `0.0.0.0:53`,
-so AdGuard will fail. If you see dnsmasq there and don't use VMs: Settings → VM
-Manager → Enable VMs → No. If you do use VMs, don't deploy AdGuard until you've
-picked a different approach (bind AdGuard to the tailnet IP only, or run the
-resolver off-box).
+`:53` is not used by anything in this stack any more — AdGuard is deleted, so
+the old dnsmasq/VM-Manager conflict check no longer applies. If you previously
+disabled VM Manager solely to free `:53`, you can turn it back on.
 
 ### 2.7 Free space — appdata and per-disk
 
@@ -360,8 +330,8 @@ df -h /mnt/user/appdata /mnt/user/data
 df -h /mnt/disk* | awk 'NR==1 || /\/mnt\/disk/'
 ```
 
-- `update-stack.sh` **hard-fails** below **5 GB free on appdata**. Caddy and
-  AdGuard images are small (~50 MB combined), but a months-behind pull of Plex +
+- `update-stack.sh` **hard-fails** below **5 GB free on appdata**. This change
+  adds no images at all (it only deletes), but a months-behind pull of Plex +
   four *arrs + SAB will want several GB.
 - A single `/mnt/disk*` at or near zero won't stop this upgrade, but it will
   ENOSPC *arr imports independently of it. Worth knowing before you start so you
@@ -442,7 +412,7 @@ the DNS rule in 3.6 lands. During that window the admin UIs have no working URL
 from your Mac. SSH is unaffected throughout.
 
 Keeping one SSH session open is a convenience, not a lifeline — from the host,
-`localhost:<port>` reaches every backend no matter how broken Caddy or DNS is.
+`localhost:<port>` reaches every backend no matter what ingress is doing. This is the fallback, and it is the same loopback publish `tailscale serve` proxies to — so if a service URL breaks, the backend is still one SSH port-forward away.
 The one thing worth being deliberate about is the **ACL edit in 3.6 step 2**:
 a malformed ACL blocks *new* connections, so it is genuinely nicer to already
 be sitting in a shell when you save it. Tailscale SSH is governed by the `ssh`
@@ -500,56 +470,38 @@ git log -1 --format='%h %s'                  # expect fb50978
 `--ff-only` refuses to create a merge commit — if it fails, the working tree
 diverged and you should resolve that (see 2.1) rather than force it.
 
-### 3.2 Add `TAILNET_HOST_IP` to `.env`
+### 3.2 Tailscale console prep — do this before touching the stack
+
+Three console changes, all in the browser, none of which can be scripted from
+the box. Doing them now means nothing is discovered mid-run.
+
+1. **DNS → enable MagicDNS, then enable HTTPS.** Certificates cannot be issued
+   without both, and every admin URL depends on them.
+2. **Access controls** → add the `autoApprovers` block so the host's service
+   advertisements are accepted without a manual click each:
+   ```json
+   "autoApprovers": { "services": { "tag:server": ["tag:server"] } }
+   ```
+   While you are here, change the admin ACL destination from
+   `tag:server:80,32400,53` to `tag:server:443,32400` — services are HTTPS,
+   and `53` went away with AdGuard.
+3. **Confirm the host still carries `tag:server`** — Machines → the Unraid
+   host. Everything below assumes it does.
+
+**No auth key is needed.** The old `TS_AUTHKEY` existed only to log the
+`ts-caddy` sidecar in. There is no sidecar; the host daemon is already
+authenticated.
+
+### 3.3 Confirm the client supports Services
 
 ```bash
-cd homeserver
-grep -q '^TAILNET_HOST_IP=' .env || echo "TAILNET_HOST_IP=$(tailscale ip -4)" >> .env
-grep '^TAILNET_HOST_IP=' .env                # expect a 100.x.x.x address
+tailscale version
+tailscale serve --help 2>&1 | grep -- '--service'
 ```
 
-If it's blank or wrong, AdGuard's wildcard rewrite gets a `0.0.0.0` placeholder
-and nothing on the tailnet will resolve `*.lan`.
-
-### 3.3 Get a Tailscale auth key and bring up the sidecar
-
-Caddy needs an IP of its own, which means a second tailnet node. In the
-Tailscale admin console → **Settings → Keys → Generate auth key**:
-
-- **Reusable**: yes
-- **Ephemeral**: **NO.** This matters more than it looks. Ephemeral nodes are
-  deleted when they go offline and rejoin with a *different* IP — which would
-  silently orphan AdGuard's `*.lan` rewrite on every container restart.
-- **Tags**: `tag:server`
-
-```bash
-cd /mnt/user/appdata/homeserver/homeserver
-grep -q '^TS_AUTHKEY=' .env || echo "TS_AUTHKEY=tskey-auth-REPLACE_ME" >> .env
-$EDITOR .env                              # paste the real key
-
-docker compose --env-file .env.docker pull ts-caddy caddy adguard
-mkdir -p /mnt/user/appdata/adguard/work /mnt/user/appdata/caddy /mnt/user/appdata/ts-caddy
-
-docker compose --env-file .env.docker up -d ts-caddy
-docker exec ts-caddy tailscale ip -4      # e.g. 100.64.1.9
-```
-
-Record that address into `.env` — it's what AdGuard will hand out for `*.lan`:
-
-```bash
-echo "CADDY_TAILNET_IP=$(docker exec ts-caddy tailscale ip -4)" >> .env
-grep '^CADDY_TAILNET_IP=' .env            # sanity-check: a 100.x address
-```
-
-If `tailscale ip -4` prints nothing, the node didn't authenticate —
-`docker logs ts-caddy` says why (expired key, or a key not authorized for
-`tag:server`). Fix it before continuing; `generate-configs.py` will otherwise
-write a `0.0.0.0` placeholder into the AdGuard rewrite and nothing will resolve.
-
-The `caddy:2-alpine` pull above also matters for a second reason:
-`generate-configs.py` shells out to its `caddy hash-password` to bcrypt the
-AdGuard admin password, and falls back to AdGuard's first-launch wizard if the
-image isn't on disk yet.
+Needs to print a `--service` flag. Verified on 1.96.2. If it is missing, the
+Unraid Tailscale plugin is too old — stop here and update the plugin rather
+than improvising, because everything downstream assumes this works.
 
 ### 3.4 Regenerate configs — the careful way
 
@@ -588,13 +540,12 @@ grep -h -i 'urlbase' configs/{radarr,sonarr,lidarr,prowlarr}/config.xml
 # expect: <UrlBase></UrlBase>  ×4
 
 grep -E '^(url_base|host_whitelist)' configs/sabnzbd/sabnzbd.ini
-# expect: url_base =            and sab.lan present in host_whitelist
+# expect: url_base =            and the serve hostname in host_whitelist
 
 grep -c '<ApiKey>' configs/radarr/config.xml
 diff <(grep '^RADARR_API_KEY' /boot/homeserver-preupgrade/generated.env) \
      <(grep '^RADARR_API_KEY' generated.env) && echo "API key unchanged ✓"
 
-grep '^ADGUARD_ADMIN_PASS' generated.env      # new — this is your AdGuard login
 ```
 
 Confirm no mount changed shape:
@@ -607,16 +558,8 @@ diff <(grep -E '^\s+(-|source:|target:).*(/mnt/user/data|/mnt/user/appdata)' \
         /tmp/compose-after.yml | sort -u)
 ```
 
-Expected additions only: `adguard`'s two paths and `caddy`'s two. **Any change
+Expected **removals** only: `adguard`'s two paths and `caddy`'s two. **Any other change
 to a `/mnt/user/data` line is a stop-and-investigate.**
-
-Validate the Caddyfile before it can take down ingress:
-
-```bash
-docker run --rm -v "$PWD/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-    caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
-# expect: "Valid configuration"
-```
 
 ### 3.5 Bring the stack up
 
@@ -625,67 +568,71 @@ docker compose --env-file .env.docker up -d
 docker compose --env-file .env.docker ps
 ```
 
-This recreates containers with the new port bindings and starts `caddy` and
-`adguard`. It does **not** pull new images for existing services — their tags
-are already on disk. That's deliberate: config changes and image changes stay
-separately attributable.
+This recreates containers with the new port bindings and **removes** `caddy`,
+`ts-caddy` and `adguard`. It does not pull new images for existing services —
+their tags are unchanged, and the image update is deliberately held back to 3.9
+so it lands after the bootstrap gate.
 
-Wait ~60s, then confirm every service is `(healthy)`. If `caddy` or `adguard`
-is not running: for `adguard` it's almost certainly the `:53` bind (2.6); for
-`caddy` it's the sidecar not being healthy yet (3.3):
+Wait ~60s, then confirm every remaining service is `(healthy)`:
 
 ```bash
-docker logs caddy --tail 30
-docker logs adguard --tail 30
+docker compose --env-file .env.docker ps
 ```
 
-Prove Caddy routes correctly **from the host, without needing DNS yet**:
+Expect 11 services. `caddy`, `ts-caddy` and `adguard` should be *gone*, not
+unhealthy — if they are still listed, compose is reading a stale file.
+
+Prove every backend answers on its loopback port before wiring ingress to it:
 
 ```bash
-for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
-  printf '%-11s ' "$s"
-  curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: ${s}.lan" \
-       "http://$(docker exec ts-caddy tailscale ip -4)/"
+for p in 7878 8989 8686 9696 8080 6767 5055 8181 6868; do
+  printf '%s -> ' "$p"
+  curl -fsS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$p/" || echo FAIL
 done
 ```
 
-Any 2xx/3xx/401 is a pass — the backend answered. A `502`/`503` means Caddy
-can't reach that backend; a connection refused means Caddy isn't listening.
+Any 2xx/3xx/401 is a pass — the backend answered. This is the gate for 3.6:
+`tailscale serve` can only be as healthy as what it proxies to.
 
-Also confirm you didn't disturb the Unraid GUI — it should still be on `:80`:
+### 3.6 Publish the Tailscale Services
+
+Console prep already happened in 3.2, so this is the box side only.
+
+**Do one first and prove the certificate**, because the whole point of the
+change is the cert:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/   # Unraid, not Caddy
+tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
+tailscale serve status
 ```
 
-### 3.6 Tailscale admin console
+Open `https://radarr.<tailnet>.ts.net/` from a tagged admin device. **Gate: a
+padlock with no warning.** Do not proceed until you see it — if the cert is
+wrong, every remaining service will be wrong the same way.
 
-Two changes at [login.tailscale.com](https://login.tailscale.com/). **Screenshot
-both pages before editing** — neither has an API-driven undo.
-
-1. **DNS → Nameservers → Add nameserver → Custom** → enter your
-   `TAILNET_HOST_IP`. Toggle **Restrict to domain** on, set the domain to `lan`.
-   Save.
-2. **Access controls** → change the `tag:admin → tag:server` destination port
-   list to `["tag:server:80,32400,53"]`, replacing the old per-service port list.
-   Save.
-
-Do #1 first and verify it before doing #2 — #2 is what actually removes your
-direct-port fallback. Leave the `ssh` stanza in the ACL alone; it's what governs
-Tailscale SSH and it is not affected by the port list.
-
-Note which IP goes where — this is the easiest thing to get backwards. The
-console nameserver points at **`TAILNET_HOST_IP`** (where AdGuard listens on
-`:53`). AdGuard's wildcard *answers* with **`CADDY_TAILNET_IP`** (where Caddy
-listens on `:80`). Both nodes carry `tag:server`, so the one ACL rule covers
-the host's `:80` GUI and Caddy's `:80` alike.
-
-From your **Mac** (not the server):
+Then the rest:
 
 ```bash
-nslookup radarr.lan            # expect CADDY_TAILNET_IP (not the host's)
-curl -I http://radarr.lan/   # expect 200/302 from Caddy
-curl -I http://<lan-ip>/        # Unraid GUI, still on :80, untouched
+tailscale serve --service=svc:sonarr    --bg 127.0.0.1:8989
+tailscale serve --service=svc:lidarr    --bg 127.0.0.1:8686
+tailscale serve --service=svc:prowlarr  --bg 127.0.0.1:9696
+tailscale serve --service=svc:sab       --bg 127.0.0.1:8080
+tailscale serve --service=svc:bazarr    --bg 127.0.0.1:6767
+tailscale serve --service=svc:seerr     --bg 127.0.0.1:5055
+tailscale serve --service=svc:tautulli  --bg 127.0.0.1:8181
+tailscale serve --service=svc:profilarr --bg 127.0.0.1:6868
+```
+
+Plex is deliberately absent — own port, own auth, own `*.plex.direct` certs.
+
+**If a service advertises but never goes active**, it is host approval. With
+the 3.2 `autoApprovers` block it should be automatic; otherwise approve in
+admin console → Services → the service → Service hosts. Services is in public
+beta and the daemon does not reliably pick up an approval that arrives after
+the advertisement, so if console and daemon disagree:
+
+```bash
+tailscale down && tailscale up --ssh --advertise-tags=tag:server
 ```
 
 ### 3.7 Bootstrap — reconciles the *arr databases
@@ -728,7 +675,7 @@ bash scripts/update-stack.sh --dry-run     # prints the image list, changes noth
 bash scripts/update-stack.sh
 ```
 
-The script pre-flights the Caddyfile and the 5 GB appdata floor, pulls,
+The script pre-flights the 5 GB appdata floor, pulls,
 redeploys, waits up to 300s for every service to report healthy, and only prunes
 dangling images if that gate passes — so a bad release keeps its old layers on
 disk for a rollback. Output is teed to `/var/log/homeserver-update.log`.
@@ -746,8 +693,8 @@ databases. That migration is the one-way step from 2.9.
 ```bash
 cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker ps
-# 14 services, all "running", all "(healthy)" — the 11 you had, plus
-# ts-caddy + caddy + adguard
+# 11 services, all "running", all "(healthy)". No caddy, no ts-caddy, no
+# adguard — those are deleted, not missing.
 ```
 
 ### 4.2 Endpoints answer at root
@@ -755,13 +702,10 @@ docker compose --env-file .env.docker ps
 From the Mac:
 
 ```bash
-for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
-  printf '%-11s ' "$s"
-  curl -fsS -o /dev/null -w '%{http_code}\n' "http://${s}.lan/" || echo FAIL
+for s in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr; do
+  printf '%s -> ' "$s"
+  curl -fsS -o /dev/null -w '%{http_code}\n' "https://${s}.<tailnet>.ts.net/" || echo FAIL
 done
-
-curl -fsS http://radarr.lan/ping             # OK
-curl -fsS 'http://sab.lan/api?mode=version'  # JSON with a version field
 ```
 
 ### 4.3 Backend ports are actually locked down
@@ -777,11 +721,12 @@ done
 
 ```bash
 nc -z -w3 <TAILNET_HOST_IP>  80 && echo "host :80 open ✓ (Unraid GUI, unchanged)"
-nc -z -w3 <CADDY_TAILNET_IP> 80 && echo "caddy :80 open ✓ (admin ingress)"
+nc -z -w3 <host tailnet IP> 443 && echo "tailscaled :443 open ✓ (admin ingress)"
 ```
 
-On the **host's** tailnet IP, `80` (Unraid GUI), `53` (AdGuard), `5055` (Seerr)
-and `32400` (Plex) staying open is expected and correct. On the **ts-caddy**
+On the **host's** tailnet IP, `80` (Unraid GUI), `443` (Tailscale Services)
+and `32400` (Plex) staying open is expected and correct. Seerr's `5055` should
+now be loopback-only. On the removed **ts-caddy**
 node, only `80`.
 
 ### 4.4 In-app integration — this is the one that matters
@@ -844,29 +789,28 @@ Add a movie to a Plex Watchlist on a family-tier account:
 
 ### 4.8 The emergency path still works
 
-The whole point of leaving the GUI off Caddy. Verify all three, because this is
-what you fall back to when the stack is broken:
+The whole point of keeping the GUI off any proxy. Verify all of these, because
+this is the path you need precisely when everything else is broken.
 
 ```bash
-curl -I http://DellBox/Main               # from the Mac, on the LAN
-curl -I http://<TAILNET_HOST_IP>/         # from the Mac, over Tailscale
-curl -I http://unraid.lan                 # convenience alias via Caddy
+curl -I http://<server-name>/            # Unraid GUI on the LAN
+curl -I http://<host tailnet IP>/        # Unraid GUI over Tailscale
+ssh root@<server> true                   # Tailscale SSH
 ```
 
-Then prove the first two are genuinely Docker-independent — stop Caddy and
-confirm they keep answering while `*.lan` goes dark:
+Then prove they are genuinely independent of Docker and of ingress — stop the
+whole stack and re-check:
 
 ```bash
-docker stop caddy ts-caddy
-curl -I http://<TAILNET_HOST_IP>/         # still 200 — this is the guarantee
-curl -I http://radarr.lan                 # expected to fail now
-docker compose --env-file .env.docker up -d ts-caddy && docker restart caddy
+docker compose --env-file .env.docker down
+curl -I http://<host tailnet IP>/        # must still answer
+ssh root@<server> true                   # must still work
+docker compose --env-file .env.docker up -d
 ```
 
-That last line is the operational caveat worth remembering: **`caddy` lives in
-`ts-caddy`'s network namespace, so whenever `ts-caddy` is recreated, `caddy`
-must be restarted too** or it holds a reference to a namespace that no longer
-exists. Same relationship `sabnzbd` and `prowlarr` already have with `gluetun`.
+There is no longer any "recreate the sidecar, then restart the proxy" caveat
+to remember — that operational footgun died with `ts-caddy`. Ingress is the
+host daemon, which is not part of the compose lifecycle at all.
 
 ### 4.9 Reboot persistence
 
@@ -885,11 +829,16 @@ curl -fsS http://radarr.lan/ping              # from the Mac
 Work backwards from whichever step failed. Anything above the failure point
 stays applied.
 
-### 5.1 Tailscale console (do this first if you got past 3.6)
+### 5.1 Withdraw the services (do this first if you got past 3.6)
 
-DNS → delete the `lan` restricted nameserver. Access controls → restore the port
-list from your screenshot. This is what puts direct `<lan-ip>:<port>` access
-back.
+```bash
+tailscale serve reset
+```
+
+That clears every advertisement in one call. The services themselves can be
+deleted in the admin console afterwards; leaving them defined but unadvertised
+is harmless. Nothing about this touches the host's tailnet membership, so SSH
+and the Unraid GUI stay up throughout — which is what makes rollback safe.
 
 ### 5.2 Stop the stack
 
