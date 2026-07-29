@@ -740,7 +740,11 @@ def main() -> None:
 
     # Step 4: Final validation — everything required must now be set.
     required = [
-        "TZ", "TAILNET_HOST_IP",
+        # TAILNET_NAME, not TAILNET_HOST_IP. The host IP is now optional — it
+        # only decorates bootstrap.py's summary output. TAILNET_NAME is load-
+        # bearing: it goes into SAB's host_whitelist, and without it SAB 403s
+        # every tailnet request while working fine on loopback.
+        "TZ", "TAILNET_NAME",
         "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
         "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
