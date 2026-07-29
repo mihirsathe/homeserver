@@ -135,6 +135,20 @@ Use iDRAC's storage view or the PERC's own interface to check internal SSD healt
 
 **Practical impact:** the session cap is effectively a non-issue for this household — hitting 12 concurrent hardware-encoded streams implies 13+ simultaneous transcoding viewers on one Plex server, which we will never see. Direct Play and Direct Stream (remux only, no re-encode) are uncapped regardless. For Plex transcoding the AV1 *encode* limitation doesn't matter — Plex always encodes output to H.264 or HEVC.
 
+### VRAM budget — the real constraint
+
+The 6 GB frame buffer, not the encoder session cap, is what limits this card. Plex shares it with Ollama (see [software.md](software.md#local-ai)), and the split is a static reservation — there is no scheduler and nothing arbitrating between them at runtime.
+
+| Consumer | Typical VRAM |
+|----------|--------------|
+| Plex · 1080p → 720p H.264 NVENC session | ~200–400 MB |
+| Plex · 4K HDR with tone-mapping | ~800 MB – 1 GB |
+| Ollama · 3B model, q4, 4K context, q8_0 KV | ~2.5 GB |
+| Ollama · 8B model, q4_K_M | ~4.9 GB |
+| **Reserved for Plex** (`OLLAMA_GPU_OVERHEAD`) | **2 GiB** |
+
+Ollama is capped at 6 GB minus the reservation, so a model larger than roughly 4 GB gets its overflow layers placed on the CPU instead of failing. NVENC and NVDEC are separate ASIC blocks, so inference never competes with the encoder for shader time — only for memory.
+
 ---
 
 ## What This Rack Does NOT Include
@@ -147,4 +161,4 @@ These belong in the future networking rack or later phases:
 - Wireless access points
 - Proxmox mini PCs (home automation)
 - Security camera NVR storage
-- LLM inference node
+- Dedicated LLM inference node — small models (≤4 GB) already run on the R640's RTX 3050 alongside Plex transcoding; a separate node only becomes necessary for models that don't fit in 6 GB of VRAM

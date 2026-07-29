@@ -571,7 +571,7 @@ def main() -> None:
 
     # Every *arr serves at root now (UrlBase stripped). bootstrap.py still
     # talks to them on localhost:<port> because the host port-publishes
-    # them on 127.0.0.1 — Caddy is for tailnet ingress, not internal calls.
+    # them on 127.0.0.1 — Tailscale Services are tailnet ingress, not internal calls.
     SERVICES = {
         "radarr":   ("http://localhost:7878",   require(env, "RADARR_API_KEY")),
         "sonarr":   ("http://localhost:8989",   require(env, "SONARR_API_KEY")),
@@ -639,21 +639,36 @@ def main() -> None:
         print("  ⚠ Skipped — needs a working Plex connection from the previous step")
 
     print("\n=== Done ===\n")
-    print("Stack is fully configured. Admin UIs go through Caddy at *.lan;")
-    print("DNS resolves automatically via Tailscale split-DNS → AdGuard Home.")
-    print("Plex bypasses Caddy and is the only public-facing service.")
+    print("Stack is fully configured. Each admin UI is a Tailscale Service")
+    print("with its own MagicDNS name and a real certificate. Publish them with")
+    print("`tailscale serve --service=svc:<name> --bg 127.0.0.1:<port>` — see")
+    print("docs/deployment.md step 6.5. Plex is fronted by nothing.")
     print()
-    print("  SABnzbd:   http://sab.lan")
-    print("  Prowlarr:  http://prowlarr.lan")
-    print("  Radarr:    http://radarr.lan")
-    print("  Sonarr:    http://sonarr.lan")
-    print("  Lidarr:    http://lidarr.lan")
-    print("  Bazarr:    http://bazarr.lan")
-    print("  Tautulli:  http://tautulli.lan")
-    print("  Profilarr: http://profilarr.lan")
-    print("  Seerr:     http://seerr.lan")
-    print("  AdGuard:   http://adguard.lan   (admin pass in generated.env)")
-    print(f"  Plex:      http://{lan_ip}:32400/web   (public — direct, not via Caddy)")
+    print("  SABnzbd:   https://sab.<tailnet>.ts.net")
+    print("  Prowlarr:  https://prowlarr.<tailnet>.ts.net")
+    print("  Radarr:    https://radarr.<tailnet>.ts.net")
+    print("  Sonarr:    https://sonarr.<tailnet>.ts.net")
+    print("  Lidarr:    https://lidarr.<tailnet>.ts.net")
+    print("  Bazarr:    https://bazarr.<tailnet>.ts.net")
+    print("  Tautulli:  https://tautulli.<tailnet>.ts.net")
+    print("  Profilarr: https://profilarr.<tailnet>.ts.net")
+    print("  Seerr:     https://seerr.<tailnet>.ts.net")
+    print(f"  Plex:      http://{lan_ip}:32400/web   (public — direct)")
+    print()
+    print("  MagicDNS usually puts the tailnet domain in the DNS search path,")
+    print("  so bare https://radarr/ resolves too.")
+    print()
+    print("  Unraid GUI — depends on NOTHING above: not Docker, not a service")
+    print("  advertisement. Works with the array stopped. This is the emergency")
+    print("  path, and on Unraid stopping the array stops Docker, so it matters:")
+    print(f"    http://{lan_ip}/            (LAN)")
+    tailnet_host = get(env, "TAILNET_HOST_IP")
+    if tailnet_host:
+        print(f"    http://{tailnet_host}/         (over Tailscale)")
+    print()
+    print("  Every backend also stays on 127.0.0.1:<port>. That is both what")
+    print("  tailscale serve proxies to and your fallback if ingress breaks:")
+    print("    ssh -L 7878:127.0.0.1:7878 root@<server>")
     print()
     print("Remaining manual steps:")
     print("  1. Plex → Settings → Transcoder → Use hardware acceleration when")
@@ -663,10 +678,15 @@ def main() -> None:
     print("     edit each family member → grant 'Auto-Request' so their Plex")
     print("     Watchlist additions become Radarr/Sonarr requests automatically.")
     print("     (Per-user grant; Seerr ties it to each Plex SSO identity.)")
-    print(f"  3. Profilarr → http://{lan_ip}:6868 → add Radarr + Sonarr as sync")
+    print("  3. Profilarr → https://profilarr.<tailnet>.ts.net → add Radarr +")
+    print("     Sonarr as sync")
     print("     targets (paste URLs + API keys from generated.env), subscribe to")
     print("     the Dictionarry DB and/or TRaSH Guides, select profiles, sync.")
     print("     Profilarr has no API-driven bootstrap path.")
+    print("  4. Ollama ships with no models. Pull one:")
+    print("       docker exec ollama ollama pull llama3.2:3b")
+    print("     Keep models under ~4 GB so they coexist with a Plex transcode")
+    print("     on the 6 GB card. See docs/software.md#local-ai for sizing.")
 
 if __name__ == "__main__":
     main()

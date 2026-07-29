@@ -210,9 +210,10 @@ def prompt_for_missing(env: dict) -> dict:
 
     if "TAILNET_HOST_IP" in missing:
         print("--- Tailscale ---")
-        get_or_ask("TAILNET_HOST_IP", "Unraid host's tailnet IPv4",
-                   hint="run `tailscale ip -4` on the Unraid host (e.g. 100.64.1.7)",
-                   validator=validate_ip)
+        if "TAILNET_HOST_IP" in missing:
+            get_or_ask("TAILNET_HOST_IP", "Unraid host's tailnet IPv4",
+                       hint="run `tailscale ip -4` on the Unraid host (e.g. 100.64.1.7)",
+                       validator=validate_ip)
 
     # Network / Plex
     net_missing = [k for k in ["PLEX_LAN_IP", "PLEX_LAN_SUBNET"] if k in missing]
@@ -335,6 +336,15 @@ def write_sabnzbd(env: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     api_key  = env["SABNZBD_API_KEY"]
+
+    # Tailscale Services pass the original Host header through, so SAB's
+    # host_whitelist has to contain the Service FQDN or the UI 403s from the
+    # tailnet while working on loopback. Both the bare and fully-qualified
+    # MagicDNS forms are listed because MagicDNS puts the tailnet domain in the
+    # search path on most platforms, so browsers reach it either way.
+    tailnet = env.get("TAILNET_NAME", "").strip().lstrip(".")
+    sab_serve_hosts = f",sab,sab.{tailnet}" if tailnet else ""
+
     host     = env["USENET_HOST"]
     port     = env.get("USENET_PORT", "563")
     ssl      = env.get("USENET_SSL", "1")
@@ -370,13 +380,15 @@ def write_sabnzbd(env: dict):
 host = 0.0.0.0
 port = 8080
 url_base =
-# host_whitelist blocks requests from hostnames not listed here. SAB
-# rejects any request whose Host header isn't on this list — the
-# Caddy-fronted sab.lan hostname must be present or every reverse-proxied
-# request returns 403. Localhost + service name + gluetun cover internal
-# health checks and host-loopback access; mediaserver.local is the legacy
-# mDNS alias.
-host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local,sab.lan
+# host_whitelist blocks requests from hostnames not listed here: SAB returns
+# 403 for any request whose Host header isn't on the list. `tailscale serve`
+# passes the original Host through, so the Service FQDN must be present or the
+# SAB UI is a hard 403 from the tailnet while working fine on loopback — which
+# looks like an ingress bug and isn't one.
+#
+# TAILNET_NAME comes from .env (e.g. tail1a2b3.ts.net). If it's blank the
+# FQDN entries are simply omitted and SAB is reachable on loopback only.
+host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local{sab_serve_hosts}
 api_key = {api_key}
 nzo_ids = {api_key}
 wizard_step = 10
@@ -489,8 +501,8 @@ def write_arr_config(name: str, port: int, api_key: str):
   <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
   <Branch>main</Branch>
   <LogLevel>info</LogLevel>
-  <!-- UrlBase empty so each *arr serves at root. Caddy fronts them at
-       <name>.lan/. -->
+  <!-- UrlBase empty so each *arr serves at root. tailscale serve fronts them
+       at https://<name>.<tailnet>.ts.net/ without a path prefix. -->
   <UrlBase></UrlBase>
   <UpdateMechanism>Docker</UpdateMechanism>
 </Config>
@@ -525,13 +537,29 @@ def ensure_profilarr_appdata():
     subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
     print(f"  ✓ {dest}/ (Profilarr state — configured via web UI)")
 
+def ensure_ollama_appdata():
+    """Create /mnt/user/appdata/ollama as nobody:users for the model store.
+
+    Ollama runs as 99:100 (`user:` override in compose) with HOME=/ollama, so
+    this directory has to exist and be writable before first start or the
+    engine can't create its model store.
+
+    Deliberately NOT covered by the weekly Appdata Backup — see
+    docs/deployment.md. Model blobs are multi-GB and re-pullable in minutes.
+    """
+    dest = Path("/mnt/user/appdata/ollama")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (Ollama models — exclude from Appdata Backup)")
+
 def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
     dest.mkdir(parents=True, exist_ok=True)
 
     # base_url left empty for both Bazarr's own listener and its sonarr/radarr
-    # client URLs — every app in the stack now serves at root, with Caddy
-    # fronting them on <name>.lan. Keep the keys present (not absent) because
+    # client URLs — every app in the stack serves at root, and Tailscale
+    # Services front them without a path prefix. Keep the keys present (not
+    # absent) because
     # Bazarr's loader can fall back to legacy defaults (/sonarr, /radarr) when
     # a key is missing entirely.
     content = f"""[general]
@@ -613,188 +641,7 @@ refresh_users_on_startup = 0
     print("  ✓ configs/tautulli/config.ini")
 
 # ---------------------------------------------------------------------------
-# Caddy reverse proxy + AdGuard Home tailnet split-DNS resolver
 #
-# CADDY_SERVICES is the single source of truth for "which subdomain hits
-# which backend." Adding a new admin service is one row + a re-run of this
-# script. Both write_caddy (the Caddyfile) and write_adguard (the wildcard
-# rewrite that makes <name>.lan resolve from any tailnet device) read it.
-#
-# sab + prowlarr point at gluetun:* because they share gluetun's netns and
-# have no bridge alias of their own — sabnzbd:8080 NXDOMAINs from inside
-# the Caddy container.
-# ---------------------------------------------------------------------------
-HOSTNAME_SUFFIX = "lan"
-
-CADDY_SERVICES: dict[str, tuple[str, int]] = {
-    "radarr":    ("radarr",    7878),
-    "sonarr":    ("sonarr",    8989),
-    "lidarr":    ("lidarr",    8686),
-    "prowlarr":  ("gluetun",   9696),
-    "sab":       ("gluetun",   8080),
-    "seerr":     ("seerr",     5055),
-    "bazarr":    ("bazarr",    6767),
-    "tautulli":  ("tautulli",  8181),
-    "profilarr": ("profilarr", 6868),
-    "adguard":   ("adguard",   80),
-    "coach":     ("coach",     8000),
-}
-
-def write_caddy(env: dict):
-    dest = CONFIGS / "caddy"
-    dest.mkdir(parents=True, exist_ok=True)
-
-    # auto_https off: serve plain HTTP. Tailscale already encrypts the
-    #   transport, and getting real certs would mean buying a domain or
-    #   installing Caddy's internal CA on every admin device.
-    # admin off: nothing in the stack pushes Caddy config dynamically;
-    #   the localhost :2019 admin API is dead weight + a small surface.
-    lines = [
-        "{",
-        "    auto_https off",
-        "    admin off",
-        "}",
-        "",
-        "(common) {",
-        "    encode zstd gzip",
-        "}",
-        "",
-    ]
-    pad = max(len(name) for name in CADDY_SERVICES)
-    for name, (upstream_host, upstream_port) in CADDY_SERVICES.items():
-        host = f"{name}.{HOSTNAME_SUFFIX}".ljust(pad + len(HOSTNAME_SUFFIX) + 1)
-        lines.append(
-            f"http://{host}  {{ import common; reverse_proxy {upstream_host}:{upstream_port} }}"
-        )
-    lines.append("")
-    _write_secret(dest / "Caddyfile", "\n".join(lines))
-    print("  ✓ configs/caddy/Caddyfile")
-
-
-def _bcrypt_via_docker(password: str) -> str:
-    """Bcrypt-hash a password using caddy:2-alpine's `caddy hash-password`.
-
-    AdGuard Home's users[].password expects a bcrypt $2a$ string. We shell
-    out to docker rather than depending on a pip package so this script
-    stays stdlib-only (its existing constraint). caddy:2-alpine is already
-    pulled by the time generate-configs.py runs after first deploy; on a
-    truly cold first run before any docker pull, this falls back gracefully
-    so AdGuard's first-launch wizard prompts for an admin password.
-    """
-    try:
-        result = subprocess.run(
-            ["docker", "run", "--rm", "-i", "caddy:2-alpine",
-             "caddy", "hash-password"],
-            input=password.encode(),
-            capture_output=True,
-            check=True,
-            timeout=30,
-        )
-        return result.stdout.decode().strip()
-    except (FileNotFoundError, subprocess.CalledProcessError,
-            subprocess.TimeoutExpired):
-        return ""
-
-
-def write_adguard(env: dict):
-    dest = CONFIGS / "adguard"
-    dest.mkdir(parents=True, exist_ok=True)
-
-    tailnet_ip = env.get("TAILNET_HOST_IP", "").strip()
-    admin_pass = env.get("ADGUARD_ADMIN_PASS", "").strip()
-
-    if not tailnet_ip:
-        print("  ⚠ TAILNET_HOST_IP not set — AdGuard wildcard rewrite will be a placeholder")
-        print("    Run `tailscale ip -4` on the Unraid host, set TAILNET_HOST_IP in .env,")
-        print("    re-run generate-configs.py --force-overwrite, and restart adguard.")
-        tailnet_ip = "0.0.0.0"  # placeholder — adguard won't answer until user fixes this
-
-    pw_hash = _bcrypt_via_docker(admin_pass) if admin_pass else ""
-    user_block = ""
-    if pw_hash:
-        user_block = f"""users:
-  - name: admin
-    password: {pw_hash}
-"""
-    else:
-        # No hash means first-launch wizard runs on http://<host>:80 — the
-        # user picks an admin password manually that one time. Caddy still
-        # fronts adguard.lan once that's done.
-        print("  ℹ AdGuard admin user not pre-seeded — first-launch wizard will run")
-        user_block = "users: []\n"
-
-    # AdGuard Home YAML schema: see https://github.com/AdguardTeam/AdGuardHome/wiki/Configuration
-    # Only the fields we care about are set; AdGuard fills defaults for the rest.
-    content = f"""# Generated by scripts/generate-configs.py — do not edit by hand.
-# Re-run --force-overwrite to regenerate after changes.
-schema_version: 27
-
-http:
-  pretty_url: ""
-  address: 0.0.0.0:80
-  session_ttl: 720h
-
-{user_block}
-auth_attempts: 5
-block_auth_min: 15
-http_proxy: ""
-language: en
-debug_pprof: false
-web_session_ttl: 720
-dns:
-  bind_hosts:
-    - 0.0.0.0
-  port: 53
-  upstream_dns:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
-  bootstrap_dns:
-    - 1.1.1.1
-    - 8.8.8.8
-  ratelimit: 0
-  protection_enabled: true
-  blocking_mode: default
-  cache_size: 4194304
-  rewrites:
-    # Wildcard *.{HOSTNAME_SUFFIX} → host's tailnet IP. Tailscale's split-DNS
-    # rule sends every {HOSTNAME_SUFFIX} query here, so any new admin service
-    # added to CADDY_SERVICES resolves automatically without DNS changes.
-    - domain: '*.{HOSTNAME_SUFFIX}'
-      answer: {tailnet_ip}
-filtering:
-  protection_enabled: true
-  filtering_enabled: true
-  parental_enabled: false
-  safe_search:
-    enabled: false
-querylog:
-  enabled: true
-  interval: 168h
-statistics:
-  enabled: true
-  interval: 24h
-filters:
-  # AdGuard's default filter list — gives the freebie tailnet-wide
-  # ad-blocking. Disable in the UI if undesired.
-  - enabled: true
-    url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
-    name: AdGuard DNS filter
-    id: 1
-log:
-  file: ""
-  max_backups: 0
-  max_size: 100
-  max_age: 3
-  compress: false
-  local_time: false
-  verbose: false
-os:
-  group: ""
-  user: ""
-  rlimit_nofile: 0
-"""
-    _write_secret(dest / "AdGuardHome.yaml", content)
-    print("  ✓ configs/adguard/AdGuardHome.yaml")
 
 # ---------------------------------------------------------------------------
 # Data directory creation
@@ -865,14 +712,9 @@ def main() -> None:
         print("\n  .env updated.\n")
 
     # Step 2: Generate any missing machine values → generated.env
-    # ADGUARD_ADMIN_PASS is a UI password (read by the user from
-    # generated.env when they want to log into adguard.lan), not an API
-    # key — but it shares the "auto-generate once, persist, never rotate"
-    # lifecycle so it lives here.
     api_key_fields = [
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
         "LIDARR_API_KEY", "PROWLARR_API_KEY", "TAUTULLI_API_KEY",
-        "ADGUARD_ADMIN_PASS",
     ]
     auto = {}
     if not env.get("STACK_DIR", "").strip():
@@ -897,7 +739,7 @@ def main() -> None:
         "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
         "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
-        "LIDARR_API_KEY", "PROWLARR_API_KEY", "ADGUARD_ADMIN_PASS",
+        "LIDARR_API_KEY", "PROWLARR_API_KEY",
         "USENET_HOST", "USENET_USER", "USENET_PASS",
         "NZBGEEK_API_KEY", "NZBPLANET_API_KEY",
     ]
@@ -917,10 +759,9 @@ def main() -> None:
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"])
     ensure_seerr_appdata()
     ensure_profilarr_appdata()
+    ensure_ollama_appdata()
     write_bazarr(env)
     write_tautulli(env)
-    write_caddy(env)
-    write_adguard(env)
 
     # Step 6: Create data directories.
     print("\nCreating data directories...")

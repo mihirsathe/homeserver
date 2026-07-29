@@ -12,7 +12,7 @@ You have an Ubuntu LTS desktop with an NVIDIA GPU. Before racking the R640 you c
 |-------------|-----------------------|
 | docker-compose.yml end-to-end | Unraid OS + plugins (CA Backup, Fix Common Problems, Nvidia-Driver plugin, User Scripts, Tailscale) |
 | NVIDIA + NVENC passthrough to Plex | PERC H730P HBA mode + SMART passthrough |
-| Inter-container DNS on `downloaders` / `frontend` / `automation` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
+| Inter-container DNS on `downloaders` / `frontend` / `automation` / `ai` | MD1400 SAS enumeration, BOSS ZFS mirror, parity rebuild behaviour |
 | Hardlink behaviour across `/data` | `/mnt/user/...` as a real Unraid share (we fake it with a bindmount) |
 | generate-configs.py + bootstrap.py | iDRAC / fan control (setup-fan-control.sh) |
 | backup-appdata.sh + restore-appdata.sh | setup-unraid.sh (plugin install/config) |
@@ -78,6 +78,12 @@ shellcheck homeserver/scripts/*.sh
 # Python scripts: syntax-only check
 python3 -m py_compile homeserver/scripts/generate-configs.py homeserver/scripts/bootstrap.py
 
+# The Caddyfile must adapt. The Caddyfile grammar has no statement separator,
+# so this catches the class of error where a site block reads fine but the
+# adapter rejects the whole file and the admin ingress won't start.
+docker run --rm -v "$PWD/homeserver/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
 # Help output — catches argparse breakage
 python3 homeserver/scripts/generate-configs.py --help
 python3 homeserver/scripts/bootstrap.py --help
@@ -86,7 +92,7 @@ python3 homeserver/scripts/bootstrap.py --help
 yamllint homeserver/docker-compose.yml || true
 ```
 
-**Exit criteria** — `docker compose config` exits 0 and emits a fully-resolved compose document. Shellcheck exits 0 (or you triage each warning and decide to ignore). Both `--help` invocations print usage without traceback.
+**Exit criteria** — `docker compose config` exits 0 and emits a fully-resolved compose document. Shellcheck exits 0 (or you triage each warning and decide to ignore). Both `--help` invocations print usage without traceback. The Caddyfile prints `Valid configuration`.
 
 ---
 
@@ -207,18 +213,17 @@ curl -fsS http://localhost:6767/                    # Bazarr
 curl -fsS http://localhost:32400/identity | head -c 200
 ```
 
-**Through Caddy + AdGuard split-DNS** (from any tailnet device, after
+**Through Tailscale Services** (from any tailnet device, after
 Step 6.5):
 
 ```bash
-nslookup radarr.lan                     # expect TAILNET_HOST_IP
-for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr adguard; do
+for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr; do
   printf "%-12s " "$svc"
-  curl -fsS -o /dev/null -w "%{http_code}\n" "http://${svc}.lan/"
+  curl -fsS -o /dev/null -w "%{http_code}\n" "https://${svc}.<tailnet>.ts.net/"
 done
 ```
 
-**Inter-container DNS** (across the `downloaders` / `automation` / `frontend` networks)
+**Inter-container DNS** (across the `downloaders` / `automation` / `frontend` / `ai` networks)
 
 ```bash
 # radarr shares `downloaders` with gluetun (which owns SAB's netns —
@@ -227,9 +232,17 @@ docker exec radarr curl -fsS http://gluetun:8080/api?mode=version
 
 # seerr shares `frontend` with plex
 docker exec seerr wget -qO- http://plex:32400/identity | head -c 200
+
+# A consumer on the `ai` network reaches Ollama by name
+docker run --rm --network ai curlimages/curl -fsS http://ollama:11434/api/tags >/dev/null \
+  && echo "ollama reachable from ai"
+
+# ...and Ollama must NOT be reachable from the media planes or the tailnet
+docker exec caddy nc -z -w2 ollama 11434 2>/dev/null \
+  && echo "BUG: ollama reachable from caddy" || echo "OK: ollama isolated from caddy"
 ```
 
-If these fail: check `docker network inspect downloaders automation frontend` and `docker compose logs <svc>`.
+If these fail: check `docker network inspect downloaders automation frontend ai` and `docker compose logs <svc>`.
 
 ---
 
@@ -271,6 +284,55 @@ docker logs plex 2>&1 | grep -i 'transcode\|nvenc' | tail
 
 Open 6-10 playback sessions from different clients / devtools tabs, each forced to transcode. The RTX 3050 is rated for 12 concurrent NVENC sessions — you should see all 10 encode simultaneously with no "insufficient resources" errors from NVENC.
 
+### 6d · Ollama ↔ Plex GPU coexistence
+
+Sub-steps 1–2 are testable anywhere; step 3 needs the transcode from 6b running.
+
+**1 · Engine up, model loads onto the GPU.**
+
+```bash
+docker exec ollama ollama pull llama3.2:3b
+docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv   # baseline
+curl -s http://127.0.0.1:11434/api/generate \
+     -d '{"model":"llama3.2:3b","prompt":"say hi","stream":false}' >/dev/null
+curl -s http://127.0.0.1:11434/api/ps        # size_vram > 0 = resident on GPU
+docker exec ollama nvidia-smi --query-gpu=memory.used --format=csv               # should have risen
+```
+
+Expected: `size_vram` is non-zero and roughly matches the VRAM delta. If `size_vram` is 0 the model went entirely to CPU — the reservation is too large for this model, or the GPU isn't visible to the container.
+
+**2 · Idle eviction works (this is the whole dynamic mechanism).**
+
+```bash
+sleep 75                                     # OLLAMA_KEEP_ALIVE=60s
+curl -s http://127.0.0.1:11434/api/ps        # expect an empty models list
+docker exec ollama nvidia-smi --query-gpu=memory.used --format=csv   # back to baseline
+```
+
+If VRAM does not return, `OLLAMA_KEEP_ALIVE` isn't being applied — check `docker exec ollama env | grep OLLAMA_`.
+
+**3 · Coexistence under a live transcode.** Warm a model, then start the 6b transcode without waiting for eviction — this is the case the reservation exists for:
+
+```bash
+curl -s http://127.0.0.1:11434/api/generate \
+     -d '{"model":"llama3.2:3b","prompt":"hi","stream":false}' >/dev/null
+# now start playback forcing a transcode, then:
+watch -n 2 'nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader; \
+            nvidia-smi --query-gpu=encoder.stats.sessionCount --format=csv,noheader'
+docker logs plex 2>&1 | grep -i 'nvenc\|hwaccel' | tail
+```
+
+Expected: the transcode starts and uses NVENC **with the model still resident**. Total VRAM stays under the ceiling and Plex does not fall back to software. That's the reservation doing its job — verifying it is the point of this step, because it can't be reproduced on a card with more VRAM.
+
+**4 · On-demand unload** (the manual escape hatch documented in operations.md):
+
+```bash
+curl -s http://127.0.0.1:11434/api/generate -d '{"model":"llama3.2:3b","keep_alive":0}'
+curl -s http://127.0.0.1:11434/api/ps        # empty immediately
+```
+
+**Exit criteria** — a model loads onto the GPU and reports non-zero `size_vram`; VRAM returns on its own within ~75s of idle; a Plex transcode starts on NVENC while a model is resident; `keep_alive: 0` frees VRAM immediately.
+
 ---
 
 ## 7 · Hardlink behaviour across `/data`
@@ -308,15 +370,14 @@ Expected: a `MediaContainer` XML identity blob. If it times out, the router port
 **(b) Tailscale admin plane.** On an admin device on the tailnet (and *only* on the tailnet) once Step 6.5's split DNS is configured:
 
 ```bash
-# DNS resolves automatically via Tailscale split-DNS → AdGuard
-nslookup radarr.lan                        # expect TAILNET_HOST_IP
+# MagicDNS resolves each service name directly — no split DNS, no AdGuard
 
-# Each admin UI responds through Caddy on :80
-curl -fsS http://radarr.lan/ping
-curl -fsS http://sonarr.lan/ping
-curl -fsS http://prowlarr.lan/ping
-curl -fsS http://sab.lan/api?mode=version
-curl -fsS http://seerr.lan/api/v1/status | jq .
+# Each admin UI responds over HTTPS with a real Tailscale certificate
+curl -fsS https://radarr.<tailnet>.ts.net/ping
+curl -fsS https://sonarr.<tailnet>.ts.net/ping
+curl -fsS https://prowlarr.<tailnet>.ts.net/ping
+curl -fsS https://sab.<tailnet>.ts.net/api?mode=version
+curl -fsS https://seerr.<tailnet>.ts.net/api/v1/status | jq .
 ```
 
 All should succeed. Drop off the tailnet (`tailscale down` or disable the client) and repeat — every one should fail. That's the point: admin services are tailnet-only.
@@ -324,8 +385,9 @@ All should succeed. Drop off the tailnet (`tailscale down` or disable the client
 **Boundary property check** — backend ports must NOT be reachable from anywhere except host loopback. From a tailnet device that is *not* the Unraid host:
 
 ```bash
-# Direct backend ports must time out / refuse — only :80 (Caddy), :32400
-# (Plex), :5055 (Seerr), and :53 (AdGuard) listen on a non-loopback interface.
+# Direct backend ports must time out / refuse. On the HOST's tailnet IP only
+# :80 (Unraid GUI) and :32400 (Plex) answer. Everything else is an
+# HTTPS Tailscale Service on :443, not a host port.
 for p in 6767 6868 7878 8080 8181 8686 8989 9696; do
   printf "%-5s " "$p"
   timeout 3 bash -c "</dev/tcp/<TAILNET_HOST_IP>/$p" 2>&1 | head -c 60; echo
@@ -452,6 +514,7 @@ sudo rm -rf /mnt/user  # destroys the sandbox; do not run on the real Unraid box
 | Tailscale ACLs under real admin load | Partial — can configure ACLs locally but cannot emulate multi-device SSO posture without real Tailscale users |
 | Plex Pass features (HW transcoding gating) | Requires a real Plex Pass on the claimed server |
 | AV1 encode absence on RTX 3050 | Untestable positive, testable negative: try and fail |
+| Ollama/Plex VRAM contention at the real 6 GB limit | Testable in shape but not in magnitude — a desktop GPU with more VRAM will never hit the ceiling that makes `OLLAMA_GPU_OVERHEAD` matter. §6d verifies loading, idle eviction and on-demand unload anywhere; the "does a 4K transcode still start with a model resident" question genuinely needs the 3050 |
 
 ---
 

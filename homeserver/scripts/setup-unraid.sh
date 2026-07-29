@@ -256,15 +256,25 @@ if [[ ! -d /mnt/user ]]; then
     echo ""
     echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
     echo "  mkdir -p /mnt/user/usenet-incomplete"
-    echo "  mkdir -p /mnt/user/appdata/plex-transcode"
-    echo "  mkdir -p /mnt/user/appdata/chess-coach/data"
-    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/chess-coach"
+    echo "  mkdir -p /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach/data"
+    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
 else
     mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
     mkdir -p /mnt/user/usenet-incomplete
     mkdir -p /mnt/user/appdata/plex-transcode
+    # actual-server ships no USER directive (the published image runs as root)
+    # and takes no PUID/PGID. docker-compose.yml pins it to 99:100 via `user:`,
+    # so /data must already exist owned by 99:100 or the container restart-loops.
+    mkdir -p /mnt/user/appdata/actual
+
+    # ollama runs as PUID:PGID with HOME=/ollama on a stock image that has no
+    # chown-at-start entrypoint, unlike the hotio/linuxserver images. If docker
+    # creates this bind dir itself it lands root-owned and every `ollama pull`
+    # fails on a permission error that reads like a network problem.
+    mkdir -p /mnt/user/appdata/ollama
+
     # chess-coach runs as PUID:PGID with no chown-at-start entrypoint (plain
     # python-slim image) — the bind dir must be nobody:users before first up,
     # or docker creates it root-owned and SQLite writes fail.
@@ -272,6 +282,8 @@ else
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
+    chown -R nobody:users /mnt/user/appdata/ollama
+    chown -R nobody:users /mnt/user/appdata/actual
     chown -R nobody:users /mnt/user/appdata/chess-coach
     chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 

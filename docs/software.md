@@ -33,38 +33,151 @@
 
 All containers defined in `homeserver/docker-compose.yml` (deployed to `/mnt/user/appdata/homeserver/homeserver/` on the server).
 
-All admin UIs are reached at `http://<name>.lan/` through Caddy on `:80`.
-Backend ports bind `127.0.0.1:` only — they exist for `bootstrap.py` and
-host-side debugging, never direct LAN/Tailscale access. Plex bypasses
-Caddy and is the one publicly-forwarded service.
+All admin UIs are reached at `https://<name>.<tailnet>.ts.net/` as
+**Tailscale Services**. Each service is advertised by the host's own
+tailscaled — the daemon the Unraid Tailscale plugin already runs — and gets
+its own TailVIP, its own MagicDNS name, and its own publicly-trusted,
+auto-renewing certificate. MagicDNS puts the tailnet domain in most clients'
+search path, so bare `https://radarr/` usually resolves too.
 
-| Container | Image | Admin URL | Backend port (loopback) | Role |
+Backend ports bind `127.0.0.1:` only. Those loopback publishes do double duty:
+they are `bootstrap.py`'s probe target *and* the backend that
+`tailscale serve` proxies to. Plex is the one publicly-forwarded service and
+is not fronted by anything.
+
+**There is no reverse proxy.** Caddy, its `ts-caddy` sidecar, AdGuard Home,
+the Caddyfile generator and the Tailscale split-DNS rule were all removed.
+Caddy performed no middleware — no auth, no rate limiting, no shared policy —
+so its entire job was mapping hostnames to ports, which MagicDNS does for free
+and with a real certificate. That certificate also retires a bug the old
+design had no answer for: browsers gate an expanding set of APIs behind
+Secure Context, and Actual Budget simply will not load over plain HTTP.
+
+The Unraid GUI remains the emergency path, and now the *only* thing on host
+`:80`. `http://<server-name>/` on the LAN and `http://<host tailnet IP>/` over
+Tailscale have no Docker dependency, so they keep working with the array
+stopped. On Unraid, stopping the array stops Docker — which is exactly why the
+GUI must never sit behind anything containerised.
+
+| Container | Image | Admin URL (Tailscale Service) | Backend port (loopback) | Role |
 |-----------|-------|-----------|-------------------------|------|
-| caddy | `caddy:2-alpine` | — | `:80` (LAN/Tailscale ingress) | Reverse proxy: Host-header routes `<name>.lan` → each backend |
-| adguard | `adguard/adguardhome` | adguard.lan | `:53/udp+tcp` (Tailscale split-DNS resolver) | Wildcard `*.lan → TAILNET_HOST_IP`; tailnet-wide ad-blocking freebie |
 | gluetun | `qmcgaw/gluetun` | — | 8080, 9696 (loopback) | Mullvad WireGuard egress + kill-switch for SAB + Prowlarr |
-| sabnzbd | `hotio/sabnzbd` | sab.lan | (in gluetun's netns) | Usenet downloader |
-| prowlarr | `hotio/prowlarr` | prowlarr.lan | (in gluetun's netns) | Indexer manager |
-| radarr | `hotio/radarr` | radarr.lan | 7878 (loopback) | Movie automation |
-| sonarr | `hotio/sonarr` | sonarr.lan | 8989 (loopback) | TV automation |
-| lidarr | `hotio/lidarr` | lidarr.lan | 8686 (loopback) | Music automation |
-| plex | `plexinc/pms-docker` | direct on `:32400` | 32400 (PUBLIC) | Media server + GPU transcode (only public service; bypasses Caddy) |
-| seerr | `ghcr.io/seerr-team/seerr` | seerr.lan | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
-| bazarr | `hotio/bazarr` | bazarr.lan | 6767 (loopback) | Subtitle automation |
-| tautulli | `hotio/tautulli` | tautulli.lan | 8181 (loopback) | Plex analytics, stream history, notifications |
-| profilarr | `santiagosayshey/profilarr` | profilarr.lan | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+| sabnzbd | `hotio/sabnzbd` | `svc:sab` | (in gluetun's netns) | Usenet downloader |
+| prowlarr | `hotio/prowlarr` | `svc:prowlarr` | (in gluetun's netns) | Indexer manager |
+| radarr | `hotio/radarr` | `svc:radarr` | 7878 (loopback) | Movie automation |
+| sonarr | `hotio/sonarr` | `svc:sonarr` | 8989 (loopback) | TV automation |
+| lidarr | `hotio/lidarr` | `svc:lidarr` | 8686 (loopback) | Music automation |
+| plex | `plexinc/pms-docker` | — (direct on `:32400`) | 32400 (PUBLIC) | Media server + GPU transcode (only public service; fronted by nothing) |
+| seerr | `ghcr.io/seerr-team/seerr` | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
+| bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
+| tautulli | `hotio/tautulli` | `svc:tautulli` | 8181 (loopback) | Plex analytics, stream history, notifications |
+| actual_server | `actualbudget/actual-server` | `svc:actual` | 5006 (loopback) | Envelope/zero-based budgeting. Needs a Secure Context, which every service now has — see decisions.md |
+| actual-ai | `sakowicz/actual-ai` | — | (none) | Categorizes transactions Actual's rules engine missed, via the in-stack Ollama on the `ai` plane |
+| profilarr | `santiagosayshey/profilarr` | `svc:profilarr` | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
+| ollama | `ollama/ollama` | — (no ingress by design) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
 
 ### Networks
 
-Three bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
+Four bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
 
 | Network | Members | Purpose |
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (`FIREWALL=on` kill-switch). |
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
+
+---
+
+## Local AI
+
+Ollama runs on the same RTX 3050 that Plex transcodes on. **Plex always wins.** The whole design follows from one number: the card has **6 GB of VRAM**.
+
+NVENC and NVDEC are dedicated ASIC blocks on the die, so inference does not steal shader time from the encoder — the resource these two workloads actually contend for is VRAM capacity. Everything below caps Ollama's footprint so a transcode always has room to allocate.
+
+### How the GPU is shared
+
+Two mechanisms, both pure configuration. There is no scheduler, no daemon, and nothing watching Plex.
+
+| Mechanism | What it does |
+|-----------|--------------|
+| `OLLAMA_GPU_OVERHEAD` | Hard VRAM reservation (default 2 GiB) that Ollama never allocates into. This is what guarantees Plex can start a transcode. If a model doesn't fit in what's left, Ollama spills layers to CPU instead of OOMing the card — the failure mode is "slower", not "Plex can't transcode". |
+| `OLLAMA_KEEP_ALIVE` | Ollama's built-in eviction. A model unloads after this much idle time (default 60s here; upstream default is 5m). Local AI use on this box is bursty, so most of the time nothing is resident at all. |
+
+Supporting knobs bound the footprint so the reservation above is meaningful: `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PARALLEL=1` mean "how much VRAM is Ollama using" has one predictable answer instead of scaling with concurrent callers, and `OLLAMA_CONTEXT_LENGTH` plus a q8_0 KV cache keep the cache from outgrowing the weights.
+
+### The gap, and why it's accepted
+
+`keep_alive` is an **idle timer, not a response to GPU pressure** — it does not know Plex exists. If a transcode starts ten seconds after an inference, Ollama holds its VRAM for the rest of the window.
+
+The reservation covers that: Plex still gets its 2 GiB and the transcode starts normally. It only becomes a real problem if Plex needs *more* than the reservation at that exact moment — roughly two or more concurrent 4K HDR tone-mapping transcodes — in which case the extra sessions fall back to CPU transcoding rather than failing.
+
+For this household that's the far tail, and the fixes are one-line: raise `OLLAMA_GPU_OVERHEAD_BYTES`, shorten `OLLAMA_KEEP_ALIVE`, or run a smaller model. An earlier revision of this design added a daemon that polled Plex and evicted models within a second of a transcode starting; it was dropped as too much machinery for the case it covered. [decisions.md](decisions.md#local-ai-on-the-transcode-gpu) records that trade in full, in case the tail ever stops being the tail.
+
+### Model sizing
+
+Budget roughly **3.5–4 GB** for weights plus KV cache — 6 GB minus the 2 GiB reservation. Models that fit comfortably:
+
+| Model | Size | Use |
+|-------|------|-----|
+| `llama3.2:3b` | ~2.0 GB | General chat/summarisation — the default recommendation |
+| `qwen3:4b` | ~2.6 GB | Stronger reasoning, still fits alongside a transcode |
+| `nomic-embed-text` | ~0.3 GB | Embeddings for search/RAG |
+| `llama3.1:8b-q4_K_M` | ~4.9 GB | Does not fit — will run partly on CPU |
+
+Nothing is pre-pulled:
+
+```bash
+docker exec ollama ollama pull llama3.2:3b
+docker exec ollama ollama list
+docker exec ollama ollama rm <model>     # blobs live on the cache pool
+```
+
+### Reaching it
+
+| From | Endpoint |
+|------|----------|
+| Another container on the stack | `http://ollama:11434` (join the `ai` network) |
+| The Unraid host | `http://127.0.0.1:11434` |
+| The tailnet | **Not reachable.** Ollama is advertised as no Tailscale Service, by design — it has no authentication. |
+| The LAN or the internet | **Not reachable.** Nothing binds `0.0.0.0`, and the router still forwards only 32400. |
+
+Ollama also serves an OpenAI-compatible API at `/v1`, so most SDKs work unmodified against `http://ollama:11434/v1` with a placeholder API key.
+
+### Adding an AI-consuming container
+
+**Access is opt-in.** Nothing reaches Ollama by default — not Radarr, not Plex, not anything else in the stack. Every existing container lives on `downloaders` / `automation` / `frontend`; Ollama is alone on `ai`. A container has to join `ai` explicitly, which is a one-line change either way.
+
+**If it's a service in this Compose file** — there's a commented template directly below the `ollama` service:
+
+```yaml
+  some-ai-app:
+    image: example/some-ai-app:latest
+    networks:
+      - ai
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_BASE_URL=http://ollama:11434/v1
+      - OPENAI_API_KEY=unused
+```
+
+**If it's an Unraid template container** (installed from Community Applications, not in this Compose file) — Docker tab → the container → Edit → **Network Type** → `ai`, then Apply. Set its Ollama URL to `http://ollama:11434`.
+
+That works because the network is declared with `name: ai` in `docker-compose.yml` rather than taking Compose's default project prefix (`homeserver_ai`). The short, stable name is deliberate: it's what makes the network selectable from the Unraid UI and joinable by `docker run --network ai`, so template containers are first-class consumers rather than a special case. The network has to exist first — bring the stack up once before the dropdown will list it.
+
+Either way, verify from the consumer's own point of view rather than the host's:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+If that returns `NXDOMAIN` or hangs, the container isn't on `ai`. Note that `localhost:11434` will never work from inside a consumer — that's the container's own loopback, not Ollama's.
+
+If the app has an admin UI, publish it with `tailscale serve --service=svc:<name> --bg 127.0.0.1:<port>` — that exposes the *app's* UI to the tailnet, not Ollama's API.
+
+**Ollama has no authentication and no read-only mode**, so anything on the `ai` network can also delete models and occupy the GPU. Network membership is the access control, which is exactly why access is opt-in rather than stack-wide: the media containers — especially the internet-facing downloaders — have no reason to be trusted with the model store. Models re-pull in minutes so the blast radius is small, but think before adding something to this network.
 
 ### Folder Structure on Server
 
@@ -83,7 +196,8 @@ Networks are defined inline in the Compose file rather than `external: true` —
 │   ├── seerr/
 │   ├── bazarr/
 │   ├── tautulli/
-│   └── profilarr/                    ← SQLite DB (subscribed databases + selected profiles)
+│   ├── profilarr/                    ← SQLite DB (subscribed databases + selected profiles)
+│   └── ollama/                       ← LLM model blobs (multi-GB — EXCLUDE from Appdata Backup)
 ├── usenet-incomplete/                ← cache pool (SSD), shareUseCache=only
 │                                        SABnzbd active downloads + par2/unrar
 └── data/                             ← spinning array, shareUseCache=yes

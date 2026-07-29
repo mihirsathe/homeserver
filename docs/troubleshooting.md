@@ -96,46 +96,47 @@ ls -lah /mnt/user/usenet-incomplete/
 
 ## Admin UIs unreachable over Tailscale
 
-`radarr.lan` (or any `*.lan`) doesn't load from a tailnet device. Two
-distinct failure modes — DNS or HTTP — diagnose separately.
-
-**First, narrow the layer:**
+`https://radarr.<tailnet>.ts.net/` doesn't load from a tailnet device.
+There is no DNS layer and no proxy layer to bisect any more — a service either
+resolves and serves, or its advertisement isn't active.
 
 ```bash
-nslookup radarr.lan        # DNS layer
-curl -v http://radarr.lan/ # HTTP layer
+tailscale serve status          # is svc:radarr advertised and active?
+tailscale status                # is this host still on the tailnet?
+curl -fsS http://127.0.0.1:7878/ping   # is the backend itself alive?
 ```
 
-If `nslookup` fails or returns the wrong IP, it's a DNS problem (most
-common). If it returns `<TAILNET_HOST_IP>` but `curl` hangs, it's
-network/Caddy.
+Work the three in that order; they isolate cleanly.
 
-### DNS layer
-
-1. On the admin device: `tailscale status` — is the device itself connected? If not, Tailscale app → sign in again.
-2. Tailscale admin console → DNS — verify "Restrict to domain `lan`" is set with `<TAILNET_HOST_IP>` as the nameserver. (Per Step 6.5 of `deployment.md`.)
-3. From the Unraid host: `docker compose ps adguard` — must be `(healthy)`. If not: `docker compose logs adguard` — look for port-bind conflicts on `:53`.
-4. Direct-test AdGuard from a tailnet device: `nslookup radarr.lan <TAILNET_HOST_IP>` — should answer with the same IP regardless of the device's normal DNS.
-5. AdGuard UI → `http://adguard.lan/` (or `http://<TAILNET_HOST_IP>:80/` via Caddy) → Filters → DNS rewrites — verify `*.lan → <TAILNET_HOST_IP>` is present. If missing, re-run `python3 scripts/generate-configs.py --force-overwrite` and `docker restart adguard`.
-
-### HTTP / Caddy layer
-
-1. From the Unraid host: `docker compose ps caddy` — must be `(healthy)`.
-2. `docker compose logs caddy` — look for upstream connection errors (`dial tcp ...`).
-3. ACL sanity: Tailscale console → Access controls — confirm `tag:admin → tag:server:80` is permitted.
-4. Direct hit Caddy on the tailnet IP with a Host header to bypass DNS:
+1. **Backend dead** (`curl` to loopback fails) → the container is the problem,
+   not ingress. `docker compose ps radarr` / `docker compose logs radarr`.
+2. **Backend fine, service not listed by `tailscale serve status`** → the
+   advertisement was lost. Re-issue it:
    ```bash
-   curl -v -H "Host: radarr.lan" http://<TAILNET_HOST_IP>:80/ping
+   tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
    ```
-   If this works but `radarr.lan` doesn't, the problem is purely DNS.
+3. **Advertised but inactive** → host approval. Check admin console →
+   **Services** → the service → **Service hosts**. Approve if pending. Services
+   is in public beta and the daemon does not always pick up an approval that
+   lands after the advertisement, so if the console shows it approved and the
+   daemon disagrees:
+   ```bash
+   tailscale down && tailscale up --ssh --advertise-tags=tag:server
+   ```
+4. **Certificate warning in the browser** → MagicDNS or HTTPS is disabled at
+   the tailnet level. Admin console → **DNS** → both must be on.
 
-Plex (port 32400) doesn't ride Caddy or AdGuard — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
+**The Unraid GUI is unaffected by all of the above.** `http://<server-name>/`
+and Tailscale SSH do not depend on Docker or on any service advertisement — if
+those are down too, the problem is the host or the tailnet, not ingress.
+
+Plex (port 32400) is fronted by nothing — it's the only service on the router port-forward. If Plex is the one that's down, check router port-forward config and that the Plex container is healthy (`docker compose ps plex`).
 
 ---
 
 ## Gluetun kill-switch engaged (SAB / Prowlarr offline)
 
-SAB UI doesn't load, Prowlarr UI doesn't load — `http://sab.lan/` and `http://prowlarr.lan/` return 502/504 from Caddy or hang. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
+SAB UI doesn't load, Prowlarr UI doesn't load — `https://sab.<tailnet>.ts.net/` and `https://prowlarr.<tailnet>.ts.net/` hang or refuse. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
 This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 
@@ -191,6 +192,68 @@ A service's healthcheck isn't passing or port isn't bound. `wait_for` reports th
 
 1. `docker compose ps` — is the service `healthy`? If it says `starting` for >5 minutes, something's wrong with that service specifically. `docker compose logs <service>` for specifics.
 2. On Unraid, `bootstrap.py`'s pip deps install to `/tmp/bootstrap-deps`, which is cleared on reboot. That's fine (the script reinstalls on each run), but if the reboot happened mid-run you may have a partial install. Re-run from scratch.
+
+---
+
+## Ollama is slow, or a model won't fit
+
+1. **Is it running on the GPU at all?** `curl -s http://127.0.0.1:11434/api/ps` — `size_vram: 0` means Ollama placed the model entirely on CPU. An empty list just means nothing is loaded right now, which is normal after 60s idle.
+2. **The model is too big.** 2 GiB of the 6 GB card is reserved for Plex, leaving ~4 GB. Anything bigger spills layers to CPU — correct behaviour, since the alternative is a transcode that can't allocate. Use a smaller model ([software.md](software.md#model-sizing)), or lower `OLLAMA_GPU_OVERHEAD_BYTES` if you're willing to give Plex less headroom.
+3. **Context length is eating the VRAM.** KV cache scales linearly with `OLLAMA_CONTEXT_LENGTH`; at 16K it can exceed the weights. Drop back to 4096.
+4. **First request after an idle period is slow.** Expected — `OLLAMA_KEEP_ALIVE=60s` unloaded the model and it re-loads from SSD. One slow request, then normal.
+
+`.env` changes here need `docker compose --env-file .env.docker up -d` to take effect (Compose resolves environment at container-create time, so `restart` alone won't do it).
+
+---
+
+## Plex fell back to CPU transcoding while a model was loaded
+
+Ollama has no awareness of Plex — `OLLAMA_KEEP_ALIVE` is an idle timer, not a response to GPU pressure. The 2 GiB reservation is what guarantees Plex can allocate, so this only happens when Plex needs *more* than the reservation at that moment: realistically two or more concurrent 4K HDR tone-mapping transcodes.
+
+Confirm it's actually VRAM and not the usual suspects:
+
+```bash
+docker exec ollama nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+curl -s http://127.0.0.1:11434/api/ps    # is a model resident?
+```
+
+If VRAM is near the 6 GB ceiling with a model resident, in increasing order of cost:
+
+1. Raise `OLLAMA_GPU_OVERHEAD_BYTES` (e.g. `3221225472` for 3 GiB) and `docker compose --env-file .env.docker up -d ollama`.
+2. Shorten `OLLAMA_KEEP_ALIVE` so the window of exposure is smaller.
+3. Run a smaller model.
+4. Unload on demand: `curl -s http://127.0.0.1:11434/api/generate -d '{"model":"<model>","keep_alive":0}'`.
+
+If VRAM is *not* the problem, this is the ordinary "Plex isn't using hardware transcoding" path above — check Plex Pass first.
+
+[decisions.md](decisions.md#local-ai-on-the-transcode-gpu) documents the Plex-polling preemption daemon that was built for this case and set aside, if it ever becomes worth reviving.
+
+---
+
+## A container can't reach Ollama
+
+Ollama listens only on the `ai` network and host loopback. There is no `ollama.lan` — Caddy is deliberately not on that network.
+
+```bash
+# From the host
+curl -s http://127.0.0.1:11434/api/tags
+
+# From the consumer container — must be on the `ai` network
+docker inspect -f '{{json .NetworkSettings.Networks}}' <container> | tr ',' '\n' | grep -o '"[a-z_]*"' | head
+```
+
+Expect `ai` in that list. This is the normal cause — access is opt-in, and **no container is on `ai` by default**. Fix depends on where the container is defined:
+
+- **A service in `docker-compose.yml`** — add `ai` to its `networks:` list, then `docker compose --env-file .env.docker up -d <service>`.
+- **An Unraid template container** — Docker tab → Edit → **Network Type** → `ai` → Apply. If `ai` isn't in the dropdown, the stack has never been up; start it once so Compose creates the network.
+
+Then confirm from inside the consumer, not from the host:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+Use `http://ollama:11434` — not `localhost:11434` (that's the consumer's own loopback), and not the host LAN IP (nothing is bound there).
 
 ---
 
