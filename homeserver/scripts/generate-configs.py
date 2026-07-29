@@ -542,6 +542,36 @@ def ensure_profilarr_appdata():
     subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
     print(f"  ✓ {dest}/ (Profilarr state — configured via web UI)")
 
+def ensure_actual_appdata():
+    """Create /mnt/user/appdata/actual as nobody:users before first start.
+
+    actual-server is the one image here that ships no USER directive and takes
+    no PUID/PGID — the published image runs as root — so docker-compose.yml
+    pins it to 99:100 with an explicit `user:`. That makes this directory
+    mandatory: if docker creates it on first mount it lands root-owned, the
+    container cannot mkdir /data/server-files, and it restart-loops with an
+    EACCES that surfaces as a 502 from its Tailscale Service rather than as
+    anything obviously permission-shaped.
+    """
+    dest = Path("/mnt/user/appdata/actual")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (Actual Budget SQLite — must exist before first start)")
+
+def ensure_chess_coach_appdata():
+    """Create /mnt/user/appdata/chess-coach/data as nobody:users.
+
+    ONLY data/ is chowned. The parent also holds the GitHub deploy key and the
+    repo checkout, and OpenSSH refuses a private key owned by another user
+    ("bad ownership or modes") — a recursive chown of the parent silently
+    breaks every future `git pull` for coach updates. data/ is the only path
+    bind-mounted into the container.
+    """
+    dest = Path("/mnt/user/appdata/chess-coach/data")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (chess-coach state — parent left root-owned for the deploy key)")
+
 def ensure_ollama_appdata():
     """Create /mnt/user/appdata/ollama as nobody:users for the model store.
 
@@ -769,6 +799,8 @@ def main() -> None:
     ensure_seerr_appdata()
     ensure_profilarr_appdata()
     ensure_ollama_appdata()
+    ensure_actual_appdata()
+    ensure_chess_coach_appdata()
     write_bazarr(env)
     write_tautulli(env)
 
