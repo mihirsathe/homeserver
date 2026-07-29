@@ -135,8 +135,13 @@ you lose backends, not the route to them.
 
 The costs: Tailscale Services is in public beta, and service definitions plus
 host approval live in the admin console rather than in this repo. The second is
-mitigated by a huJSON serve-config file and by `autoApprovers` keyed on
-`tag:server` in the ACL policy, both of which are versionable.
+partly mitigated by a huJSON serve-config file, which is versionable. Host
+approval is deliberately not automated: `autoApprovers` is documented for
+`routes` and `exitNode`, and while Tailscale's Services material refers to
+auto-approving service hosts, that key's schema was not verifiable when this
+was written. An unrecognised policy key can be accepted silently while doing
+nothing, which is worse than omitting it — you would trust a control that
+isn't there. Approving hosts by hand is nine clicks, once.
 
 **Alternative considered: a real domain plus a wildcard certificate.**
 `*.home.<domain>` via Cloudflare DNS-01 keeps a single Caddy and one cert, and

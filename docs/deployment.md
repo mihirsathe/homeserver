@@ -69,9 +69,6 @@ with its own TailVIP, MagicDNS name and auto-renewing certificate.
          "src": ["tag:admin"],
          "dst": ["tag:server:443,32400"] }
      ],
-     "autoApprovers": {
-       "services": { "tag:server": ["tag:server"] }
-     },
      "ssh": [
        { "action": "accept",
          "src": ["tag:admin"], "dst": ["tag:server"], "users": ["root"] }
@@ -262,8 +259,9 @@ tailnet has a reason to reach it.
 
 ### If a service says "needs configuration" or never goes active
 
-Host approval is the usual cause. With the `autoApprovers` block from Step 3a
-in place this should be automatic; without it, approve the host manually in
+Host approval is the usual cause, and it is expected: auto-approval is not
+configured, because `autoApprovers` is documented for `routes` and `exitNode`
+and a `services` key is not something this repo has verified. Approve the host in
 admin console → **Services** → select the service → **Service hosts** →
 **Approve**.
 

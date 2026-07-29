@@ -724,14 +724,19 @@ the box. Doing them now means nothing is discovered mid-run.
 
 1. **DNS → enable MagicDNS, then enable HTTPS.** Certificates cannot be issued
    without both, and every admin URL depends on them.
-2. **Access controls** → add the `autoApprovers` block so the host's service
-   advertisements are accepted without a manual click each:
-   ```json
-   "autoApprovers": { "services": { "tag:server": ["tag:server"] } }
-   ```
-   While you are here, change the admin ACL destination from
-   `tag:server:80,32400,53` to `tag:server:443,32400` — services are HTTPS,
-   and `53` went away with AdGuard.
+2. **Access controls** → confirm `tag:admin` can reach `tag:server` on **443**.
+   If your policy uses a `grants` block with `"ip": ["*"]`, that already covers
+   it and there is nothing to change. If it enumerates ports (e.g.
+   `tag:server:80,32400,53`), add `443` — services are HTTPS, and `53` went
+   away with AdGuard.
+
+   **Auto-approval is deliberately not configured here.** `autoApprovers` is
+   documented for `routes` and `exitNode`; a `services` key is referenced in
+   Tailscale's Services material but its schema is not something this runbook
+   verifies, and an unrecognised key can be accepted silently while doing
+   nothing — which is worse than not setting it, because you would trust it.
+   Approving service hosts by hand is nine clicks, once. Do that instead
+   (§3.6), and revisit if Tailscale documents the key.
 3. **Confirm the host still carries `tag:server`** — Machines → the Unraid
    host. Everything below assumes it does.
 
@@ -872,9 +877,9 @@ tailscale serve --service=svc:profilarr --bg 127.0.0.1:6868
 
 Plex is deliberately absent — own port, own auth, own `*.plex.direct` certs.
 
-**If a service advertises but never goes active**, it is host approval. With
-the 3.2 `autoApprovers` block it should be automatic; otherwise approve in
-admin console → Services → the service → Service hosts. Services is in public
+**If a service advertises but never goes active**, it is host approval —
+expected, since auto-approval is deliberately not configured (see 3.2).
+Approve in admin console → Services → the service → Service hosts. Services is in public
 beta and the daemon does not reliably pick up an approval that arrives after
 the advertisement, so if console and daemon disagree:
 
