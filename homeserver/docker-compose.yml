@@ -886,8 +886,13 @@ services:
 
       - LLM_PROVIDER=ollama
       # In-stack Ollama on the `ai` plane — see .env. Needs the /api suffix.
-      - OLLAMA_BASE_URL=${OLLAMA_URL}
-      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      # Defaults match the in-stack Ollama, so a .env that predates the `ai`
+      # plane still produces a working actual-ai instead of a silently broken
+      # one. Without them a missing key resolves to an empty string, and
+      # actual-ai logs-and-retries by design — so it looks healthy forever
+      # while categorising nothing. Override in .env only to point elsewhere.
+      - OLLAMA_BASE_URL=${OLLAMA_URL:-http://ollama:11434/api}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       # Generous: a slow model or a queued request should not wedge a run.
       - LLM_TIMEOUT_MS=300000
 
