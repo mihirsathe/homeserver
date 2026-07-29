@@ -170,6 +170,26 @@ container, making name resolution for every device depend on Docker being up —
 the same class of mistake as putting the Unraid GUI behind Caddy. Network-wide
 ad-blocking, if wanted later, is a clean standalone decision.
 
+### Local AI on the transcode GPU
+
+Running Ollama on the same RTX 3050 that Plex transcodes on means picking a policy for a shared, non-partitionable resource. The policy is: **Plex always wins, and the contention is about VRAM, not compute.**
+
+NVENC and NVDEC are dedicated ASIC blocks on the die. A CUDA inference workload doesn't steal encoder time from them; what it *does* steal is VRAM capacity, and the card has 6 GB. So the design caps Ollama's memory footprint rather than trying to schedule GPU compute.
+
+**Two settings, not a scheduler.** `OLLAMA_GPU_OVERHEAD` reserves 2 GiB that Ollama never allocates into — that reservation is what actually guarantees a transcode can start, it needs nothing running to enforce it, and it degrades gracefully: a model that doesn't fit in the remaining ~4 GB gets its overflow layers placed on CPU rather than OOMing the card. `OLLAMA_KEEP_ALIVE=60s` is Ollama's own eviction, returning VRAM a minute after the last request instead of the upstream default of five. The bounded-footprint knobs (one loaded model, one parallel request, capped context, q8_0 KV cache) exist so the reservation is meaningful — without them, VRAM use would scale with concurrent callers and "2 GiB is free for Plex" would stop being true.
+
+**Rejected: a Plex-watching preemption daemon.** An earlier revision of this design polled Plex's `/status/sessions` every 5s and, on a real video transcode, wrote a hold file that a proxy gate matched on (503ing inference so nothing could re-load a model) and evicted resident models via `keep_alive: 0`. It worked — three containers, a poll loop, a hold-file protocol between them, and a dependency on `PLEX_TOKEN`.
+
+It was dropped because it only closed a narrow gap. `keep_alive` is an idle timer with no awareness of Plex, so a transcode starting seconds after an inference finds VRAM still held. But the reservation means Plex gets its headroom regardless, so that gap only bites when Plex needs *more* than the reservation at that instant — roughly two or more concurrent 4K HDR tone-mapping transcodes — where the extra sessions fall back to CPU transcoding rather than failing outright. That is the far tail for a household Plex server, the degradation is graceful, and the mitigations are one-line config changes. Immediate eviction was not worth three containers and ~400 lines of code to buy.
+
+If it ever stops being the tail, the escalation ladder in order of cost is: raise `OLLAMA_GPU_OVERHEAD_BYTES`, shorten `OLLAMA_KEEP_ALIVE`, run a smaller model, then reintroduce preemption.
+
+**Access is by network membership, not authentication.** Ollama has no auth and no read-only mode: reaching `:11434` means being able to delete every model on the box. There is no token to configure, so the boundary has to be the network. Ollama sits on an isolated `ai` bridge with only a loopback port publish; consumers join that network and use `http://ollama:11434`. Ollama is deliberately given no Tailscale Service, so nothing on the tailnet can reach the API — the stack's AI consumers are containers on this host, and that's the whole intended client set. The cost is that any container added to `ai` is fully trusted with the model store; models re-pull in minutes, so that's acceptable, but it's the reason to think before adding something there. If tailnet access is ever wanted, the change is one `tailscale serve --service=svc:ollama` line — and at that point a gate in front of the model-management endpoints becomes worth reconsidering, because a Service would expose an unauthenticated API to every tagged device.
+
+**Not exposed on the LAN.** Nothing binds `0.0.0.0` and the router still forwards only 32400, matching the existing trust model where the LAN is not a trusted plane.
+
+**q8_0 KV cache is on by default.** KV cache VRAM scales linearly with context length and can exceed the weights themselves at 16K context on a 6 GB card. Quantising it to q8_0 halves that for a quality difference that isn't measurable at 3–8B. It requires flash attention, which is enabled unconditionally. `OLLAMA_KV_CACHE_TYPE=f16` in `.env` opts back out.
+
 ### Single parity (for now)
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.
@@ -234,7 +254,8 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 
 | Upgrade | Benefit | Notes |
 |---------|---------|-------|
-| GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams | Must be LP form factor |
+| GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams, and enough headroom that Ollama and Plex stop competing for VRAM at all | Must be LP form factor. At 12–16 GB the VRAM reservation stops binding at all and Ollama could hold a 7–8B model full-time |
+| Plex-aware GPU preemption for Ollama | Immediate VRAM eviction when a transcode starts, instead of waiting out `keep_alive` | Only worth it if concurrent 4K HDR transcodes become common — see "Local AI on the transcode GPU" above for the design that was built and set aside |
 | RAM to 128 GB+ | Comfortable headroom for everything | DDR4 RDIMM, verify DIMM config for 6146 dual-socket |
 | Second MD1400 | 12 more drive bays via daisy-chain | LSI 9300-8e supports it; drops into U5–6 |
 | Managed switch + 10G LAN | Saturate X710 SFP+; dedicated networking rack; VLAN segregation | Candidate: **Ubiquiti USW-Pro-Max-16** (12×1GbE + 4×2.5GbE + 2×10G SFP+, fanless, UniFi-managed) — SFP+ #1 → R640 X710, SFP+ #2 → uplink to networking rack. Alternatives considered: USW-Enterprise-8-PoE (bundled PoE is wasted here), MikroTik CRS310-8G+2S+IN ($50 cheaper but loses UniFi integration), USW-Flex-2.5G-8 (only one SFP+, can't do both 10G server and 10G uplink simultaneously). |

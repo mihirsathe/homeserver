@@ -1,6 +1,6 @@
 # CLAUDE.md — Home Server Repo
 
-Self-hosted **platform** on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. Its tenants — media automation, local LLM inference, personal finance, and a chess webapp — are peers; media is the oldest, not the privileged one. One open router port (TCP 32400 → Plex); every other service is a Tailscale Service (`svc:<name>`) with its own MagicDNS name and certificate, advertised by the host's tailscaled. No reverse proxy. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch.
+Self-hosted **platform** on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. Its tenants — media automation, local LLM inference, personal finance, and a chess webapp — are peers; media is the oldest, not the privileged one. One open router port (TCP 32400 → Plex); every other service is a Tailscale Service (`svc:<name>`) with its own MagicDNS name and certificate, advertised by the host's tailscaled. No reverse proxy. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Ollama shares the transcode GPU with Plex, capped by a static VRAM reservation so Plex always has room.
 
 ---
 
@@ -46,6 +46,7 @@ homeserver/
 - **Networks defined in Compose, not `external: true`** — Docker restarts on every Unraid boot
 - **Never commit `.env`** — use `.env.example` as the template
 - **No Compose Manager plugin** — Unraid ships `docker compose`; we run it from `media_stack_up` User Script instead
+- **Local-AI consumers join the `ai` network and use `http://ollama:11434`** — access is opt-in; no existing stack container is on `ai`. Ollama has no auth, so network membership is the access control. The network is declared `name: ai` (not the Compose-prefixed default) so Unraid-template containers can join it from the Docker tab. Caddy is deliberately not on `ai`, so there is no `ollama.lan` and nothing on the tailnet can reach it.
 
 ---
 
@@ -59,3 +60,4 @@ homeserver/
 | Downloads complete | `/mnt/user/data/usenet/complete/{movies,tv,music}/` |
 | Media library | `/mnt/user/data/media/{movies,tv,music}/` |
 | Plex database | `/mnt/user/appdata/plex/` |
+| Ollama models | `/mnt/user/appdata/ollama/` (exclude from Appdata Backup — re-pullable) |

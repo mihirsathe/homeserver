@@ -10,6 +10,8 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 
 | Container | Image | Tag | Registry | Maintainer |
 |-----------|-------|-----|----------|------------|
+| caddy | `caddy` | `:2-alpine` | Docker Hub | Caddy authors (official) |
+| adguard | `adguard/adguardhome` | `:latest` | Docker Hub | AdGuard (official) |
 | gluetun | `qmcgaw/gluetun` | `:latest` | Docker Hub | qdm12 (community, widely used) |
 | sabnzbd | `ghcr.io/hotio/sabnzbd` | `:release` | GitHub Container Registry | hotio |
 | prowlarr | `ghcr.io/hotio/prowlarr` | `:release` | GitHub Container Registry | hotio |
@@ -21,10 +23,13 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
 | profilarr | `santiagosayshey/profilarr` | `:latest` | Docker Hub | Santiago ([GitHub org Dictionarry-Hub](https://github.com/Dictionarry-Hub/profilarr) · [Docker Hub](https://hub.docker.com/r/santiagosayshey/profilarr)) |
+| ollama | `ollama/ollama` | `:latest` | Docker Hub | Ollama Inc. (official) |
 
 **hotio** (`ghcr.io/hotio`) is the de facto standard for *arr app images — tightly maintained, consistent `PUID`/`PGID`/`UMASK` environment model, fast to release updates. Source: [hotio.dev](https://hotio.dev).
 
 **santiagosayshey/profilarr** is the upstream-blessed image for Profilarr — despite the personal-looking Docker Hub namespace, Santiago is the maintainer of the Dictionarry-Hub GitHub org and the image is linked directly from the official README. There is no `ghcr.io/dictionarry-hub` mirror; Docker Hub is the canonical distribution.
+
+**`ollama/ollama`** is the upstream official image, run unmodified — the GPU-sharing behaviour is entirely environment variables in `docker-compose.yml`, so there is no custom image or sidecar to keep patched.
 
 **plexinc/pms-docker** is the official Plex image; used instead of a hotio Plex image because the official image's `PLEX_PREFERENCE_*` environment variable mechanism is how hardware transcoding preferences are pre-configured at first boot.
 

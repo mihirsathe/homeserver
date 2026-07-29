@@ -42,6 +42,11 @@
 #                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
 #                  Prowlarr via gluetun). Blocks a popped frontend container
 #                  from pivoting straight into the downloader plane.
+#   ai           — ollama plus anything on the stack that needs local
+#                  inference. Isolated from the media planes: nothing here
+#                  has a reason to reach the *arrs or the downloaders, and
+#                  Ollama has no auth of its own, so network membership is
+#                  the access control.
 #
 # ADMIN INGRESS — Tailscale Services, no reverse proxy:
 #   Every admin UI is a Tailscale Service (`svc:<name>`) advertised by the
@@ -86,6 +91,12 @@ networks:
     driver: bridge
   automation:
     name: automation
+    driver: bridge
+  # Local-inference plane. Join a container here and point it at
+  # http://ollama:11434 — see the commented example below `ollama`.
+  # Not `internal: true` — `ollama pull` has to reach registry.ollama.ai.
+  ai:
+    name: ai
     driver: bridge
 
 services:
@@ -554,3 +565,229 @@ services:
         limits:
           memory: 1G
 
+  # ---------------------------------------------------------------------------
+  # OLLAMA — local LLM inference, second-priority tenant of the RTX 3050
+  #
+  # THE CORE CONSTRAINT: the 3050 LP has 6 GB of VRAM and Plex owns it. NVENC
+  # and NVDEC are dedicated ASIC blocks, so inference does not starve the
+  # encoder for shader time — the resource these two actually fight over is
+  # VRAM capacity. Every knob below caps Ollama's footprint so a transcode
+  # always has room to allocate.
+  #
+  # Two mechanisms, both pure configuration, no daemon watching anything:
+  #
+  #   1. OLLAMA_GPU_OVERHEAD — a hard reservation Ollama never allocates into.
+  #      This is what actually guarantees Plex can start a transcode. It holds
+  #      unconditionally, and if a model doesn't fit in what's left, Ollama
+  #      spills layers to CPU instead of OOMing the card. Failure mode is
+  #      "slower", never "Plex can't transcode".
+  #   2. OLLAMA_KEEP_ALIVE — Ollama's own eviction. A model unloads after this
+  #      much idle time (upstream default is 5m; 60s here hands the card back
+  #      much sooner). Local AI use on this box is bursty, so most of the time
+  #      nothing is resident at all.
+  #
+  # The bounded-footprint knobs (MAX_LOADED_MODELS / NUM_PARALLEL /
+  # CONTEXT_LENGTH / KV cache type) exist so that "how much VRAM is Ollama
+  # using" has one predictable answer instead of scaling with concurrent
+  # callers — which is what makes the reservation above meaningful.
+  #
+  # ACCEPTED LIMITATION: keep_alive is an idle timer, not a response to GPU
+  # pressure — it doesn't know Plex exists. If a transcode starts seconds
+  # after an inference, Ollama keeps its VRAM for the rest of the window. The
+  # reservation covers this: Plex still gets its headroom. It's only a real
+  # problem if Plex needs MORE than the reservation at that moment (roughly
+  # 2+ concurrent 4K HDR tone-mapping transcodes), where the extra sessions
+  # fall back to CPU transcoding. If that ever shows up in practice, the fix
+  # is to raise OLLAMA_GPU_OVERHEAD_BYTES or run a smaller model — see
+  # docs/decisions.md for the preemption design this replaced.
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    runtime: nvidia
+    networks:
+      # Consumer plane. Containers that need an LLM join this network and
+      # reach http://ollama:11434 — see the commented example below.
+      - ai
+    # Runs as nobody:users like the rest of the stack rather than the image's
+    # default root. Ollama needs no privileges — /dev/nvidia* is world-
+    # accessible — but HOME must point somewhere writable, because that's
+    # where it keeps models and its (unused) signing key.
+    user: "${PUID}:${PGID}"
+    environment:
+      - TZ=${TZ}
+      - HOME=/ollama
+      # compute for CUDA, utility for nvidia-smi + library discovery. Plex asks
+      # for compute,video; neither asks for `all` (which adds graphics/display
+      # and is the broader surface CVE-2024-0132 abused).
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_HOST=0.0.0.0:11434
+      # Bytes of VRAM Ollama must leave alone. Default 2147483648 (2 GiB)
+      # covers a couple of concurrent 4K HDR tone-mapping transcodes.
+      - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD_BYTES:-2147483648}
+      # Hand VRAM back after this much idle time.
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-60s}
+      # One model, one request at a time. On 6 GB, serving two models
+      # concurrently means neither fits. Extra callers queue instead.
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_QUEUE=${OLLAMA_MAX_QUEUE:-64}
+      # KV cache grows linearly with context, so context length is a VRAM knob
+      # as much as a capability knob.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-4096}
+      # Flash attention is required for a quantised KV cache, and q8_0 halves
+      # KV VRAM for a quality delta that is not measurable at this size. Set
+      # OLLAMA_KV_CACHE_TYPE=f16 in .env to opt back out.
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+    volumes:
+      # Model blobs land in ollama/models/ here. These are multi-GB and
+      # re-downloadable — exclude this path from the Appdata Backup plugin
+      # (docs/deployment.md) or a weekly backup grows by tens of GB.
+      - /mnt/user/appdata/ollama:/ollama/.ollama
+    ports:
+      # Loopback only, same convention as every other backend in this stack:
+      # for host-side debugging from the Unraid terminal, not for LAN or
+      # Tailscale access. Nothing binds 0.0.0.0 and the router forwards only
+      # 32400, so the only clients are stack containers and the host itself.
+      # Deliberately NOT fronted by Caddy — there is no *.lan hostname for
+      # Ollama, because nothing on the tailnet needs to reach it.
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      # The image ships no curl/wget; `ollama list` round-trips the local API
+      # via OLLAMA_HOST, which is the same liveness signal.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # First start unpacks CUDA libraries before the API answers.
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          # Headroom to stage a model into VRAM, and to hold one in system RAM
+          # if Ollama spills layers to CPU because a transcode has the card.
+          #
+          # 4G, not 8G: the pinned model is llama3.2:3b (~2.5 GB), and memory
+          # ceilings across the stack sum close to the box's 32 GB once finance
+          # and chess land. This is the first ceiling to trim because it is the
+          # least load-bearing — the spill case it covers is already the
+          # graceful-degradation path, so a tighter ceiling costs speed in a
+          # situation that is itself the fallback.
+          memory: 4G
+
+  # --- Adding a local-AI consumer ---------------------------------------------
+  # Join the `ai` network and point at Ollama. It serves an OpenAI-compatible
+  # API at /v1, so most SDKs work unmodified with a placeholder key (Ollama
+  # has no auth of its own and ignores the header).
+  #
+  #   some-ai-app:
+  #     image: example/some-ai-app:latest
+  #     container_name: some-ai-app
+  #     networks:
+  #       - ai
+  #     environment:
+  #       - OLLAMA_BASE_URL=http://ollama:11434
+  #       - OPENAI_BASE_URL=http://ollama:11434/v1
+  #       - OPENAI_API_KEY=unused
+  #     restart: unless-stopped
+  #
+  # Note that anything on this network can also delete models — Ollama has no
+  # read-only mode. That's an accepted trade for now given every member is a
+  # container we chose to put there, and models re-pull in minutes. If the app
+  # has an admin UI, add it to CADDY_SERVICES in generate-configs.py for
+  # <name>.lan routing; that's the app's UI, not Ollama's API.
+  # ----------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # ADGUARD HOME — tailnet split-DNS resolver
+  #
+  # Tailscale's admin console points the `lan` domain at TAILNET_HOST_IP:53;
+  # this container answers with TAILNET_HOST_IP for any *.lan query via a
+  # wildcard rewrite pre-seeded into AdGuardHome.yaml. That makes
+  # radarr.lan / sonarr.lan / etc. resolve automatically on every tailnet
+  # device with zero per-device config — no /etc/hosts edits, works on
+  # iOS/Android.
+  #
+  # Port 53 is published on 0.0.0.0 because tailnet clients query the host
+  # over the tailscale interface; loopback wouldn't reach them. Unraid
+  # itself doesn't bind 53 by default, so this should be conflict-free —
+  # `ss -tlnp | grep :53` on the host before deploying confirms.
+  #
+  # The admin UI lives on container :80 and is fronted by caddy at
+  # adguard.lan, so it's not separately published — same Caddy ingress as
+  # every other admin service.
+  # ---------------------------------------------------------------------------
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguard
+    networks:
+      - frontend
+    volumes:
+      - ${STACK_DIR}/configs/adguard/AdGuardHome.yaml:/opt/adguardhome/conf/AdGuardHome.yaml
+      - /mnt/user/appdata/adguard/work:/opt/adguardhome/work
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    restart: unless-stopped
+    healthcheck:
+      # adguard image ships wget. /control/status returns JSON when the
+      # daemon is up post-init; before init it returns 403 which is also
+      # "up enough" — both count as healthy.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:80/control/status >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:80/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # CADDY — single ingress for every admin UI
+  #
+  # Each backend is reachable at http://<name>.lan/ — Caddy routes by Host
+  # header to the docker-DNS name of the right backend. Joined to all three
+  # networks so it can resolve every service. SAB and Prowlarr live in
+  # gluetun's netns and have no bridge alias of their own, so the Caddyfile
+  # points sab.lan / prowlarr.lan at gluetun:8080 / gluetun:9696 directly.
+  #
+  # auto_https off — HTTP only inside the tailnet. Tailscale already
+  # provides authenticated, encrypted, end-to-end transport between every
+  # device. Layering TLS on top would require either a public domain or
+  # installing Caddy's internal CA root on every admin device — both poor
+  # trade-offs vs the actual threat (which is "tailnet membership," not
+  # network-level eavesdropping).
+  #
+  # admin off — there's nothing pushing config dynamically, the localhost
+  # admin API on :2019 is dead weight + a small attack surface.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    networks:
+      - frontend
+      - automation
+      - downloaders
+    ports:
+      - "80:80"
+    volumes:
+      - ${STACK_DIR}/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/user/appdata/caddy:/data
+    restart: unless-stopped
+    healthcheck:
+      # caddy:2-alpine ships busybox nc but no curl/wget. nc -z is enough
+      # to confirm the listener is up; per-backend liveness lives on each
+      # backend's own healthcheck.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M

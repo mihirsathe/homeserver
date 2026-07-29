@@ -542,6 +542,21 @@ def ensure_profilarr_appdata():
     subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
     print(f"  ✓ {dest}/ (Profilarr state — configured via web UI)")
 
+def ensure_ollama_appdata():
+    """Create /mnt/user/appdata/ollama as nobody:users for the model store.
+
+    Ollama runs as 99:100 (`user:` override in compose) with HOME=/ollama, so
+    this directory has to exist and be writable before first start or the
+    engine can't create its model store.
+
+    Deliberately NOT covered by the weekly Appdata Backup — see
+    docs/deployment.md. Model blobs are multi-GB and re-pullable in minutes.
+    """
+    dest = Path("/mnt/user/appdata/ollama")
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
+    print(f"  ✓ {dest}/ (Ollama models — exclude from Appdata Backup)")
+
 def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
     dest.mkdir(parents=True, exist_ok=True)
@@ -749,6 +764,7 @@ def main() -> None:
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"])
     ensure_seerr_appdata()
     ensure_profilarr_appdata()
+    ensure_ollama_appdata()
     write_bazarr(env)
     write_tautulli(env)
 

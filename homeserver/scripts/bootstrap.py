@@ -683,6 +683,10 @@ def main() -> None:
     print("     targets (paste URLs + API keys from generated.env), subscribe to")
     print("     the Dictionarry DB and/or TRaSH Guides, select profiles, sync.")
     print("     Profilarr has no API-driven bootstrap path.")
+    print("  4. Ollama ships with no models. Pull one:")
+    print("       docker exec ollama ollama pull llama3.2:3b")
+    print("     Keep models under ~4 GB so they coexist with a Plex transcode")
+    print("     on the 6 GB card. See docs/software.md#local-ai for sizing.")
 
 if __name__ == "__main__":
     main()

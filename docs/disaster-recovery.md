@@ -91,6 +91,7 @@ Common culprits:
 - **Stuck SAB download** in `usenet-incomplete/` that's >20 GB and hasn't moved in days. This share is `cache=only`, so every stuck download eats cache-pool space directly.
 - **Plex DB bloat** — `Plug-in Support/Databases/com.plexapp.plugins.library.db` grows forever without pruning. Plex has a "Optimize Database" tool under Settings → Troubleshooting.
 - **Docker image sprawl** — run `docker image prune -f` (the monthly update-stack.sh does this, but only if the health gate passed).
+- **Ollama model blobs** (`appdata/ollama/models/`) — each model is 2–5 GB and they accumulate silently, since nothing prunes them. `docker exec ollama ollama list` then `docker exec ollama ollama rm <model>` for anything unused. This is pure reclaim: models re-pull in minutes and nothing else depends on them.
 
 **Emergency**: Unraid Mover can be invoked manually (`mover start`) to flush cache → array. Only moves files from shares where cache is `yes`, not `only` (appdata is `only`, so this doesn't help for appdata itself — but can buy you breathing room on other shares).
 

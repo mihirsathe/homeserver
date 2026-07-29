@@ -186,6 +186,38 @@ Profilarr is the one stack component that isn't fully scripted — its subscript
 
 Profilarr's `/config` is covered by the weekly Appdata Backup, so the subscriptions and selections survive a rebuild.
 
+### Local AI first-run
+
+Ollama starts with an empty model store. Pull a model from the Unraid terminal:
+
+```bash
+docker exec ollama ollama pull llama3.2:3b
+docker exec ollama ollama list
+```
+
+Keep models under ~4 GB so they coexist with a Plex transcode on the 6 GB card; [software.md](software.md#model-sizing) has sizing guidance.
+
+Verify it works:
+
+```bash
+# From the host
+curl -s http://127.0.0.1:11434/api/generate \
+     -d '{"model":"llama3.2:3b","prompt":"say hi","stream":false}'
+
+# From a container on the `ai` network — this is how consumers reach it
+docker run --rm --network ai curlimages/curl -s http://ollama:11434/api/tags
+```
+
+**Exclude the model store from backups.** Appdata Backup → Settings → add `/mnt/user/appdata/ollama` to the exclusion list. Model blobs are multi-GB and re-pullable in minutes; including them grows every weekly archive by tens of GB for no recovery value.
+
+**Attaching an AI app.** Nothing reaches Ollama by default — access is opt-in per container. For a service in this Compose file, add `ai` to its `networks:` list. For a container installed from Community Applications, Docker tab → Edit → **Network Type** → `ai` (the network appears in that dropdown once the stack has been up once, because it's declared `name: ai` rather than taking Compose's project prefix). Point the app at `http://ollama:11434`, and verify from inside it:
+
+```bash
+docker exec <container> curl -fsS http://ollama:11434/api/tags
+```
+
+Note that Ollama has **no authentication** — anything on the `ai` network can also delete models. That network is isolated from the media planes and nothing outside the host can reach it (no Tailscale Service, no `0.0.0.0` bind), but it's why access is opt-in rather than stack-wide.
+
 ---
 
 ## Step 6.5 — Publish the Tailscale Services
