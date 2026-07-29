@@ -86,6 +86,9 @@ networks:
   downloaders:
     name: downloaders
     driver: bridge
+  finance:
+    name: finance
+    driver: bridge
   frontend:
     name: frontend
     driver: bridge
@@ -791,3 +794,138 @@ services:
       resources:
         limits:
           memory: 128M
+
+
+  # ---------------------------------------------------------------------------
+  # ACTUAL BUDGET — envelope / zero-based budgeting sync server
+  #
+  # HTTPS IS PROVIDED BY `tailscale serve`, NOT BY THIS CONTAINER AND NOT BY CADDY.
+  #
+  #   Actual's web client uses SharedArrayBuffer for its SQLite engine, and
+  #   browsers only expose SharedArrayBuffer in a Secure Context — HTTPS, or
+  #   localhost. Over plain HTTP on a LAN hostname it fails with
+  #   SharedArrayBufferMissing: it does not degrade, it does not load. So it
+  #   cannot sit behind Caddy's `auto_https off` plain-HTTP vhost like every
+  #   other admin UI here.
+  #
+  #   One-time setup on the host, persists across reboots:
+  #       tailscale serve --bg http://127.0.0.1:5006
+  #
+  #   Tailscale terminates TLS at https://<node>.<tailnet>.ts.net with a real,
+  #   publicly-trusted cert and proxies to this container on plain HTTP. The
+  #   browser sees HTTPS, so the secure context is satisfied.
+  #
+  #   Why not `tailscale cert` + ACTUAL_HTTPS_KEY/CERT? Because certs handed
+  #   over as files are the caller's problem to renew — tailscaled has no idea
+  #   where they were installed. `tailscale serve` provisions the cert without
+  #   file installation, so Tailscale renews it automatically and there is no
+  #   cron, no script, and no cert files to chown or back up.
+  #
+  #   Knock-on simplifications: this container stays on plain HTTP, so the port
+  #   goes back to loopback per stack convention, the upstream healthcheck works
+  #   unmodified, and actual-ai needs no TLS bypass.
+  #
+  #   Actual sets Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy
+  #   itself (upstream src/app.ts). Nothing must add them a second time —
+  #   duplicated COOP/COEP is its own SharedArrayBufferMissing fatal. Verify
+  #   after setup that `tailscale serve` passes them through untouched.
+  #
+  # USER HANDLING — the one place this image differs from the rest of the stack.
+  # It takes no PUID/PGID env vars and ships NO `USER` directive, so the
+  # published image runs as root. (It creates an `actual` user at uid 1001 via
+  # build args but never switches to it.) We pin 99:100 to stay non-root and
+  # consistent; setup-unraid.sh step 7 creates and chowns the data dir, so there
+  # is no manual step. Dropping the `user:` line also works if you would rather
+  # run it as root.
+  # ---------------------------------------------------------------------------
+  actual_server:
+    image: docker.io/actualbudget/actual-server:latest
+    container_name: actual_server
+    user: "${PUID}:${PGID}"
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - /mnt/user/appdata/actual:/data
+    networks:
+      - finance
+    ports:
+      # Loopback only, per stack convention. `tailscale serve` on the host
+      # proxies https://<node>.<tailnet>.ts.net to this port, so nothing needs
+      # to be exposed on the LAN or bound to the tailnet interface directly.
+      - "127.0.0.1:5006:5006"
+    restart: unless-stopped
+    healthcheck:
+      # Upstream's own script. Works unmodified because this container speaks
+      # plain HTTP — TLS is Tailscale's job.
+      test: ["CMD-SHELL", "node scripts/health-check.js"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # ACTUAL-AI — categorizes transactions Actual's rules engine did not match
+  #
+  # Only ever touches UNCATEGORIZED transactions. Anything you categorize by
+  # hand in the web UI, or that a rule matched, is skipped permanently — so
+  # correcting its work in Actual is the intended workflow, not a fight with
+  # it. Its guesses are tagged in transaction notes so they stay auditable.
+  #
+  # No `depends_on` for Ollama: that server lives outside this compose file.
+  # A run that can't reach it fails, logs, and retries on the next tick.
+  # ---------------------------------------------------------------------------
+  actual-ai:
+    image: docker.io/sakowicz/actual-ai:latest
+    container_name: actual-ai
+    depends_on:
+      actual_server: { condition: service_healthy }
+    environment:
+      - TZ=${TZ}
+      - ACTUAL_SERVER_URL=http://actual_server:5006
+      - ACTUAL_PASSWORD=${ACTUAL_PASSWORD}
+      - ACTUAL_BUDGET_ID=${ACTUAL_BUDGET_ID}
+
+      - LLM_PROVIDER=ollama
+      # In-stack Ollama on the `ai` plane — see .env. Needs the /api suffix.
+      - OLLAMA_BASE_URL=${OLLAMA_URL}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      # Generous: a slow model or a queued request should not wedge a run.
+      - LLM_TIMEOUT_MS=300000
+
+      # Every 4 hours. Import is manual, so a run just picks up whatever was
+      # dropped in since the last one.
+      - CLASSIFICATION_SCHEDULE_CRON=0 */4 * * *
+
+      # dryRun logs proposed changes without touching the budget. Leave it on
+      # for the first several runs — SETUP.md covers going live.
+      #
+      # classifyOnStartup lets you trigger a run on demand with
+      # `docker compose restart actual-ai` rather than waiting for the cron.
+      #
+      # Deliberately ABSENT:
+      #   freeWebSearch              — would send merchant names to DuckDuckGo.
+      #                                Dropped: the whole plane is egress-free.
+      #   syncAccountsBeforeClassify — drives bank-sync connectors this setup
+      #                                does not use. Would be a no-op.
+      - FEATURES=["dryRun", "classifyOnStartup"]
+
+      # Written into transaction notes so you can filter in Actual.
+      # Searching #actual-ai-miss gives you your rules backlog.
+      - GUESSED_TAG=#actual-ai
+      - NOT_GUESSED_TAG=#actual-ai-miss
+
+      # Local inference has no per-minute quota to respect.
+      - REQUESTS_PER_MINUTE=0
+      - TOKENS_PER_MINUTE=0
+    networks:
+      - finance
+      - ai
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M

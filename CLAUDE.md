@@ -2,6 +2,8 @@
 
 Self-hosted **platform** on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. Its tenants — media automation, local LLM inference, personal finance, and a chess webapp — are peers; media is the oldest, not the privileged one. One open router port (TCP 32400 → Plex); every other service is a Tailscale Service (`svc:<name>`) with its own MagicDNS name and certificate, advertised by the host's tailscaled. No reverse proxy. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Ollama shares the transcode GPU with Plex, capped by a static VRAM reservation so Plex always has room.
 
+Also hosts a `finance` plane: Actual Budget with LLM transaction categorization via an external Ollama. Makes no outbound internet calls; bank import is deliberately manual (OFX/QFX). Actual is the one service not behind Caddy — it needs a Secure Context, so `tailscale serve` fronts it with HTTPS.
+
 ---
 
 ## Docs
@@ -57,6 +59,7 @@ homeserver/
 | docker-compose.yml | `/mnt/user/appdata/homeserver/homeserver/` |
 | App configs | `/mnt/user/appdata/<container-name>/` |
 | Downloads in-flight | `/mnt/user/usenet-incomplete/` (cache-only share, SSD) |
+| Actual Budget data | `/mnt/user/appdata/actual/` (SQLite — snapshot with container stopped) |
 | Downloads complete | `/mnt/user/data/usenet/complete/{movies,tv,music}/` |
 | Media library | `/mnt/user/data/media/{movies,tv,music}/` |
 | Plex database | `/mnt/user/appdata/plex/` |

@@ -189,6 +189,30 @@ If it ever stops being the tail, the escalation ladder in order of cost is: rais
 **Not exposed on the LAN.** Nothing binds `0.0.0.0` and the router still forwards only 32400, matching the existing trust model where the LAN is not a trusted plane.
 
 **q8_0 KV cache is on by default.** KV cache VRAM scales linearly with context length and can exceed the weights themselves at 16K context on a 6 GB card. Quantising it to q8_0 halves that for a quality difference that isn't measurable at 3–8B. It requires flash attention, which is enabled unconditionally. `OLLAMA_KV_CACHE_TYPE=f16` in `.env` opts back out.
+### Actual Budget was the forcing function for the ingress rework
+
+Recorded because the reasoning generalised, and because this entry used to
+describe Actual as an exception.
+
+Actual's web client uses `SharedArrayBuffer` for its SQLite engine, and
+browsers only expose that in a **Secure Context** — an `https://` origin. The
+old ingress served every admin UI as plain HTTP at `<name>.lan` behind Caddy
+with `auto_https off`, on the reasoning that Tailscale already encrypts the
+transport. That reasoning is correct about eavesdropping and irrelevant to
+browser capability: the gate is the origin scheme, not whether the bytes are
+encrypted.
+
+So Actual could not use the shared path, and the first fix was to give it its
+own — `tailscale serve` on the host node, a second ingress mechanism for
+exactly one app. That worked, and it was the wrong shape: it made Actual an
+architectural exception when it was really an early warning. Service workers,
+WebCrypto's subtle API and WASM threads sit behind the same gate, so the next
+app to need one would have been the third mechanism.
+
+The resolution was to make Actual's path the *only* path. Every service is now
+a Tailscale Service with a real certificate, which is why this entry no longer
+describes an exception — see the admin ingress entry above.
+
 
 ### Single parity (for now)
 

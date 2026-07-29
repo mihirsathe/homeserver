@@ -71,6 +71,8 @@ GUI must never sit behind anything containerised.
 | seerr | `ghcr.io/seerr-team/seerr` | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
 | tautulli | `hotio/tautulli` | `svc:tautulli` | 8181 (loopback) | Plex analytics, stream history, notifications |
+| actual_server | `actualbudget/actual-server` | `svc:actual` | 5006 (loopback) | Envelope/zero-based budgeting. Needs a Secure Context, which every service now has — see decisions.md |
+| actual-ai | `sakowicz/actual-ai` | — | (none) | Categorizes transactions Actual's rules engine missed, via the in-stack Ollama on the `ai` plane |
 | profilarr | `santiagosayshey/profilarr` | `svc:profilarr` | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 | ollama | `ollama/ollama` | — (no ingress by design) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
 
