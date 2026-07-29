@@ -471,8 +471,20 @@ tar -czf "/mnt/user/backups/appdata/pre-upgrade-$(date +%F-%H%M).tar.gz" \
     radarr sonarr lidarr prowlarr bazarr tautulli sabnzbd seerr profilarr \
     "plex/Library/Application Support/Plex Media Server/Plug-in Support/Databases"
 
-docker compose --env-file .env.docker up -d
+docker compose --env-file .env.docker start
 ```
+
+**`start`, not `up -d`, and this matters.** At this point the compose file on
+disk is still the old one, which defines `caddy` and `adguard` — services that
+are *not* running on a box frozen at its first-setup state. `up -d` reconciles
+the running set against the file and would **create** them: Caddy would fail
+immediately on the invalid Caddyfile, and AdGuard would claim host port 53. You
+would be debugging the ingress you are about to delete, in the middle of taking
+a backup.
+
+`start` restarts exactly the containers that were stopped and creates nothing.
+Use it for every stop/start pair until Section 3.5 puts the new compose file in
+place; after that, `up -d` is correct and intended.
 
 Then **prove the archive is readable** — an unverified backup is not a backup:
 
