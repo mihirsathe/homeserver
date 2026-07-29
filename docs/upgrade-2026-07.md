@@ -46,6 +46,21 @@ stopping to hunt for a token is how a two-hour session becomes a five-hour one.
 | 3 | SSH to the host | `ssh root@<server>` — Tailscale SSH, no password | all |
 | 4 | Confirmation `.env` is still populated | 2.2 checks this for you | 2.2 |
 
+### One shell setting, before anything else
+
+```bash
+git config --global core.pager cat
+```
+
+`git log` pipes through `less` by default, and Unraid's web terminal cannot
+drive a full-screen pager — the session appears to hang or garble. `git status`
+is unaffected, which makes this confusing when you hit it. Every git command
+below also passes `--no-pager` so the runbook works without this setting, but
+setting it once is simpler.
+
+Prefer **SSH from your Mac** over the Unraid web terminal regardless: it pastes
+multi-line blocks reliably and you can copy output back out.
+
 ### Ollama needs nothing from you
 
 No API key, no account, no token. `ollama pull` fetches from
@@ -108,7 +123,7 @@ Run this first; everything else keys off the answer.
 
 ```bash
 cd /mnt/user/appdata/homeserver
-git log -1 --format='%h  %ci  %s'
+git --no-pager log -1 --format='%h  %ci  %s'
 git status --porcelain          # expect empty — see 2.1 if not
 ```
 
@@ -269,7 +284,7 @@ or the compose file on the box. Capture the diff before you pull — the pull wi
 either conflict or the changes will need re-applying:
 
 ```bash
-git diff > /boot/local-edits-$(date +%F).patch
+git --no-pager diff > /boot/local-edits-$(date +%F).patch
 ```
 
 ### 2.2 The env files exist and are populated — this is the single biggest risk
@@ -531,9 +546,9 @@ cd /mnt/user/appdata/homeserver
 
 ```bash
 git fetch origin master
-git log --oneline HEAD..origin/master        # exactly what you're about to apply
+git --no-pager log --oneline HEAD..origin/master   # exactly what you're about to apply
 git merge --ff-only origin/master
-git log -1 --format='%h %s'                  # expect fb50978
+git --no-pager log -1 --format='%h %s'             # expect fb50978
 ```
 
 `--ff-only` refuses to create a merge commit — if it fails, the working tree
