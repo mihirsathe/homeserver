@@ -429,7 +429,12 @@ services:
       - "127.0.0.1:5055:5055"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:5055/api/v1/status || exit 1"]
+      # wget, NOT curl: ghcr.io/seerr-team/seerr is Debian-based and ships no
+      # curl, so the previous probe failed with "curl: not found" on every
+      # interval and this service has never once reported healthy. Do not
+      # "fix" this back to curl — it looks consistent with the *arrs (hotio
+      # images, which do ship curl) and is wrong here.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5055/api/v1/status || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -502,7 +507,9 @@ services:
       - "127.0.0.1:6868:6868"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:6868/ || exit 1"]
+      # wget, NOT curl — santiagosayshey/profilarr ships no curl. Same
+      # never-passed history as seerr above.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:6868/ || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
