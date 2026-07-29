@@ -148,9 +148,10 @@ Actual needs a Secure Context. Check, in order:
 3. Are HTTPS Certificates still enabled for the tailnet (admin console -> DNS)?
 4. Is anything adding COOP/COEP headers in front of Actual? Duplicated
    `Cross-Origin-Embedder-Policy` is itself fatal — Actual sets these itself.
-   Nothing in this stack does add them: `tailscale serve` terminates TLS and
-   forwards, and there is no reverse proxy in the path to inject headers. Worth
-   remembering before adding one.
+   Nothing in this stack does add them, and this was verified on hardware:
+   `tailscale serve` passes Actual's own COOP/COEP through unmodified. There is
+   no reverse proxy in the path to inject a duplicate. Worth remembering before
+   ever adding one.
 
 ## Ollama unreachable (categorization stops)
 

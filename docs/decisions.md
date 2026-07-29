@@ -224,6 +224,15 @@ The resolution was to make Actual's path the *only* path. Every service is now
 a Tailscale Service with a real certificate, which is why this entry no longer
 describes an exception — see the admin ingress entry above.
 
+**Verified on hardware (2026-07-28):** Actual loads and renders over
+`https://actual.<tailnet>.ts.net`. That settles the one assumption this design
+could not check on paper — Actual sets `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Embedder-Policy` itself, a duplicated COEP header is its own
+fatal `SharedArrayBufferMissing`, and whether `tailscale serve` rewrites or
+passes them through is undocumented. It passes them through. Worth keeping in
+mind before ever putting a proxy back in front of this service: the header
+behaviour, not just the scheme, is load-bearing.
+
 
 ### Single parity (for now)
 
