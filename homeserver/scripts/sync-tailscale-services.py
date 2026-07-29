@@ -303,9 +303,14 @@ def main() -> int:
                 print(f"      approve     already approved ({device_id})")
             else:
                 api.approve(svc, device_id)
-                # Approval is not always readable back instantly.
-                confirmed = any(api.is_approved(svc, device_id) or time.sleep(2)
-                                for _ in range(5))
+                # Approval is not always readable back immediately after the
+                # POST, so poll rather than assume either outcome.
+                confirmed = False
+                for _ in range(5):
+                    if api.is_approved(svc, device_id):
+                        confirmed = True
+                        break
+                    time.sleep(2)
                 if confirmed:
                     print(f"      approve     approved + verified ({device_id})")
                 else:
