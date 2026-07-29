@@ -257,7 +257,7 @@ if [[ ! -d /mnt/user ]]; then
     echo "  mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}"
     echo "  mkdir -p /mnt/user/usenet-incomplete"
     echo "  mkdir -p /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach/data"
-    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach"
+    echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach/data"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
     echo ""
 else
@@ -278,13 +278,20 @@ else
     # chess-coach runs as PUID:PGID with no chown-at-start entrypoint (plain
     # python-slim image) — the bind dir must be nobody:users before first up,
     # or docker creates it root-owned and SQLite writes fail.
+    #
+    # ONLY data/ is chowned, deliberately. The parent also holds the GitHub
+    # deploy key and the repo checkout, both of which must stay root-owned:
+    # OpenSSH refuses a private key owned by another user ("bad ownership or
+    # modes"), so a recursive chown of the parent silently breaks every future
+    # `git pull` for coach updates. data/ is the only path bind-mounted into
+    # the container, so it is the only path that needs to change hands.
     mkdir -p /mnt/user/appdata/chess-coach/data
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode
     chown -R nobody:users /mnt/user/appdata/ollama
     chown -R nobody:users /mnt/user/appdata/actual
-    chown -R nobody:users /mnt/user/appdata/chess-coach
+    chown -R nobody:users /mnt/user/appdata/chess-coach/data
     chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete
 
     ok "Folder structure created:"

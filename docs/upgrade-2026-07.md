@@ -145,6 +145,14 @@ RAM-backed and rebuilt from the USB stick on every boot. A key in `/root/.ssh`
 survives until the next reboot and then silently disappears, taking your
 ability to update `coach` with it. On the array it persists.
 
+**Leave this directory root-owned.** `setup-unraid.sh` chowns only
+`/mnt/user/appdata/chess-coach/**data**` — never the parent — because the
+parent also holds this key and the repo checkout. OpenSSH refuses a private key
+owned by another user (`bad ownership or modes`), so a recursive
+`chown -R nobody:users /mnt/user/appdata/chess-coach` silently breaks every
+future `git pull` for coach updates. `data/` is the only path bind-mounted into
+the container, so it is the only path that needs to change hands.
+
 Optional, fine to leave blank:
 
 | Variable | What it buys |
