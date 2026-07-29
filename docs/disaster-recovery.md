@@ -142,17 +142,19 @@ part that actually hurts to lose.
 
 Actual needs a Secure Context. Check, in order:
 
-1. Are you on `https://<node>.<tailnet>.ts.net`? Plain HTTP only works from `localhost`.
+1. Are you on `https://actual.<tailnet>.ts.net`? Plain HTTP only works from `localhost`.
 2. Is serve still configured? `tailscale serve status` should show the proxy to
-   `127.0.0.1:5006`. If empty: `tailscale serve --bg http://127.0.0.1:5006`.
+   `127.0.0.1:5006`. If empty: `tailscale serve --service=svc:actual --bg 127.0.0.1:5006`.
 3. Are HTTPS Certificates still enabled for the tailnet (admin console -> DNS)?
 4. Is anything adding COOP/COEP headers in front of Actual? Duplicated
-   `Cross-Origin-Embedder-Policy` is itself fatal — Actual sets these itself, which is
-   part of why it is deliberately not a Caddy vhost.
+   `Cross-Origin-Embedder-Policy` is itself fatal — Actual sets these itself.
+   Nothing in this stack does add them: `tailscale serve` terminates TLS and
+   forwards, and there is no reverse proxy in the path to inject headers. Worth
+   remembering before adding one.
 
 ## Ollama unreachable (categorization stops)
 
-Not an outage of this stack — Ollama lives outside it. actual-ai logs the failure and
+Ollama is in this stack now, on the `ai` plane. actual-ai logs the failure and
 retries on the next cron tick; imports, the budget, and the web UI are all unaffected.
 Uncategorized transactions simply stay uncategorized, and you can categorize them by hand
 in the meantime.
