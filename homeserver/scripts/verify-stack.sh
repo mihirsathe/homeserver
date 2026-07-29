@@ -134,13 +134,27 @@ else
         # a proxy mapping for each service. Reachability and certificate
         # validity have to be checked from a different device.
         serve_json=$(tailscale serve status --json 2>/dev/null)
-        for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach; do
-            if grep -q "svc:$s" <<<"$serve_json"; then
-                ok "svc:$s advertised by this host"
-            else
-                warn "svc:$s not advertised here (python3 scripts/sync-tailscale-services.py)"
-            fi
-        done
+        if grep -q 'svc:' <<<"$serve_json"; then
+            # The CLI does surface service proxies here, so per-service state
+            # is meaningful.
+            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach; do
+                if grep -q "svc:$s" <<<"$serve_json"; then
+                    ok "svc:$s advertised by this host"
+                else
+                    warn "svc:$s not advertised here (python3 scripts/sync-tailscale-services.py)"
+                fi
+            done
+        else
+            # `tailscale serve status` reports "No serve config" even when
+            # service proxies are advertised and working — they are tracked
+            # separately from ordinary serve entries. Reporting eleven warnings
+            # from that silence would be inventing a problem, so say what is
+            # actually known and point at the tool that can answer properly.
+            printf '  \033[36m·\033[0m %s\n' \
+                "serve CLI does not expose service proxies on this version — not a fault"
+            printf '  \033[36m·\033[0m %s\n' \
+                "authoritative check: python3 scripts/sync-tailscale-services.py"
+        fi
         printf '  \033[36m·\033[0m %s\n' \
             "URLs + certs must be checked from ANOTHER tailnet device:  https://radarr.$TAILNET/"
     else

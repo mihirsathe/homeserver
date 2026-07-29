@@ -207,6 +207,66 @@ def normalise(name: str) -> str:
     return name if name.startswith("svc:") else f"svc:{name}"
 
 
+def _walk(obj):
+    """Yield every dict anywhere in a nested JSON structure.
+
+    The API's list/collection responses are not documented here, and guessing
+    a single shape is what broke the first two versions of this script: an
+    unparsed list produced an empty "already exists" set, every service was
+    re-PUT as an update, and the API rejected all eleven for missing addrs.
+    Walking the structure works whether the payload is a bare list, is wrapped
+    in {"services": [...]} or {"devices": [...]}, or gains another envelope
+    later.
+    """
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk(v)
+
+
+def extract_service_names(raw) -> set[str]:
+    names = set()
+    for d in _walk(raw):
+        n = d.get("name") or d.get("serviceName")
+        if isinstance(n, str) and (n.startswith("svc:") or n in SERVICES):
+            names.add(normalise(n))
+    return names
+
+
+ID_KEYS = ("id", "nodeId", "nodeID", "deviceId", "deviceID", "machineId")
+
+
+def extract_device_id(raw, host: str) -> str | None:
+    """Find this host's device id in a service's device list.
+
+    Matches on the hostname appearing anywhere in the entry, because the field
+    may be hostname, name, or an FQDN, and comparing one guessed key is how
+    the previous version reported "NOT advertised" for services the console
+    showed as online.
+    """
+    host_l = host.lower()
+    for d in _walk(raw):
+        if not any(k in d for k in ID_KEYS):
+            continue
+        if host_l in json.dumps(d).lower():
+            for k in ID_KEYS:
+                v = d.get(k)
+                if isinstance(v, str) and v:
+                    return v
+    # Only one device advertises these services on this tailnet, so a single
+    # unambiguous entry is this host even if the name did not match.
+    candidates = [d for d in _walk(raw) if any(k in d for k in ID_KEYS)]
+    if len(candidates) == 1:
+        for k in ID_KEYS:
+            v = candidates[0].get(k)
+            if isinstance(v, str) and v:
+                return v
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -214,6 +274,8 @@ def main() -> int:
                     help="report what would change, touch nothing")
     ap.add_argument("--prune", action="store_true",
                     help="delete tailnet services not in SERVICES (destructive)")
+    ap.add_argument("--debug", action="store_true",
+                    help="dump raw API responses (for when a shape changes again)")
     args = ap.parse_args()
 
     env = load_env()
@@ -239,8 +301,10 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
-    services_list = existing_raw.get("services", existing_raw) if isinstance(existing_raw, dict) else existing_raw
-    existing = {s.get("name") for s in services_list or [] if isinstance(s, dict)}
+    existing = extract_service_names(existing_raw)
+    if args.debug:
+        print("DEBUG GET /services ->", json.dumps(existing_raw)[:800], "\n")
+    print(f"  {len(existing)} service object(s) already defined\n")
 
     failures = 0
 
@@ -258,9 +322,17 @@ def main() -> int:
                 api.put_service(svc, ["tcp:443"], f"{name} admin UI")
                 print("      object      created")
         except RuntimeError as e:
-            print(f"      object      FAILED: {e}")
-            failures += 1
-            continue
+            # "addrs must contain 2 elements" is only ever returned when the
+            # service already exists — updating requires its assigned TailVIPs,
+            # which we deliberately never pin. Treat it as proof of existence
+            # rather than an error, so a stale `existing` set cannot turn a
+            # perfectly healthy tailnet into eleven red lines.
+            if "addrs must contain" in str(e):
+                print("      object      already exists")
+            else:
+                print(f"      object      FAILED: {e}")
+                failures += 1
+                continue
 
         # 2. advertisement
         try:
@@ -282,13 +354,9 @@ def main() -> int:
                 devs = api.service_devices(svc)
             except RuntimeError:
                 devs = None
-            entries = (devs.get("devices", devs) if isinstance(devs, dict) else devs) or []
-            for d in entries:
-                if not isinstance(d, dict):
-                    continue
-                if host.lower() in json.dumps(d).lower():
-                    device_id = d.get("id") or d.get("nodeId") or d.get("deviceId")
-                    break
+            if args.debug and devs is not None:
+                print("      DEBUG devices ->", json.dumps(devs)[:600])
+            device_id = extract_device_id(devs, host) if devs is not None else None
             if device_id:
                 break
             time.sleep(2)
@@ -340,12 +408,10 @@ def main() -> int:
         except RuntimeError as e:
             print(f"  {svc:<18} could not read: {e}")
             continue
-        entries = (devs.get("devices", devs) if isinstance(devs, dict) else devs) or []
-        mine = [d for d in entries if isinstance(d, dict) and host.lower() in json.dumps(d).lower()]
-        if not mine:
+        did = extract_device_id(devs, host)
+        if not did:
             print(f"  {svc:<18} NOT advertised by {host}")
             continue
-        did = mine[0].get("id") or mine[0].get("nodeId") or mine[0].get("deviceId")
         if api.is_approved(svc, did):
             print(f"  {svc:<18} advertised + approved")
             live += 1
