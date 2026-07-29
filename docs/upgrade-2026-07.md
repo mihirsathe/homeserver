@@ -69,6 +69,40 @@ Sync ID, and — this is the trap — it will not *complain* either.
 **Bank import is deliberately manual (OFX/QFX).** No credentials, no
 aggregator, no outbound calls. Nothing to gather.
 
+### Chess coach: a credential for the private repo — get this first
+
+`coach` is the one service built from source, and
+[mihirsathe/chess-coach](https://github.com/mihirsathe/chess-coach) is
+**private**, so the server needs its own read access. No PR covers this; it is
+the most likely thing to stall the run.
+
+**Use a deploy key, not a PAT** — scoped to this one repo, read-only, and it
+cannot be replayed against the rest of your account.
+
+Generate it on the server **before** the run:
+
+```bash
+mkdir -p /mnt/user/appdata/chess-coach
+ssh-keygen -t ed25519 -N "" -C "chess-coach deploy" \
+    -f /mnt/user/appdata/chess-coach/deploy_key
+cat /mnt/user/appdata/chess-coach/deploy_key.pub
+```
+
+Paste that public key into GitHub → the repo → **Settings → Deploy keys → Add
+deploy key**. Leave "Allow write access" **unchecked**.
+
+**Why `/mnt/user/appdata` and not `/root/.ssh`:** Unraid's root filesystem is
+RAM-backed and rebuilt from the USB stick on every boot. A key in `/root/.ssh`
+survives until the next reboot and then silently disappears, taking your
+ability to update `coach` with it. On the array it persists.
+
+Optional, both fine to leave blank:
+
+| Variable | What it buys |
+|----------|--------------|
+| `LICHESS_TOKEN` | Publishing annotated studies back to Lichess (scope `study:write`). Game sync works without it via the public API. |
+| `ANTHROPIC_API_KEY` | Only if you want the *hosted* Claude backend instead of the local Ollama. The default is Ollama, which needs no key. |
+
 ### You will NOT be asked for these
 
 They existed for the old ingress and are gone: **`TS_AUTHKEY`**,
@@ -1038,6 +1072,94 @@ without touching the budget. **Leave it on for several runs.** Read what it
 proposes first; an LLM confidently miscategorising months of transactions is
 tedious to unpick, and the whole point of the tag pair (`#actual-ai` /
 `#actual-ai-miss`) is that you can filter and audit before trusting it.
+
+---
+
+## Section 4.7 — Chess coach
+
+Requires 4.5 green (Ollama is `coach`'s LLM backend) and the deploy key from
+Section 0 already registered on GitHub.
+
+### 4.7a Clone the private repo
+
+```bash
+export GIT_SSH_COMMAND="ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes"
+git clone git@github.com:mihirsathe/chess-coach.git \
+    /mnt/user/appdata/chess-coach/repo
+```
+
+**Gate:** the clone completes. `Permission denied (publickey)` means the deploy
+key isn't registered or `GIT_SSH_COMMAND` isn't exported in *this* shell.
+
+### 4.7b Build
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker build coach
+```
+
+This compiles Stockfish and is the slowest single step in the run — several
+minutes, and it is CPU-bound on all 24 cores. Expect the box to get loud.
+
+### 4.7c Start it
+
+```bash
+docker compose --env-file .env.docker up -d coach
+docker compose --env-file .env.docker ps coach
+```
+
+**Gate:** `(healthy)`.
+
+**If it restart-loops with a permissions error**, the data bind is root-owned:
+
+```bash
+chown -R nobody:users /mnt/user/appdata/chess-coach
+docker compose --env-file .env.docker restart coach
+```
+
+### 4.7d Publish it
+
+```bash
+tailscale serve --service=svc:coach --bg 127.0.0.1:8000
+```
+
+**Gate:** `https://coach.<tailnet>.ts.net/` loads.
+
+### 4.7e Verify it reaches Ollama — the silent one
+
+```bash
+docker inspect coach --format '{{json .NetworkSettings.Networks}}' | python3 -m json.tool | grep -E '"(ai|frontend)"'
+docker exec coach python -c "import urllib.request;print(urllib.request.urlopen('http://ollama:11434/api/tags').status)"
+```
+
+**Gate:** both networks present, and `200`.
+
+This check exists because the failure is invisible from the UI. If `coach`
+can't reach Ollama it falls back to facts-only template reports, which look
+exactly like `CHESS_COACH_LLM_BACKEND=none` working correctly — no error, no
+warning, just narrative reports that never appear. Generate one report and
+confirm it has prose in it, not only move lists.
+
+### 4.7f Know how updates work
+
+`update-stack.sh` will **never** update `coach`. It is a `build:` service with
+no `image:`, so the monthly image pull skips it entirely and always will.
+Updating is manual:
+
+```bash
+export GIT_SSH_COMMAND="ssh -i /mnt/user/appdata/chess-coach/deploy_key -o IdentitiesOnly=yes"
+cd /mnt/user/appdata/chess-coach/repo && git pull
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker build coach
+docker compose --env-file .env.docker up -d coach
+```
+
+### 4.7g GPU note
+
+`coach` requests the nvidia runtime for lc0 + Maia, which is **phase 2** and
+not active at first deploy. Stockfish is CPU-only. So at this point three
+containers hold a GPU claim but only Plex and Ollama actually allocate VRAM —
+worth knowing before reading `nvidia-smi` and being alarmed by the process list.
 
 ---
 
