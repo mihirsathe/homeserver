@@ -2,7 +2,7 @@
 
 Self-hosted **platform** on Dell PowerEdge R640 + MD1400 DAS, running Unraid Pro. Docker Compose-based. Its tenants — media automation, local LLM inference, personal finance, and a chess webapp — are peers; media is the oldest, not the privileged one. One open router port (TCP 32400 → Plex); every other service is a Tailscale Service (`svc:<name>`) with its own MagicDNS name and certificate, advertised by the host's tailscaled. No reverse proxy. SAB + Prowlarr egress through Gluetun (Mullvad WireGuard) with kill-switch. Ollama shares the transcode GPU with Plex, capped by a static VRAM reservation so Plex always has room.
 
-Also hosts a `finance` plane: Actual Budget with LLM transaction categorization via an external Ollama. Makes no outbound internet calls; bank import is deliberately manual (OFX/QFX). Actual is the one service not behind Caddy — it needs a Secure Context, so `tailscale serve` fronts it with HTTPS.
+Also hosts a `finance` plane: Actual Budget with LLM transaction categorization via an external Ollama. Makes no outbound internet calls; bank import is deliberately manual (OFX/QFX). Actual needs a Secure Context (`SharedArrayBuffer`), which every service here has — it is fronted by `svc:actual` like every other UI, not by anything special. It was the forcing function for dropping the plain-HTTP ingress; see decisions.md.
 
 ---
 
@@ -49,7 +49,7 @@ homeserver/
 - **Networks defined in Compose, not `external: true`** — Docker restarts on every Unraid boot
 - **Never commit `.env`** — use `.env.example` as the template
 - **No Compose Manager plugin** — Unraid ships `docker compose`; we run it from `media_stack_up` User Script instead
-- **Local-AI consumers join the `ai` network and use `http://ollama:11434`** — access is opt-in; no existing stack container is on `ai`. Ollama has no auth, so network membership is the access control. The network is declared `name: ai` (not the Compose-prefixed default) so Unraid-template containers can join it from the Docker tab. Caddy is deliberately not on `ai`, so there is no `ollama.lan` and nothing on the tailnet can reach it.
+- **Local-AI consumers join the `ai` network and use `http://ollama:11434`** — access is opt-in; no existing stack container is on `ai`. Ollama has no auth, so network membership is the access control. The network is declared `name: ai` (not the Compose-prefixed default) so Unraid-template containers can join it from the Docker tab. Ollama is deliberately advertised as no Tailscale Service, so nothing on the tailnet can reach it — it has no authentication, and reaching `:11434` means being able to delete every model on the box.
 
 ---
 
