@@ -31,6 +31,58 @@ covered below.
 
 ---
 
+## Section 0 — Everything you need in hand before we start
+
+The point of this section is that **nothing on this list gets discovered
+mid-run**. Gather it all first; the run is a paste-back loop over SSH and
+stopping to hunt for a token is how a two-hour session becomes a five-hour one.
+
+### Have these before typing anything
+
+| # | What | Where to get it | Used in |
+|---|------|-----------------|---------|
+| 1 | A browser logged into the **Tailscale admin console** | [login.tailscale.com](https://login.tailscale.com/) | 3.2 |
+| 2 | **`TAILNET_NAME`** — your MagicDNS domain, no leading dot | `tailscale status` on the host, or console → DNS → Tailnet name | 3.4 |
+| 3 | SSH to the host | `ssh root@<server>` — Tailscale SSH, no password | all |
+| 4 | Confirmation `.env` is still populated | 2.2 checks this for you | 2.2 |
+
+### Ollama needs nothing from you
+
+No API key, no account, no token. `ollama pull` fetches from
+`registry.ollama.ai` over the `ai` bridge, which is deliberately not
+`internal: true` for exactly that reason. Budget bandwidth and ~2.5 GB of disk
+for `llama3.2:3b`, not attention.
+
+### You will NOT be asked for these
+
+They existed for the old ingress and are gone: **`TS_AUTHKEY`**,
+**`CADDY_TAILNET_IP`**, **`CADDY_TS_HOSTNAME`**, **AdGuard's admin password**.
+If a doc still asks for one, it is stale.
+
+### Only if something has gone wrong
+
+| What | When |
+|------|------|
+| **Plex claim token** ([plex.tv/claim](https://plex.tv/claim), 4-minute expiry) | Only if Plex's appdata is lost. Not expected — the existing server identity persists. |
+| **Unraid root password** | Only if Tailscale SSH fails and you need the web terminal. |
+
+### The one-way step, stated plainly
+
+Everything before **3.7** (`bootstrap.py`) is reversible from the Section 2.3
+backup. `bootstrap.py` rewrites the *arr databases and **3.9** migrates them
+forward with new images. After that, rollback means restoring appdata, not
+re-running a script. Section 4 is the gate between the two halves — do not
+start it late at night.
+
+### Access, throughout
+
+The Unraid GUI on host `:80` and Tailscale SSH are untouched by every step
+below. On Unraid, stopping the array stops Docker, so those two are
+deliberately the only paths that never depend on a container. If you ever feel
+lost, they are the way back in.
+
+---
+
 ## Section 1 — What changed
 
 ### 1.1 Find out where you actually are
@@ -821,6 +873,81 @@ The real test of 3.8. When convenient:
 docker compose --env-file .env.docker ps      # everything back up, healthy
 curl -fsS http://radarr.lan/ping              # from the Mac
 ```
+
+---
+
+## Section 4.5 — Ollama
+
+Only start this once Section 4 is green. Ollama is additive and reversible —
+it touches no existing service — but there is no reason to debug two things at
+once.
+
+### 4.5a Bring it up
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker up -d ollama
+docker compose --env-file .env.docker ps ollama
+```
+
+**Gate:** `(healthy)`. First start unpacks CUDA libraries before the API
+answers, so allow the 60s `start_period` — "starting" is not a failure yet.
+
+### 4.5b Confirm it actually got the GPU
+
+```bash
+docker exec ollama nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
+```
+
+**Gate:** the RTX 3050 is listed. If this fails, the container is running
+CPU-only — everything below still "works" but at unusable speed, and the
+failure is silent otherwise.
+
+### 4.5c Pull the model
+
+```bash
+docker exec ollama ollama pull llama3.2:3b
+docker exec ollama ollama list
+```
+
+**Gate:** `llama3.2:3b` listed at ~2 GB.
+
+**If this fails with a permission error**, the appdata bind is root-owned —
+that is the bug this branch fixes in `setup-unraid.sh`, but an existing
+directory won't be fixed retroactively:
+
+```bash
+chown -R nobody:users /mnt/user/appdata/ollama
+docker compose --env-file .env.docker restart ollama
+```
+
+### 4.5d Prove inference works and VRAM comes back
+
+```bash
+docker exec ollama ollama run llama3.2:3b "Reply with exactly: ok" --verbose 2>&1 | tail -20
+nvidia-smi --query-gpu=memory.used --format=csv    # model resident
+sleep 90
+nvidia-smi --query-gpu=memory.used --format=csv    # should have dropped
+```
+
+**Gate:** a coherent reply, and VRAM use falls after ~90s. That second half is
+`OLLAMA_KEEP_ALIVE=60s` doing its job — it is what keeps Plex's headroom
+available, so it is worth seeing once rather than trusting.
+
+### 4.5e Confirm Plex still has room
+
+```bash
+nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv
+```
+
+**Gate:** with a model resident, free VRAM should still be ≥ 2 GiB — that is
+`OLLAMA_GPU_OVERHEAD` holding the reservation. If it isn't, stop and raise
+`OLLAMA_GPU_OVERHEAD_BYTES` before going further; every later tenant assumes
+this reservation holds.
+
+**Ollama gets no Tailscale Service.** It has no authentication, so reaching
+`:11434` means being able to delete every model on the box. Network membership
+is the access control. Do not "just add a service to test it."
 
 ---
 
