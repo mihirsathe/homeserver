@@ -35,6 +35,7 @@ homeserver/
     ├── setup-unraid.sh        ← Unraid-specific setup (plugins, shares, folder structure)
     ├── setup-fan-control.sh   ← opt-in iDRAC fan control (run only if needed)
     ├── sync-tailscale-services.py ← create/advertise/approve every svc: (idempotent)
+    ├── verify-stack.sh        ← one-command health check (read-only, re-runnable)
     ├── update-stack.sh        ← monthly image-pull + redeploy + health gate
     ├── backup-appdata.sh      ← weekly backup verification + optional offsite copy
     └── restore-appdata.sh     ← interactive restore helper

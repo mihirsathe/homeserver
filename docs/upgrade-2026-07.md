@@ -978,6 +978,21 @@ databases. That migration is the one-way step from 2.9.
 
 ## Section 4 — Post-upgrade verification
 
+**Run the script first**, then work the sections below for anything it flags:
+
+```bash
+bash scripts/verify-stack.sh
+```
+
+It covers every check in this section plus the ingress, AI-plane and exposure
+assertions from Sections 5–7, and it is read-only — safe to re-run at any point,
+including while debugging. `--quick` skips the hardlink and VPN-egress checks,
+which are the slow ones.
+
+Worth re-running monthly rather than only at deploy: three of its assertions
+(appdata ownership, only-Plex-is-public, the GPU reservation holding) catch
+conditions that develop silently over time.
+
 ### 4.1 Everything is healthy
 
 ```bash
