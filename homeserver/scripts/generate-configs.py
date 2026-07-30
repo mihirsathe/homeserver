@@ -413,7 +413,17 @@ pause_on_post_processing = 0
 enable_par_cleanup = 1
 cleanup_list = .nfo, .sfv, .jpg, .png, .nzb
 fail_on_fail = 0
-history_retention = 30
+# History retention. Modern SABnzbd ignores the bare `history_retention` key
+# that used to live here — it reads history_retention_option plus
+# history_retention_number. Writing the old key silently did nothing, SAB fell
+# back to its default of "all", and nothing ever pruned complete/. Found on the
+# live box with 127 retained job folders totalling 324 GB, including failed
+# unpacks and five copies of the same episode.
+#
+# "days" + 14 keeps a two-week window: long enough to notice and re-import a
+# job that went wrong, short enough that the buffer stays bounded.
+history_retention_option = days
+history_retention_number = 14
 history_limit = 200
 dupl_priority = -100
 check_new_rel = 0
