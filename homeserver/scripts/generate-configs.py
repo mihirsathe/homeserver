@@ -413,15 +413,25 @@ pause_on_post_processing = 0
 enable_par_cleanup = 1
 cleanup_list = .nfo, .sfv, .jpg, .png, .nzb
 fail_on_fail = 0
-# History retention. Modern SABnzbd ignores the bare `history_retention` key
-# that used to live here — it reads history_retention_option plus
-# history_retention_number. Writing the old key silently did nothing, SAB fell
-# back to its default of "all", and nothing ever pruned complete/. Found on the
-# live box with 127 retained job folders totalling 324 GB, including failed
-# unpacks and five copies of the same episode.
+# History retention. SABnzbd's live config exposes history_retention_option
+# (all/number/days) plus history_retention_number; a bare `history_retention`
+# key also appears but reads empty, which suggests it is legacy. This writes
+# the option/number pair because that is what the running instance actually
+# reports, not because the old key was proven inert — on the live box the
+# template had never been applied at all, so the old key was never in play.
+#
+# Whichever key SAB reads, the default when nothing is set is "all": keep
+# every completed job forever. That is what produced 127 retained job folders
+# and 324 GB on the live box, including failed unpacks and five copies of the
+# same episode from repeated re-grabs.
 #
 # "days" + 14 keeps a two-week window: long enough to notice and re-import a
 # job that went wrong, short enough that the buffer stays bounded.
+#
+# NOTE: this file is only written on a fresh install. generate-configs.py
+# preserves an existing sabnzbd.ini and writes sabnzbd.ini.new alongside it,
+# so changing this does NOT alter a running box — set it via SAB's API or UI
+# there, or reconcile the .new file deliberately.
 history_retention_option = days
 history_retention_number = 14
 history_limit = 200
