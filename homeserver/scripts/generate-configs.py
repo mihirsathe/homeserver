@@ -413,12 +413,10 @@ pause_on_post_processing = 0
 enable_par_cleanup = 1
 cleanup_list = .nfo, .sfv, .jpg, .png, .nzb
 fail_on_fail = 0
-# History retention. SABnzbd's live config exposes history_retention_option
-# (all/number/days) plus history_retention_number; a bare `history_retention`
-# key also appears but reads empty, which suggests it is legacy. This writes
-# the option/number pair because that is what the running instance actually
-# reports, not because the old key was proven inert — on the live box the
-# template had never been applied at all, so the old key was never in play.
+# History retention. Verified against a running SABnzbd 4.x: it maintains
+# BOTH `history_retention = ""` and the pair `history_retention_option` /
+# `history_retention_number` in its own config file, and the option is what
+# governs. Default is "all" — keep every completed job forever.
 #
 # Whichever key SAB reads, the default when nothing is set is "all": keep
 # every completed job forever. That is what produced 127 retained job folders
