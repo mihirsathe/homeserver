@@ -179,14 +179,19 @@ def main() -> int:
                     print(f"  COPY  {human(st_s.st_size):>8}  {name}")
                     continue
 
-                # Link to a temp name beside the duplicate, then rename over
-                # it. rename(2) is atomic, so the path never stops existing.
-                tmp = src.with_name(src.name + ".hltmp")
+                # Operate on the RESOLVED disk paths (rs/rd), never on the
+                # /mnt/user ones. shfs is its own device: linking a real disk
+                # inode to a path under /mnt/user is a cross-device link and
+                # fails with EXDEV even when both files are physically on the
+                # same disk. Resolving only for the st_dev comparison and then
+                # operating through FUSE is exactly that mistake, and it makes
+                # every same-disk pair look unfixable.
+                tmp = rs.with_name(rs.name + ".hltmp")
                 try:
                     if tmp.exists():
                         tmp.unlink()
                     os.link(rd, tmp)
-                    os.replace(tmp, src)
+                    os.replace(tmp, rs)
                     print(f"  LINKED {human(st_s.st_size):>8}  {name}")
                 except OSError as e:
                     print(f"  FAILED {name}: {e}")
