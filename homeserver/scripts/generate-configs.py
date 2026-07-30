@@ -413,10 +413,16 @@ pause_on_post_processing = 0
 enable_par_cleanup = 1
 cleanup_list = .nfo, .sfv, .jpg, .png, .nzb
 fail_on_fail = 0
-# History retention. Verified against a running SABnzbd 4.x: it maintains
-# BOTH `history_retention = ""` and the pair `history_retention_option` /
-# `history_retention_number` in its own config file, and the option is what
-# governs. Default is "all" — keep every completed job forever.
+# History retention bounds the HISTORY LIST only. It does not reclaim disk:
+# upstream never supported delete-files for successfully completed jobs,
+# because sorting rules and user scripts make the final location unknowable
+# to SAB. Deleting the files is the *arr's job, via removeCompletedDownloads
+# in bootstrap.py — do not look here for that.
+#
+# Verified against a running SABnzbd 4.x: it maintains both
+# `history_retention = ""` and the `history_retention_option` /
+# `history_retention_number` pair, and the option is what governs. Default is
+# "all", which is why an untouched instance keeps every job forever.
 #
 # Whichever key SAB reads, the default when nothing is set is "all": keep
 # every completed job forever. That is what produced 127 retained job folders

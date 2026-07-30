@@ -271,16 +271,29 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
     #     drifted from desired (host, port, urlBase, etc.) without losing
     #     unrelated *arr-side state.
     #
-    # removeCompletedDownloads=False so the *arr leaves SAB's queue/history
-    # entry in place after import — Radarr's health check warns when this
-    # is True (the default) because the *arr can race SAB's post-processing
-    # and remove the entry before import finishes. SAB's history_retention
-    # handles cleanup independently.
+    # removeCompletedDownloads=True: after a successful import the *arr tells
+    # SAB to remove the job, which is what actually deletes the files under
+    # usenet/complete. The *arr is the only component that CAN do this — it
+    # is the one that knows the import succeeded and where the file went.
+    #
+    # This was False, justified by "SAB's history_retention handles cleanup
+    # independently". That is wrong. SABnzbd's history retention moves or
+    # deletes HISTORY ENTRIES only; upstream is explicit that delete-files was
+    # never supported for successfully completed jobs, because sorting rules
+    # and user scripts make the final location unknowable to SAB. With this
+    # False and nothing else cleaning up, complete/ reached 324 GB across 127
+    # job folders on the live box — including _UNPACK_ failures, a _FAILED_
+    # job, and five copies of the same episode from repeated re-grabs.
+    #
+    # The removal fires only after a successful import, so it does not race
+    # post-processing. The separate *arr health warning about removing
+    # completed downloads concerns the DOWNLOAD CLIENT auto-deleting on its
+    # own schedule, which is a different setting and still off.
     #
     # host=gluetun because SAB shares gluetun's netns; from any other
     # container's POV the SAB UI lives at gluetun:8080. Docker DNS for
     # "sabnzbd" doesn't resolve.
-    desired_top = {"removeCompletedDownloads": False}
+    desired_top = {"removeCompletedDownloads": True}
     desired_fields = {
         "host":         "gluetun",
         "port":         8080,
