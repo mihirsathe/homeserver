@@ -201,6 +201,12 @@ Storage: 500GB–2TB on the array for 30–90 day retention of event clips. Cont
 
 *Goal: Replace cloud subscriptions with self-hosted alternatives.*
 
+> **Status:** Nextcloud is **deployed**. It runs as four containers on a closed `cloud`
+> plane with PostgreSQL and Redis, files on the array in their own share, published as
+> `svc:nextcloud`. See [software.md](../software.md#personal-cloud) for the deployed
+> design and [decisions.md](../decisions.md) for why it is Nextcloud rather than
+> OpenCloud, Seafile or Nextcloud AIO. The rest of this phase is still future work.
+
 ### 7.1 Service Catalog
 
 | Service | Replaces | Container | Notes |
@@ -221,7 +227,7 @@ Tailscale is already the admin plane in today's stack — not a Phase-7 addition
 
 ### 7.2 Key Services
 
-**Nextcloud**: deploy with PostgreSQL + Redis. Store data on array. Reach it over Tailscale (same admin plane as the rest of the stack). Budget 2–4GB RAM.
+**Nextcloud**: ~~deploy with~~ **deployed** with PostgreSQL + Redis, data on the array, reached over Tailscale as `svc:nextcloud`. The 2–4 GB RAM budget held — the plane declares 4 GB of ceilings across four containers, which took the stack total to 30.75 GB of 32 GB and makes §1.2 (RAM to 128 GB) the next thing to do rather than a nice-to-have.
 
 **Immich**: store photo library on array, back up to Backblaze B2 — personal photos are irreplaceable. Can use the RTX 3050 for faster ML inference.
 

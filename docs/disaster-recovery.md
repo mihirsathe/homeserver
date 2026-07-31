@@ -160,6 +160,98 @@ retries on the next cron tick; imports, the budget, and the web UI are all unaff
 Uncategorized transactions simply stay uncategorized, and you can categorize them by hand
 in the meantime.
 
+## Nextcloud data loss or corruption
+
+**The one entry in this document about data that cannot be re-sourced.** Media can be
+re-downloaded and the *arr config rebuilt; personal files cannot. Read
+[software.md](software.md#personal-cloud) before improvising here.
+
+Two independent stores, and which one is damaged decides everything:
+
+| Damaged | Symptom | Restore from |
+|---------|---------|--------------|
+| Database | Nextcloud 500s, "internal server error", login fails | `/mnt/cache/appdata/nextcloud-dump/*.sql.gz` |
+| User files | Files missing from the UI or from disk | `BACKUP_NEXTCLOUD_REMOTE` |
+| Both | Array or cache-pool loss | Both, in that order |
+
+### Database restore
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker stop nextcloud nextcloud-cron
+
+DUMP=$(ls -t /mnt/cache/appdata/nextcloud-dump/*.sql.gz | head -1); echo "$DUMP"
+zcat "$DUMP" | docker exec -i nextcloud-db psql -U nextcloud -d nextcloud \
+    -v ON_ERROR_STOP=1 --single-transaction
+
+docker compose --env-file .env.docker up -d nextcloud nextcloud-cron
+docker exec -u www-data nextcloud php occ maintenance:mode --off
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+`ON_ERROR_STOP=1 --single-transaction` are not optional either, and this is the one place
+a restore quietly lies. In the common case — Nextcloud 500s but the database still exists —
+the dump's `DROP ... IF EXISTS` / `CREATE` sequence works, but any error mid-stream would
+otherwise scroll past and **psql would still exit 0**, reporting a successful restore that
+changed nothing. `ON_ERROR_STOP` makes the first error fatal; `--single-transaction` means a
+failure rolls back rather than leaving the database half-restored. (`backup-appdata.sh`
+dumps with `--clean --if-exists` so the drops are there to begin with.)
+
+The `files:scan` is not optional. The dump is older than the files on disk by up to a week,
+so it will reference files that have since been added or removed; the scan reconciles the
+database to what is actually there. This is the benign direction the backup ordering was
+designed for.
+
+### User-file restore
+
+```bash
+rclone copy "$BACKUP_NEXTCLOUD_REMOTE" /mnt/user/nextcloud --progress
+chown -R 33:33 /mnt/user/nextcloud          # www-data, NOT nobody:users
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+**`33:33`, not `nobody:users`.** Nextcloud runs as `www-data`; a reflexive
+`chown -R nobody:users` here is the same mistake as running Unraid's New Permissions tool,
+and it will leave every file unreadable to the app. `verify-stack.sh` checks for exactly
+this.
+
+Previews are excluded from the offsite copy and will not come back — that is intended, they
+regenerate on demand.
+
+### If both are gone
+
+1. Rebuild the array and pool per the entries above.
+2. `python3 scripts/generate-configs.py` — recreates the directories. **Keep the existing
+   `generated.env`**: a fresh one re-rolls `NEXTCLOUD_DB_PASSWORD`, and the restored
+   database still expects the old one.
+3. `docker compose --env-file .env.docker up -d nextcloud-db nextcloud-redis` and wait for
+   healthy.
+4. Restore the database, then the files, then `occ files:scan --all`.
+
+**What you lose**: up to a week of changes, since the backup is weekly. If that window is
+too wide for how the household actually uses this, shorten the `media_stack_backup` User
+Script schedule — the script is idempotent and safe to run daily.
+
+## Nextcloud is stuck in maintenance mode
+
+**Symptom**: every page shows "This server is in maintenance mode". `docker ps` shows the
+container healthy — `status.php` deliberately answers 200 during maintenance so the weekly
+backup window does not flip it unhealthy.
+
+Almost always a `backup-appdata.sh` run that was killed hard enough that its `trap` never
+fired (an OOM kill, a host reset mid-backup). The fix is one command:
+
+```bash
+docker exec -u www-data nextcloud php occ maintenance:mode --off
+```
+
+Then check why: `grep -i nextcloud /var/log/homeserver/backup.log | tail -20`. If the run
+aborted partway, the database dump may be missing or truncated — re-run
+`bash scripts/backup-appdata.sh` by hand rather than waiting a week for the next one.
+
+`verify-stack.sh` reports this in its Cloud plane section, which is the intended way to
+notice it rather than by a household member complaining.
+
 ## Tailscale admin plane down
 
 **Symptom**: `mediaserver.<tailnet>.ts.net` doesn't resolve or times out from admin devices. Plex (router port-forward) still works; LAN access still works.

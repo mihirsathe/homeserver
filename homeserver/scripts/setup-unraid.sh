@@ -241,6 +241,42 @@ EOF
     ok "  usenet-incomplete share config written"
 fi
 
+# nextcloud share — personal files served by Nextcloud.
+#
+# Deliberately NOT a folder under the `data` share. Every container in the
+# media path mounts /mnt/user/data at /data, including sabnzbd, which downloads
+# from the internet for a living. Personal documents get their own
+# share so the download plane has no path to them at all.
+#
+# cache=no (array direct), not cache=yes. The cache pool is 480 GB and filling
+# it is the most common real incident on this box; the initial migration off
+# a cloud provider is exactly the dump-hundreds-of-GB-at-once case that would
+# do it. Upload speed is then bounded by parity writes rather than the 1 GbE
+# link, which is the right trade for a file sync. Switch to `yes` with a floor
+# once the pool has headroom.
+#
+# shareExport=- turns SMB off for this share. Files written behind Nextcloud's
+# back are invisible to it until `occ files:scan` runs, so the share should
+# only ever be reached through Nextcloud. Equivalent UI path:
+# Shares -> nextcloud -> SMB -> Export: No.
+NEXTCLOUD_SHARE="$SHARES_DIR/nextcloud.cfg"
+if [[ -f "$NEXTCLOUD_SHARE" ]]; then
+    ok "  nextcloud share config already exists"
+else
+    cat > "$NEXTCLOUD_SHARE" << 'EOF'
+shareComment=Nextcloud user files (array-direct; not covered by Appdata Backup)
+shareAllocator=highwater
+shareSplitLevel=0
+shareInclude=
+shareExclude=
+shareUseCache=no
+shareCOW=auto
+shareExport=-
+shareNameOrig=nextcloud
+EOF
+    ok "  nextcloud share config written"
+fi
+
 ok "Share configs written"
 
 # ---------------------------------------------------------------------------
@@ -259,6 +295,11 @@ if [[ ! -d /mnt/user ]]; then
     echo "  mkdir -p /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach/data"
     echo "  chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete /mnt/user/appdata/plex-transcode /mnt/user/appdata/ollama /mnt/user/appdata/actual /mnt/user/appdata/chess-coach/data"
     echo "  chmod -R a=,a+rX,u+w,g+w /mnt/user/data/ /mnt/user/usenet-incomplete"
+    echo ""
+    echo "  # Nextcloud. Created but NOT chowned — the containers own their"
+    echo "  # ownership (www-data 33, postgres 70). See docs/decisions.md."
+    echo "  mkdir -p /mnt/cache/appdata/nextcloud /mnt/cache/appdata/nextcloud-db /mnt/cache/appdata/nextcloud-dump"
+    echo "  mkdir -p /mnt/user/nextcloud"
     echo ""
 else
     mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
@@ -286,6 +327,32 @@ else
     # `git pull` for coach updates. data/ is the only path bind-mounted into
     # the container, so it is the only path that needs to change hands.
     mkdir -p /mnt/user/appdata/chess-coach/data
+
+    # Nextcloud — created, then deliberately left alone.
+    #
+    # Every chown above exists because that container is pinned to 99:100 in
+    # docker-compose.yml (its image ships no USER directive, so without the
+    # pin it would run as root). Nextcloud and Postgres are the opposite case:
+    # both entrypoints start as root, chown their own volumes, and drop to
+    # www-data (33) and postgres (70) themselves. Chowning these to
+    # nobody:users is precisely what Unraid's Tools -> New Permissions does to
+    # break a working install — so this script must not do it either.
+    #
+    # /mnt/cache, not /mnt/user, for the appdata paths: serving one Nextcloud
+    # page stats thousands of PHP files and shfs (FUSE) makes that measurably
+    # slow. Safe only because appdata is shareUseCache=only, so these are the
+    # same files as /mnt/user/appdata/... by a shorter path, not a second copy.
+    if [[ -d /mnt/cache ]]; then
+        mkdir -p /mnt/cache/appdata/nextcloud \
+                 /mnt/cache/appdata/nextcloud-db \
+                 /mnt/cache/appdata/nextcloud-dump
+        ok "  nextcloud appdata dirs created on the cache pool (ownership left to containers)"
+    else
+        warn "  /mnt/cache not present — create the nextcloud appdata dirs after the pool mounts:"
+        warn "    mkdir -p /mnt/cache/appdata/{nextcloud,nextcloud-db,nextcloud-dump}"
+    fi
+    # User files live on the array via the user share — they have to span it.
+    mkdir -p /mnt/user/nextcloud
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode

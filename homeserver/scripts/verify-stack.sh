@@ -71,7 +71,7 @@ fi
 # ---------------------------------------------------------------------------
 sec "Containers"
 
-EXPECTED="gluetun sabnzbd prowlarr radarr sonarr lidarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach"
+EXPECTED="gluetun sabnzbd prowlarr radarr sonarr lidarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach nextcloud nextcloud-db nextcloud-redis nextcloud-cron"
 for c in $EXPECTED; do
     state=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)
     if [[ -z "$state" ]]; then
@@ -121,7 +121,7 @@ check_port() {
 check_port radarr 7878; check_port sonarr 8989; check_port lidarr 8686
 check_port prowlarr 9696; check_port sab 8080; check_port bazarr 6767
 check_port seerr 5055; check_port tautulli 8181; check_port profilarr 6868
-check_port actual 5006; check_port coach 8000
+check_port actual 5006; check_port coach 8000; check_port nextcloud 8081
 
 # ---------------------------------------------------------------------------
 sec "Ingress"
@@ -158,7 +158,7 @@ else
         if grep -q 'svc:' <<<"$serve_json"; then
             # The CLI does surface service proxies here, so per-service state
             # is meaningful.
-            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach; do
+            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach nextcloud; do
                 if grep -q "svc:$s" <<<"$serve_json"; then
                     ok "svc:$s advertised by this host"
                 else
@@ -242,6 +242,140 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+sec "Cloud plane"
+
+if docker inspect nextcloud >/dev/null 2>&1; then
+    # The /mnt/cache binds are only safe while every appdata file lives on the
+    # cache pool. If someone gives the share a secondary storage tier, files
+    # can also land on the array, /mnt/cache/appdata/X and /mnt/user/appdata/X
+    # stop being the same files, and a speedup becomes split-brain. This is
+    # the check that catches it — it develops silently, months later.
+    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+    if [[ -z "$cachecfg" ]]; then
+        warn "cannot read appdata share config — verify shareUseCache=only by hand"
+    elif [[ "$cachecfg" == "only" ]]; then
+        ok "appdata is cache-only (the /mnt/cache nextcloud binds are safe)"
+    else
+        bad "appdata shareUseCache=$cachecfg, expected 'only' — /mnt/cache and /mnt/user can now DIVERGE"
+    fi
+
+    # Ownership, asserted rather than assumed. Unraid's Tools -> New
+    # Permissions chowns everything to nobody:users, which breaks both of
+    # these — and leaves the containers looking fine until they restart.
+    if [[ -d /mnt/user/appdata/nextcloud ]]; then
+        got=$(stat -c %u /mnt/user/appdata/nextcloud 2>/dev/null)
+        [[ "$got" == "33" ]] \
+            && ok "appdata/nextcloud owned by www-data (33)" \
+            || bad "appdata/nextcloud owned by uid $got, expected 33 (New Permissions run?)"
+    fi
+    # Postgres 18 keeps its cluster at <bind>/<major>/docker, not at the bind
+    # root — the bind is /var/lib/postgresql, one level above PGDATA. The bind
+    # root itself stays root-owned (docker creates it; the entrypoint only
+    # chowns PGDATA), so asserting on it would fail on a perfectly good install.
+    # Globbed rather than hardcoding 18 so a major upgrade doesn't silently
+    # turn this check off.
+    for pgdata in /mnt/user/appdata/nextcloud-db/*/docker; do
+        [[ -d "$pgdata" ]] || continue
+        got=$(stat -c %u "$pgdata" 2>/dev/null)
+        [[ "$got" == "70" ]] \
+            && ok "$(basename "$(dirname "$pgdata")")/docker cluster owned by postgres (70)" \
+            || bad "postgres cluster owned by uid $got, expected 70 (New Permissions run?)"
+    done
+
+    occ() { docker exec -u www-data nextcloud php occ "$@" 2>/dev/null; }
+
+    # One round trip, read twice. `occ status` is one of the few commands that
+    # still answers while Nextcloud is in maintenance mode, which is exactly
+    # the state we most need it to report on.
+    ncstatus=$(occ status)
+    if echo "$ncstatus" | grep -q 'installed: true'; then
+        ok "nextcloud installed"
+        echo "$ncstatus" | grep -q 'maintenance: false' \
+            && ok "nextcloud not in maintenance mode" \
+            || bad "nextcloud is in MAINTENANCE MODE — a backup run left it there? (occ maintenance:mode --off)"
+    else
+        bad "nextcloud reports not installed"
+    fi
+
+    if [[ -n "$TAILNET" ]]; then
+        # NOTE the wording: this does NOT produce a 400. Nextcloud's
+        # TrustedDomainHelper returns true unconditionally when `overwritehost`
+        # is set — "overwritehost is always trusted" is upstream's own comment —
+        # and OVERWRITEHOST is set here, so the untrusted-domain gate in
+        # base.php is unreachable. The real symptom of a mismatch is subtler and
+        # worse: pages serve, but absolute URLs and redirects point at the stale
+        # hostname. Worth asserting for exactly that reason; just don't expect
+        # a clean error to announce it.
+        occ config:system:get trusted_domains | grep -q "nextcloud.$TAILNET" \
+            && ok "trusted_domains includes nextcloud.$TAILNET" \
+            || bad "trusted_domains missing nextcloud.$TAILNET — links/redirects will point at the wrong host"
+    fi
+
+    # The cron container has no healthcheck by design (crond is idle between fires, and
+    # pgrep is not guaranteed present). This is the signal that actually
+    # matters: did a background job run recently. /cron.sh runs busybox crond, firing every 5 min.
+    last=$(occ config:app:get core lastcron | tr -d '[:space:]')
+    if [[ -n "$last" && "$last" =~ ^[0-9]+$ ]]; then
+        age=$(( ( $(date +%s) - last ) / 60 ))
+        [[ "$age" -le 30 ]] \
+            && ok "nextcloud background jobs ran ${age}m ago" \
+            || bad "nextcloud background jobs last ran ${age}m ago — is nextcloud-cron running?"
+    else
+        warn "could not read nextcloud lastcron (fresh install?)"
+    fi
+
+    docker exec nextcloud-db pg_isready -U nextcloud -d nextcloud >/dev/null 2>&1 \
+        && ok "nextcloud-db accepting connections" \
+        || bad "nextcloud-db not accepting connections"
+
+    # Plane isolation, asserted from docker's own state rather than by trying
+    # to open a socket from inside another container. A connection test needs
+    # a binary in the *other* image (bash/nc/curl), and when that binary is
+    # missing the test fails in the direction that looks like a pass — which
+    # is how seerr and profilarr ran for months with healthchecks that could
+    # never succeed. Network membership is the invariant anyway.
+    for c in nextcloud nextcloud-db nextcloud-redis nextcloud-cron; do
+        docker inspect "$c" >/dev/null 2>&1 || continue
+        nets=$(docker inspect "$c" -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+        [[ "$(echo "$nets" | tr -s ' ' | sed 's/ $//')" == "cloud" ]] \
+            && ok "$c is on cloud only" \
+            || bad "$c is on: $nets — the cloud plane must be closed"
+    done
+
+    # The user files are NOT in appdata, so the Appdata Backup plugin never
+    # sees them. This is the only warning anyone gets.
+    #
+    # The assertion itself is free; only the size is not. `du -sh` here walks a
+    # share that may hold a migrated cloud library — hundreds of GB and a lot
+    # of inodes — through the shfs FUSE layer, so it is gated behind --quick
+    # along with the hardlink and VPN-egress checks. This script is only useful
+    # if it stays cheap enough to actually re-run.
+    if [[ -d /mnt/user/nextcloud ]]; then
+        if grep -qsE '^BACKUP_NEXTCLOUD_REMOTE=[^"'\''[:space:]]' "$STACK_DIR/.env"; then
+            ok "nextcloud user files have an offsite target configured"
+        else
+            warn "nextcloud user files have NO offsite backup (BACKUP_NEXTCLOUD_REMOTE unset) — nothing else covers them"
+        fi
+        if [[ $QUICK -eq 0 ]]; then
+            ncsize=$(du -sh /mnt/user/nextcloud 2>/dev/null | cut -f1)
+            [[ -n "$ncsize" ]] && ok "nextcloud user files: $ncsize"
+        fi
+    fi
+
+    latest_dump=$(ls -t /mnt/cache/appdata/nextcloud-dump/*.sql.gz 2>/dev/null | head -1)
+    if [[ -n "$latest_dump" ]]; then
+        dage=$(( ( $(date +%s) - $(stat -c %Y "$latest_dump") ) / 86400 ))
+        [[ "$dage" -le 8 ]] \
+            && ok "nextcloud db dump is ${dage}d old" \
+            || warn "newest nextcloud db dump is ${dage}d old"
+    else
+        warn "no nextcloud db dump found (backup-appdata.sh not run yet?)"
+    fi
+else
+    warn "nextcloud not deployed"
+fi
+
+# ---------------------------------------------------------------------------
 sec "Data safety"
 
 own_bad=0
@@ -257,6 +391,11 @@ for d in /mnt/user/appdata/*/; do
         # the whole tree left the one path that can actually break unchecked, so
         # it is asserted explicitly below instead.
         */chess-coach/) continue ;;
+        # The Nextcloud plane is legitimately NOT nobody:users — its images drop
+        # to www-data and postgres themselves. Asserted positively in the Cloud
+        # plane section, because "not nobody" is correct for these but "anything
+        # at all" is not.
+        */nextcloud/|*/nextcloud-db/|*/nextcloud-dump/) continue ;;
         # plexinc/pms-docker runs its entrypoint as root by design and manages
         # ownership internally via PLEX_UID/PLEX_GID, so root-owned paths here
         # are correct rather than broken. `docker inspect plex` shows an empty

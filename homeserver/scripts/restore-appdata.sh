@@ -108,8 +108,31 @@ for svc in $services; do
         mv "$APPDATA_DIR/$svc" "$APPDATA_DIR/$svc.pre-restore-$(date +%Y%m%d-%H%M%S)"
     fi
     mv "$src" "$APPDATA_DIR/$svc"
-    chown -R nobody:users "$APPDATA_DIR/$svc"
-    echo "  ✓ $svc restored (previous kept as $svc.pre-restore-*)"
+
+    # Ownership is NOT nobody:users for every service. Most images here ship no
+    # USER directive and are pinned to 99:100 in docker-compose.yml, so they
+    # need it — but the Nextcloud plane's images drop privileges themselves and
+    # BREAK if chowned to nobody:users. That is the same damage Unraid's
+    # Tools -> New Permissions does, and this script would otherwise inflict it
+    # as part of a documented recovery procedure.
+    case "$svc" in
+        nextcloud|nextcloud-cron)
+            chown -R 33:33 "$APPDATA_DIR/$svc"      # www-data
+            echo "  ✓ $svc restored, owned by www-data (33) — NOT nobody:users"
+            ;;
+        nextcloud-db)
+            chown -R 70:70 "$APPDATA_DIR/$svc"      # postgres
+            echo "  ✓ $svc restored, owned by postgres (70) — NOT nobody:users"
+            ;;
+        nextcloud-dump|nextcloud-redis)
+            # Dumps are read by root; redis persists nothing. Leave as restored.
+            echo "  ✓ $svc restored (ownership left as-is)"
+            ;;
+        *)
+            chown -R nobody:users "$APPDATA_DIR/$svc"
+            echo "  ✓ $svc restored (previous kept as $svc.pre-restore-*)"
+            ;;
+    esac
 done
 
 echo ""

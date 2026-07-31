@@ -234,6 +234,210 @@ mind before ever putting a proxy back in front of this service: the header
 behaviour, not just the scheme, is load-bearing.
 
 
+### Nextcloud, and not the four things that look like better ideas
+
+The Phase-7 "replace Google/iCloud Drive" tenant. Each alternative below fails on
+something specific to *this* box rather than on general merit, which is why they are
+recorded — all four are perfectly good software and all four will look tempting again.
+
+**Nextcloud AIO** — upstream's own recommended install, and the genuinely tempting one:
+it ships integrated BorgBackup, which would have solved the irreplaceable-data problem for
+free. Rejected on three counts, any one of which is disqualifying here.
+
+1. It requires the **Docker socket**. The mastercontainer can then create, destroy and
+   bind-mount anything on the host — root-equivalent, on a box where this file argues about
+   `compute,video` versus `all` for the NVIDIA capability surface.
+2. It **owns its own containers**, so the stack stops being one version-controlled Compose
+   file. That is the premise of "Docker Compose over native Unraid templates" above.
+3. It wants host **`:443`** — tailscaled's port, and the foundation of the whole ingress
+   design.
+
+AIO's `manual-install` path removes the socket requirement, and it was checked
+specifically rather than assumed: it is a Compose file without the mastercontainer, but
+upstream is explicit that you lose the AIO interface, update notifications, automatic
+updates and **all backup and restore features**. That is everything that made AIO
+attractive, in exchange for a Compose file you are told not to modify. Strictly worse than
+writing our own.
+
+**OpenCloud** (the Apache-2.0 ownCloud Infinite Scale fork, by the original oCIS
+engineers) — the most interesting alternative by a distance. Go, single binary, **no
+database at all**, far lower memory, which matters on a box whose ceilings now sum to
+30.75 GB of 32. It loses on storage model, and specifically on Unraid.
+
+Its default `decomposedfs` stores files in a technical layout that is not browsable on
+disk. The `posixfs` driver fixes that, but relies on **extended attributes and inotify** —
+and `/mnt/user` is `shfs`, which is FUSE: inotify events are not reliably propagated
+through it, and Unraid has a documented history of xattr bugs on user shares. Getting a
+real filesystem underneath would mean pinning the primary personal-file store to
+`/mnt/cache` or a single `/mnt/diskN`, confining it to the 480 GB SSD pool with no parity
+and no array expansion. It also has no CalDAV/CardDAV parity, which
+[vision/phases.md](vision/phases.md) §7.1 explicitly wants. **Worth revisiting if RAM
+stays the binding constraint** — that is the condition that would flip this.
+
+**Seafile** — the fastest sync of the lot, via block-level delta transfer. Rejected
+because it stores files in a content-addressable **block store**: the parity-protected
+array would hold opaque blobs rather than files. No SMB path to them, no rsync of readable
+data, no recovering anything by reading the disk. On Unraid that gives up most of what the
+array is *for*. Files-only anyway, so calendar and contacts would still need something.
+
+**linuxserver/nextcloud** — one real advantage: `PUID`/`PGID`, which would keep appdata as
+`nobody:users` and save the ownership carve-out below. It still needs the same Postgres and
+Redis, so it saves no containers, and it costs the canonical layout, the env-driven
+unattended install, and timeliness on upstream releases. Not worth it to avoid three lines
+of documentation.
+
+**Syncthing** was also considered and is a different product, not a cheaper Nextcloud: no
+web UI, no share links, no calendar or contacts. Immich is already listed separately in the
+vision doc for photos.
+
+### The Nextcloud plane does not run as `nobody:users`
+
+This looks like an oversight in `docker-compose.yml` and is not.
+
+Every service pinned to `${PUID}:${PGID}` in this stack is pinned for the same reason:
+`actual_server`, `ollama` and `coach` ship images with no `USER` directive, so without the
+pin they run as root. The pin adds safety.
+
+Nextcloud and Postgres are the opposite case. Nextcloud's entrypoint **needs** root — it
+rsyncs the application into `/var/www/html`, chowns the volumes, and binds `:80` — and then
+drops to `www-data` (33) itself. Postgres re-execs itself via `gosu postgres` (70), and as
+an arbitrary uid it cannot even create its socket in `/var/run/postgresql`, which the image
+owns as `postgres`. Pinning either to `99:100` does not harden anything; it breaks first
+boot.
+
+So appdata under `nextcloud/` and `nextcloud-db/` is owned by 33 and 70. Two consequences
+worth internalising:
+
+- **Unraid's Tools → New Permissions breaks Nextcloud.** It chowns everything to
+  `nobody:users`. This is the single most likely way a working install gets broken months
+  from now.
+- `verify-stack.sh` therefore asserts uid 33 and 70 on those paths *positively*, rather
+  than adding them to the skip list beside `homeserver/` and `chess-coach/`. "Not
+  nobody:users" is correct here; "anything at all" is not, and only the positive assertion
+  catches the difference.
+
+`generate-configs.py` creates these directories and deliberately does not chown them,
+with a comment saying so — otherwise the next person to read that function fixes the
+"missing" chown and reintroduces the bug.
+
+### Nextcloud's appdata binds `/mnt/cache`, not `/mnt/user`
+
+The only place in the stack that departs from the absolute-`/mnt/user/...` convention.
+
+`/mnt/user` is `shfs`, a FUSE filesystem, so every syscall takes a userspace round trip.
+Serving a single Nextcloud page stats thousands of PHP files — the access pattern that
+punishes FUSE hardest — and Unraid's standing guidance on Docker volume mappings names
+Nextcloud as the worst case for exactly this reason. The stack's existing tenants never
+surfaced it: SQLite touches a handful of files per request, which hides the overhead
+completely.
+
+**This is safe only because `appdata` is `shareUseCache=only`.** Every appdata file already
+lives on the cache pool, so `/mnt/cache/appdata/nextcloud` and `/mnt/user/appdata/nextcloud`
+are the same files reached two ways, not two copies, and mover never touches the share.
+Give the share a secondary tier and files can also land on the array — at which point the
+two paths diverge and a performance optimisation becomes silent data corruption.
+
+That is why the condition is asserted in two places rather than trusted:
+`generate-configs.py` refuses to proceed if the share is not cache-only, and
+`verify-stack.sh` re-checks it on every run. It is exactly the class of thing that changes
+silently a year later.
+
+The user-file share stays on `/mnt/user/nextcloud` — it has to span the array, and bulk
+file I/O is the wrong workload to optimise FUSE out of anyway.
+
+### Nextcloud's user files get their own share, not a folder under `data`
+
+Every container in this stack mounts `/mnt/user/data` at `/data`, because that shared mount
+path is what makes hardlinks work between SAB's completed downloads and the *arr libraries.
+That includes `sabnzbd`, whose entire job is downloading from the internet. (`prowlarr` is
+equally internet-facing but mounts only `/config`, so it is not itself the exposure —
+`sabnzbd` alone is enough to make the point.)
+
+Personal documents have no reason to be on that path. Nextcloud needs no hardlinks to the
+media library, so a separate share costs nothing and keeps the download plane with no route
+to them at all.
+
+The share is `shareUseCache=no` (array-direct) rather than `yes`. Cache-pool fill is the
+most common real incident on this box, and the initial migration off a cloud provider is
+precisely the dump-hundreds-of-gigabytes-at-once case that would cause it. The cost is
+upload speed bounded by parity writes rather than by the 1 GbE link, which is the right
+trade for file sync. SMB export is off, because a file written behind Nextcloud's back is
+invisible to it until `occ files:scan` runs.
+
+### Nextcloud and Postgres are version-pinned; everything else rolls
+
+The only pinned-major tags in the Compose file. Both upgrades are stateful and one-way:
+Nextcloud refuses to skip a major version and runs `occ upgrade` on start, and Postgres 19
+will not open an 18 data directory.
+
+Pinning is what makes the monthly `update-stack.sh` pull safe — with `nextcloud:33-apache`
+and `postgres:18-alpine` it can only ever fetch patch releases. A rolling tag would let an
+unattended 3 a.m. job attempt a one-way migration with no one watching, which is the
+failure this stack's runbook language is built to avoid everywhere else.
+
+Major bumps therefore become a deliberate, documented step rather than something that
+happens to you.
+
+### Backups for data that cannot be re-sourced
+
+Nextcloud is the first tenant whose data is genuinely irreplaceable. Media can be
+re-downloaded; the *arr configuration can be rebuilt from `generate-configs.py` and
+`bootstrap.py`; the Plex database is painful but reconstructible. Personal files are none of
+those, and — critically — they live outside `/mnt/user/appdata`, so the Appdata Backup
+plugin never sees them.
+
+Array parity is not a backup. It survives a dead disk; it does not survive a deleted file,
+a bad sync, or the loss of the array.
+
+`backup-appdata.sh` therefore grew a Nextcloud section, placed **before** its existing
+appdata checks. Everything after that point can exit non-zero on conditions that belong to
+the Appdata Backup plugin — no backup directory, no archive, a stale archive — and none of
+those should be able to take the personal-file backup down with them.
+
+Three details in it are deliberate:
+
+- **A `trap` clears maintenance mode on any exit.** The script is `set -euo pipefail`, so a
+  failed `pg_dump` or a full disk aborts it mid-flight. Without the trap that leaves
+  Nextcloud in maintenance mode — down — until someone notices.
+- **Maintenance mode is released before the file copy, not after.** The database dump needs
+  consistency and takes under a minute; holding a service the household depends on offline
+  for a multi-hundred-gigabyte transfer does not. The cost is that a file uploaded mid-copy
+  can reach the remote without its database row, which `occ files:scan` reconciles. The
+  reverse ordering would produce a database referencing files that were never copied.
+- **`rclone copy`, never `rclone sync`.** `sync` mirrors deletions to the remote, which
+  would faithfully replicate the exact accident this backup exists to survive. The remote
+  only grows; prune it deliberately.
+
+### Nextcloud is not on the `ai` plane
+
+It would work — Nextcloud's Assistant app takes an OpenAI-compatible base URL, and Ollama
+serves one at `/v1`, so local summarisation and translation with nothing leaving the box is
+a one-line change.
+
+It is not done yet for two reasons. Nextcloud is the largest attack surface on this box by
+some margin — a PHP application with an app store — and everything on `ai` can delete every
+model Ollama holds, because Ollama has no authentication and no read-only mode. And the
+6 GB card is already shared between Plex and Ollama under a static reservation.
+
+The change stays one line if it is ever wanted. That is the point of leaving it undone
+rather than arguing about it.
+
+### Nextcloud is tailnet-only, and that does *not* yet buy a domain
+
+Sharing a file with someone outside the tailnet means adding them to it. That is the first
+trigger listed under the admin-ingress entry above — "a non-Tailscale person needs
+*routine* access to something" — and it is worth being honest that Nextcloud brings it
+closer than anything else here.
+
+It has not fired yet: one-off sharing is covered by Tailscale Funnel without a domain, and
+the household's devices are all on the tailnet already. The real cost being deferred is not
+the registration, it is re-teaching every device and every person a new set of URLs — so
+the trigger to watch is *routine* external sharing becoming normal, not the first time it
+would be convenient.
+
+The sync clients needing Tailscale running is the accepted counterpart, and it is the one
+place this stack asks more of a phone than Google Drive did.
+
 ### Single parity (for now)
 
 Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.
