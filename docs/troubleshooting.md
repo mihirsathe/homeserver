@@ -146,7 +146,7 @@ Plex (port 32400) is fronted by nothing — it's the only service on the router 
 
 SAB UI doesn't load, Prowlarr UI doesn't load — `https://sab.<tailnet>.ts.net/` and `https://prowlarr.<tailnet>.ts.net/` hang or refuse. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
-This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
+This is the kill-switch doing its job: Mullvad dropped, and gluetun's firewall has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 
 1. `docker logs gluetun --tail 50` — look for WireGuard handshake failures or DNS resolution errors.
 2. Verify `VPN_PRIVATE_KEY`, `VPN_ADDRESS`, `VPN_CITY` in `.env` match a current Mullvad WireGuard config. Mullvad occasionally revokes keys; regenerate via the account page if needed.
