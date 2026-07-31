@@ -296,6 +296,11 @@ def prompt_for_missing(env: dict) -> dict:
 _PRESERVE_USER_EDITS = True
 _PENDING_NEW_FILES: list[Path] = []
 
+# Env keys that were (re-)generated during THIS run. Config files embedding one
+# of these are written even when they already exist and differ — see
+# _write_secret. Populated by main() before any writer runs.
+_ROTATED_KEYS: set = set()
+
 def _lock_down(path: Path) -> None:
     """Mode 0600 + chown nobody:users (99:100 on Unraid).
 
@@ -308,7 +313,7 @@ def _lock_down(path: Path) -> None:
     path.chmod(0o600)
     subprocess.run(["chown", "nobody:users", str(path)], check=False)
 
-def _write_secret(path: Path, content: str) -> None:
+def _write_secret(path: Path, content: str, embeds: tuple = ()) -> None:
     """Write a config file that contains credentials or API keys. Mode 0600
     + owned by nobody:users so the bind-mounting container can read it.
 
@@ -322,7 +327,30 @@ def _write_secret(path: Path, content: str) -> None:
     hard to miss.
 
     The .new-on-conflict behavior can be disabled with --force-overwrite.
+
+    EXCEPTION: `embeds` names the env keys whose values appear in `content`. If
+    any of them was re-generated during this run, preserve-on-conflict is
+    skipped and the file is written.
+
+    Without that exception the documented key-rotation procedure silently did
+    nothing. operations.md says: delete the key from generated.env, re-run this
+    script, `compose up -d`, and the service "reads the new key from its
+    regenerated config.xml". But a service that has ever started has rewritten
+    its own config file, so the file always differs from the template — which
+    means the new key went into generated.env and .env.docker while the LIVE
+    config kept the old one, and the run still exited 0. bootstrap.py then
+    authenticated with the new key against a service still using the old one
+    and died on an unhandled 401. Same for the Usenet-password rotation, which
+    claims to regenerate sabnzbd.ini.
+
+    A machine-owned value that was just deliberately re-rolled has to win over
+    a preserved file; that is the whole point of rotating it.
     """
+    if _ROTATED_KEYS.intersection(embeds):
+        path.write_text(content)
+        _lock_down(path)
+        print(f"    ↻ rewritten (contains a key rotated this run)")
+        return
     if path.exists() and _PRESERVE_USER_EDITS:
         if path.read_text() == content:
             _lock_down(path)
@@ -505,7 +533,8 @@ ntf_enable = 0
     req_completion_rate = 100.0
     newzbin =
 """
-    _write_secret(dest / "sabnzbd.ini", content)
+    _write_secret(dest / "sabnzbd.ini", content,
+                  embeds=("SABNZBD_API_KEY", "USENET_PASS", "USENET_FILL_PASS"))
     print("  ✓ configs/sabnzbd/sabnzbd.ini")
 
 def write_arr_config(name: str, port: int, api_key: str):
@@ -536,7 +565,7 @@ def write_arr_config(name: str, port: int, api_key: str):
   <UpdateMechanism>Docker</UpdateMechanism>
 </Config>
 """
-    _write_secret(dest / "config.xml", content)
+    _write_secret(dest / "config.xml", content, embeds=(f"{name.upper()}_API_KEY",))
     print(f"  ✓ configs/{name}/config.xml")
 
 def ensure_seerr_appdata():
@@ -668,7 +697,8 @@ single = False
 subtitles_languages = ['en']
 enabled_codecs = ['utf-8']
 """
-    _write_secret(dest / "config.ini", content)
+    _write_secret(dest / "config.ini", content,
+                  embeds=("SONARR_API_KEY", "RADARR_API_KEY"))
     print("  ✓ configs/bazarr/config.ini")
 
 def write_tautulli(env: dict):
@@ -696,7 +726,7 @@ enable_plex_update_notify = 0
 refresh_libraries_on_startup = 0
 refresh_users_on_startup = 0
 """
-    _write_secret(dest / "config.ini", content)
+    _write_secret(dest / "config.ini", content, embeds=("TAUTULLI_API_KEY",))
     print("  ✓ configs/tautulli/config.ini")
 
 # ---------------------------------------------------------------------------
@@ -783,11 +813,27 @@ def main() -> None:
             auto[k] = uuid.uuid4().hex
     if auto:
         env.update(auto)
+        # Anything minted or re-minted this run. STACK_DIR is a path, not a
+        # secret, so it is excluded — it appears in no config file's content.
+        _ROTATED_KEYS.update(k for k in auto if k != "STACK_DIR")
         write_generated(auto)
         print("Generated and saved to generated.env:")
         for k in auto:
             print(f"  {k}")
         print()
+
+    # Any value that CHANGED since the previous run also has to reach the
+    # config files that embed it. .env.docker is the previous run's merged
+    # state, so diffing against it catches user-edited secrets too — the
+    # Usenet-password rotation in operations.md is exactly this case, and the
+    # generated-key exception above does not cover it because USENET_PASS is
+    # typed, not minted. Read before the merged file is rewritten.
+    _prev = _parse_env_file(DOCKER_ENV) if DOCKER_ENV.exists() else {}
+    if _prev:
+        _ROTATED_KEYS.update(
+            k for k, v in env.items()
+            if k != "STACK_DIR" and k in _prev and _prev[k] != v
+        )
 
     # Step 3: Write merged .env.docker (single-file env for docker compose)
     write_merged_docker_env()
