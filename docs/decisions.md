@@ -20,7 +20,7 @@ Config-as-code. The entire stack is one file that can be version-controlled, dif
 
 ### hotio images (except Plex)
 
-Consistent `PUID`/`PGID`/`UMASK` pattern across all containers, lean builds. Plex uses `plexinc/pms-docker` because only the official image supports `PLEX_PREFERENCE_*` env vars and the nvidia runtime properly.
+Consistent `PUID`/`PGID`/`UMASK` pattern across all containers, lean builds. Plex uses `plexinc/pms-docker` because it is the official image and handles the nvidia runtime properly. (An earlier revision of this line also credited it with `PLEX_PREFERENCE_*` environment variables — it has never supported those; server preferences are set by `bootstrap.py` over the `/:/prefs` API.)
 
 ### Plex port-forward + Tailscale admin plane (no Cloudflare)
 

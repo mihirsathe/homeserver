@@ -445,6 +445,68 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
 # ---------------------------------------------------------------------------
 # Configure Plex: create libraries, trigger scan
 # ---------------------------------------------------------------------------
+def apply_plex_preferences(plex):
+    """Set the server preferences docker-compose.yml used to pretend it set.
+
+    The compose file carried fourteen PLEX_PREFERENCE_* environment variables
+    and a comment claiming plexinc/pms-docker applies them to Preferences.xml
+    on first boot. It does not — that image's first-run script handles only
+    PLEX_UID, PLEX_GID, PLEX_CLAIM, ADVERTISE_IP, ALLOWED_NETWORKS and
+    CHANGE_CONFIG_DIR_OWNERSHIP, and PLEX_PREFERENCE appears nowhere in the
+    repository. So every one of them was silently ignored, most importantly
+    the two that switch on NVENC — meaning the entire hardware-transcoding
+    setup (the nvidia runtime, the Nvidia-Driver plugin, the VRAM reservation
+    Ollama is built around) did nothing until somebody happened to tick the box
+    in the Plex UI.
+
+    This is the mechanism that actually works: authenticated PUT to /:/prefs,
+    which is what the web UI itself calls. Runs on every bootstrap and is
+    idempotent — setting a preference to its current value is a no-op.
+
+    Deliberately NOT fatal. A rejected preference should not abort a bootstrap
+    that has already created libraries; it is reported and the run continues.
+    """
+    prefs = {
+        # The two that matter. Without these, Plex transcodes on CPU no matter
+        # what the compose file or the driver plugin say.
+        "TranscoderH264BackgroundPreset": "veryfast",
+        "HardwareAcceleratedCodecs": 1,
+        "HardwareAcceleratedEncoders": 1,
+        # Privacy / noise, all previously inert.
+        "CrashReportsOptedOut": 1,
+        "PushNotificationsEnabled": 0,
+        "RelayEnabled": 0,
+        "DlnaEnabled": 0,
+        # Library maintenance.
+        "GenerateBIFBehavior": 1,
+        "GenerateChapterThumbBehavior": 1,
+        "MusicAnalysisBehavior": 1,
+        "ScheduledLibraryUpdatesEnabled": 1,
+        "ScheduledLibraryUpdateAt": 3,
+    }
+    ok, failed = 0, []
+    for key, value in prefs.items():
+        try:
+            plex.settings.get(key).set(value)
+            ok += 1
+        except Exception as e:  # unknown key on this Plex version, or read-only
+            failed.append(f"{key} ({type(e).__name__})")
+    try:
+        plex.settings.save()
+        print(f"  ✓ Plex: applied {ok} server preferences (incl. NVENC on)")
+    except Exception as e:
+        print(f"  ⚠ Plex: could not save preferences: {e}")
+        print("    Set Settings → Transcoder → 'Use hardware acceleration' by hand.")
+        return
+    if failed:
+        print(f"    note: skipped {len(failed)} unknown/read-only: {', '.join(failed[:4])}")
+
+    # Hardware transcoding also requires an active Plex Pass. The preference
+    # sets cleanly without one and is then ignored at playback, which is why
+    # this is worth saying out loud rather than leaving to a docs footnote.
+    print("    (NVENC additionally requires an active Plex Pass on this account)")
+
+
 def configure_plex(token: str, lan_ip: str):
     """Create libraries + trigger scan. Returns the connected PlexServer so
     downstream steps (Tautulli pre-seed) can reuse it, or None on failure."""
@@ -461,6 +523,8 @@ def configure_plex(token: str, lan_ip: str):
         print(f"  ⚠ Plex: could not connect: {e}")
         print("    Check PLEX_LAN_IP and PLEX_TOKEN in .env")
         return None
+
+    apply_plex_preferences(plex)
 
     existing = {s.title for s in plex.library.sections()}
 

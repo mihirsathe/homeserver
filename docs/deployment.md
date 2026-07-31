@@ -167,7 +167,7 @@ python3 scripts/bootstrap.py
 
 Waits for all services, wires the stack together via API, and creates Plex libraries. Prompts for a Plex token from Plex Web → Settings → General → Show.
 
-**Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
+**Hardware transcoding requires an active Plex Pass subscription.** `bootstrap.py` turns NVENC/NVDEC on via Plex's `/:/prefs` API, but Plex ignores the setting at playback without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), check in this order: (1) `bootstrap.py` printed `✓ Plex: applied N server preferences`, (2) Settings → Transcoder shows hardware acceleration ticked, (3) the account has Plex Pass. Before this was fixed the answer was almost always (1) — the preferences were set by environment variables the image ignores.
 
 Finally, open **Seerr** at `https://seerr.<tailnet>.ts.net/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 

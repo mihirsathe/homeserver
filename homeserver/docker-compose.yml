@@ -340,9 +340,16 @@ services:
   # ---------------------------------------------------------------------------
   # PLEX — RTX 3050 NVENC transcoding
   # Requires Nvidia-Driver + nvidia-container-toolkit plugins, both rebooted.
-  # PLEX_PREFERENCE_* vars are applied to Preferences.xml on FIRST BOOT ONLY
-  # by the official plexinc/pms-docker image. After that, edit Preferences.xml
-  # directly if you need to change them.
+  # Server preferences (NVENC on, Relay off, DLNA off, scheduled tasks) are set
+  # by bootstrap.py over Plex's own /:/prefs API — NOT by environment variables.
+  #
+  # This file used to carry fourteen PLEX_PREFERENCE_* vars and claim the
+  # official image applied them on first boot. It does not: pms-docker's
+  # first-run script handles only PLEX_UID, PLEX_GID, PLEX_CLAIM, ADVERTISE_IP,
+  # ALLOWED_NETWORKS and CHANGE_CONFIG_DIR_OWNERSHIP, and PLEX_PREFERENCE
+  # appears nowhere in that repository. Every one of them was silently ignored
+  # — including the two that switch on hardware transcoding, which is the whole
+  # reason `runtime: nvidia` and the Nvidia-Driver plugin are here.
   #
   # Only public-facing service: TCP 32400 is forwarded on the router. UDP
   # ports for DLNA/GDM are deliberately NOT published — DLNA is off and
@@ -368,20 +375,6 @@ services:
       # set. compute+video is enough for NVENC/NVDEC.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video
-      - PLEX_PREFERENCE_FriendlyName=${PLEX_SERVER_NAME}
-      - PLEX_PREFERENCE_LanNetworks=${PLEX_LAN_SUBNET}
-      - PLEX_PREFERENCE_HardwareAcceleratedCodecs=1
-      - PLEX_PREFERENCE_HardwareAcceleratedEncoders=1
-      - PLEX_PREFERENCE_TranscoderQuality=0
-      - PLEX_PREFERENCE_GenerateBIFBehavior=1
-      - PLEX_PREFERENCE_GenerateChapterThumbBehavior=1
-      - PLEX_PREFERENCE_MusicAnalysisBehavior=1
-      - PLEX_PREFERENCE_CrashReportsOptedOut=1
-      - PLEX_PREFERENCE_PushNotificationsEnabled=0
-      - PLEX_PREFERENCE_RelayEnabled=0
-      - PLEX_PREFERENCE_ScheduledLibraryUpdatesEnabled=1
-      - PLEX_PREFERENCE_ScheduledLibraryUpdateAt=3
-      - PLEX_PREFERENCE_DlnaEnabled=0
     volumes:
       - /mnt/user/appdata/plex:/config
       - /mnt/user/appdata/plex-transcode:/transcode

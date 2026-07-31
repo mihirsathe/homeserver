@@ -226,7 +226,7 @@ One port is open on the router. **TCP 32400 → Plex** is the only public ingres
 
 Plex is forwarded directly on TCP 32400. The router port-forward goes to the server's LAN IP; Plex's own wildcard TLS (`*.plex.direct`, issued by Plex) terminates the connection and Plex's native clients negotiate direct-connect via `app.plex.tv`. Cloudflare is not involved — streaming video through a Cloudflare free/pro tunnel violates their Service-Specific Terms §2.8, and the WAN IP is already published to `plex.tv` regardless, so a tunnel buys nothing. Family members use the Plex app; no custom subdomain, no user-facing URL.
 
-Plex-account 2FA is mandatory on every shared account. Relay is toggled off (`PLEX_PREFERENCE_RelayEnabled=0`), but the claim itself still publishes the WAN IP to plex.tv — this is intrinsic to Plex's architecture and not something the port-forward changes.
+Plex-account 2FA is mandatory on every shared account. Relay is toggled off by `bootstrap.py` via Plex's `/:/prefs` API, but the claim itself still publishes the WAN IP to plex.tv — this is intrinsic to Plex's architecture and not something the port-forward changes.
 
 ### Everything else — Tailscale
 
