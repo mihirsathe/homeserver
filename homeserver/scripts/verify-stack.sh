@@ -137,12 +137,30 @@ sec "Indexer wiring"
 # Nothing else here would catch it. The containers are healthy, the ports
 # answer, and Prowlarr's own indexer Test stays green — that tests
 # Prowlarr→indexer, a different hop from the one that is broken.
+#
+# All of that applies ONLY to an *arr whose Prowlarr connection is sync-enabled.
+# Disabling one app's sync is a supported way to hand-manage that *arr's
+# indexers, and a hand-managed indexer is SUPPOSED to point straight at the
+# indexer rather than at a Prowlarr proxy URL. Reporting that as a fault turns
+# a deliberate configuration into a false alarm — so the sync level is read
+# first and decides how the list is judged.
 akey() { grep -h "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d ' "'"'"; }
 
 PKEY=$(akey PROWLARR_API_KEY)
 
+# name -> syncLevel, one line each. Empty if Prowlarr is unreachable, which
+# degrades every app below to "unknown" and suppresses the verdicts rather
+# than inventing them.
+APP_LEVELS=$(curl -fsS --max-time 8 -H "X-Api-Key: $PKEY" \
+    "http://127.0.0.1:9696/api/v1/applications" 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+    for a in json.load(sys.stdin):
+        print(str(a.get("name","")).lower(), a.get("syncLevel"))
+except Exception: pass' 2>/dev/null)
+
 check_indexers() {
-    local name=$1 port=$2 ver=$3 key json
+    local name=$1 port=$2 ver=$3 key json level
     key=$(akey "$(echo "$name" | tr '[:lower:]' '[:upper:]')_API_KEY")
     if [[ -z "$key" ]]; then
         warn "$name: no API key in $(basename "$ENV_FILE") — skipping"
@@ -154,24 +172,46 @@ check_indexers() {
         warn "$name: could not read indexer list (not deployed?)"
         return
     fi
+    level=$(awk -v n="$name" '$1==n {print $2}' <<< "$APP_LEVELS")
     # The classifier is a quoted heredoc and takes its inputs through the
     # environment: it contains both quote characters, and inlining it as
     # python3 -c '...' lets the shell eat them silently rather than error —
     # you get a report with the quotes missing and no hint why.
     local report
-    report=$(IX_JSON="$json" IX_NAME="$name" python3 - <<'PY'
+    report=$(IX_JSON="$json" IX_NAME="$name" IX_LEVEL="$level" python3 - <<'PY'
 import json, os
 
 name = os.environ["IX_NAME"]
+level = os.environ.get("IX_LEVEL", "").strip()
 root = "http://gluetun:9696/"
 try:
     ixs = json.loads(os.environ["IX_JSON"])
 except Exception:
     print(f"WARN|{name}: indexer list was not JSON")
     raise SystemExit
-if not ixs:
-    print(f"WARN|{name}: no indexers — Prowlarr has synced nothing")
+
+if not level:
+    print(f"WARN|{name}: Prowlarr sync level unknown (Prowlarr unreachable, or "
+          "no app connection) — indexer URLs not judged")
     raise SystemExit
+
+if level == "disabled":
+    # Hand-managed by choice. Prowlarr excludes disabled apps from
+    # SyncEnabled(), so it neither adds nor removes here; a direct indexer URL
+    # is correct and an empty list is a setup gap, not a wiring fault.
+    if ixs:
+        print(f"OK|{name}: {len(ixs)} indexer(s), Prowlarr sync disabled "
+              "(hand-managed — URLs intentionally not proxied)")
+    else:
+        print(f"WARN|{name}: no indexers, and Prowlarr sync is disabled for it "
+              "— it cannot search until indexers are added by hand")
+    raise SystemExit
+
+if not ixs:
+    print(f"WARN|{name}: no indexers despite sync '{level}' — check Prowlarr → "
+          "Settings → Apps → Test, and category overlap with the indexer's caps")
+    raise SystemExit
+
 bad = []
 for ix in ixs:
     url = next((f.get("value") for f in ix.get("fields", [])
@@ -184,8 +224,11 @@ for ix in ixs:
 for ixname, url in bad:
     print(f"BAD|{name}: indexer '{ixname}' -> {url} (not a Prowlarr proxy URL)")
 if bad:
+    # No "delete these" advice: the forced sync already removes what Prowlarr
+    # owns, so a survivor is either hand-added or proof Prowlarr cannot reach
+    # this app. Deleting it loses a working indexer or fixes nothing.
     print(f"BAD|{name}: {len(bad)}/{len(ixs)} indexer(s) will fail with the "
-          f"'doctype' XML error — delete them in {name}, then re-run bootstrap.py")
+          f"'doctype' XML error — test Prowlarr → Settings → Apps → {name}")
 else:
     print(f"OK|{name}: {len(ixs)} indexer(s), all proxied by Prowlarr")
 PY

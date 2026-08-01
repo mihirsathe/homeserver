@@ -412,23 +412,41 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     }
 
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
-        # Both Prowlarr and the *arrs serve at root now (UrlBase stripped);
-        # URLs carry no urlbase suffix. prowlarrUrl points the *arr back at
-        # Prowlarr through gluetun's netns alias because Prowlarr itself has
-        # no bridge endpoint of its own. syncCategories pulled from the
-        # per-app map above so Sonarr/Lidarr get TV/Audio categories instead
-        # of Movies — reconcile_fields propagates this to any pre-existing
-        # Sonarr/Lidarr entries that were created with the wrong list.
-        desired_fields = {
-            "prowlarrUrl":    "http://gluetun:9696",
-            "baseUrl":        app_url,
-            "apiKey":         app_key,
-            "syncCategories": sync_categories[name],
+        # TWO CLASSES OF FIELD HERE, and the split is the whole point.
+        #
+        # INFRASTRUCTURE — where things live. These track docker-compose.yml, so
+        # the script owns them and reconciles them on every run; a container
+        # rename or an ingress change has to propagate or the link breaks.
+        # Both Prowlarr and the *arrs serve at root now (UrlBase stripped), so
+        # the URLs carry no urlbase suffix, and prowlarrUrl points back through
+        # gluetun's netns alias because Prowlarr has no bridge endpoint of its
+        # own.
+        #
+        # POLICY — syncCategories: which categories Prowlarr pushes to this app.
+        # That is a USER choice made in Prowlarr's UI, and this script has no
+        # business overwriting it. Set once when the connection is created,
+        # never touched again.
+        #
+        # It used to be reconciled alongside the infrastructure fields, and that
+        # is precisely how this stack spent months clobbering the Sonarr indexer
+        # settings on every bootstrap run: reconcile_fields forced the list back
+        # to ours, the PUT raised ProviderUpdatedEvent, Prowlarr re-synced, and
+        # Sonarr.cs:272 set each synced indexer's `categories` field to
+        # SupportedCategories(app.SyncCategories) — the INTERSECTION of our list
+        # with that indexer's advertised caps, top-level and subcategories alike
+        # (IndexerCapabilitiesCategories.cs:131). So a category this map names
+        # but the indexer does not advertise silently does nothing, and one the
+        # user selected but this map omits is silently dropped. Neither is the
+        # script's call to make, which is why the field is create-only.
+        infra_fields = {
+            "prowlarrUrl": "http://gluetun:9696",
+            "baseUrl":     app_url,
+            "apiKey":      app_key,
         }
         existing_apps = arr_get(base, key, "/api/v1/applications")
         existing = next((a for a in existing_apps if a.get("name") == name), None)
         if existing is not None:
-            if reconcile_fields(existing, fields=desired_fields):
+            if reconcile_fields(existing, fields=infra_fields):
                 try:
                     arr_put(base, key, f"/api/v1/applications/{existing['id']}", existing)
                     print(f"  ✓ Prowlarr: {name} reconciled")
@@ -436,12 +454,22 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
                     print(f"  ⚠ Prowlarr: failed to reconcile {name}: {e}")
             else:
                 print(f"  ✓ Prowlarr: {name} already connected")
+            # A disabled sync is a deliberate choice, and it is left alone.
+            # Prowlarr excludes disabled apps from SyncEnabled(), so it will
+            # never populate this *arr's indexers — they are hand-managed, which
+            # is supported, not broken. Say so here so the indexer report at the
+            # end of the run is not misread as a fault.
+            if existing.get("syncLevel") == "disabled":
+                print(f"  · Prowlarr: {name} sync is DISABLED — its indexers are "
+                      "hand-managed; Prowlarr will not add or remove any")
             return
         try:
             arr_post(base, key, "/api/v1/applications", {
                 "name": name,
                 "syncLevel": "fullSync",
-                "fields": [{"name": k, "value": v} for k, v in desired_fields.items()],
+                "fields": [{"name": k, "value": v} for k, v in
+                           {**infra_fields,
+                            "syncCategories": sync_categories[name]}.items()],
                 "implementationName": name,
                 "implementation": impl,
                 "configContract": contract,
@@ -482,6 +510,16 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     # Only the forced path re-issues UpdateIndexer(definition, force) and
     # rewrites the definition the *arr holds — which is what corrects a
     # baseUrl that has gone stale relative to the values reconciled above.
+    #
+    # THIS COMMAND ALSO DELETES. ApplicationService.cs:125 calls
+    # SyncIndexers(enabledApps, indexers, true, ForceSync) against the signature
+    # (applications, indexers, removeRemote = false, forceSync = false) — so
+    # removeRemote is TRUE here. Prowlarr adopts indexers it finds in the *arr
+    # that were "setup manually in the app" into its mapping table, then removes
+    # any whose mapped Prowlarr indexer no longer exists. Hand-added indexers in
+    # a sync-ENABLED *arr are therefore fair game for deletion. Apps whose sync
+    # is disabled are excluded by SyncEnabled() and never touched, which is what
+    # makes disabling the sync a safe way to hand-manage one *arr's indexers.
     try:
         cmd = arr_post(base, key, "/api/v1/command",
                        {"name": "ApplicationIndexerSync", "forceSync": True})
@@ -517,17 +555,34 @@ def check_synced_indexers(services: dict) -> None:
       - An orphan. Delete an indexer in Prowlarr and re-add it — which is
         what fixing an indexer's categories often amounts to — and it comes
         back with a NEW id, while the *arr keeps its entry pointing at the
-        old one. Prowlarr does not clean these up: ApplicationIndexerSync
-        runs with removeRemote=false, so an indexer it holds no mapping for
-        is left alone permanently. A forced sync cannot fix these; they have
-        to be deleted in the *arr by hand, after which the next sync recreates
-        them against the live id.
+        old one. The forced sync above removes these itself (it runs with
+        removeRemote=true), so one surviving here means Prowlarr could not
+        reach that *arr, not that you need to delete it by hand.
 
-    Read-only on purpose. Deleting an *arr's indexers behind Prowlarr's back
-    is the sync owner's job, not this script's — we surface the mismatch and
-    name the fix.
+    ONLY MEANINGFUL FOR SYNC-ENABLED APPS. If Prowlarr's connection for an
+    *arr is disabled, that *arr's indexers are hand-managed on purpose — they
+    are SUPPOSED to point straight at the indexer rather than at a Prowlarr
+    proxy URL, and an empty list means nothing more than "not set up yet".
+    Reporting either as a fault is how a deliberate configuration gets
+    mistaken for a breakage, so the sync level is read first and drives
+    everything below.
+
+    Read-only on purpose. Deleting an *arr's indexers is never this script's
+    call — we surface the mismatch and name the fix.
     """
     expected = "http://gluetun:9696/"
+
+    # Prowlarr's sync level per app decides how to read each *arr's list.
+    # Fetched once; a failure here degrades to "unknown", which suppresses the
+    # verdicts rather than inventing them.
+    levels = {}
+    try:
+        pbase, pkey = services["prowlarr"]
+        for app in arr_get(pbase, pkey, "/api/v1/applications"):
+            levels[str(app.get("name", "")).lower()] = app.get("syncLevel")
+    except Exception as e:
+        print(f"  ⚠ could not read Prowlarr's app connections: {e}")
+
     for name in ("radarr", "sonarr", "lidarr"):
         base, key = services[name]
         api_ver = "v1" if name == "lidarr" else "v3"
@@ -536,9 +591,25 @@ def check_synced_indexers(services: dict) -> None:
         except Exception as e:
             print(f"  ⚠ {name}: could not list indexers: {e}")
             continue
+
+        level = levels.get(name)
+        if level == "disabled" or (name in levels and level is None):
+            print(f"  · {name}: {len(indexers)} indexer(s); Prowlarr sync is "
+                  "disabled for this app — hand-managed, nothing to reconcile")
+            if not indexers:
+                print(f"       {name} has NO indexers and Prowlarr will not add "
+                      "any. Add them in its own UI, or re-enable the sync in "
+                      "Prowlarr → Settings → Apps.")
+            continue
+        if name not in levels:
+            print(f"  ⚠ {name}: Prowlarr has no app connection for it — "
+                  "it will never receive indexers")
+            continue
+
         if not indexers:
-            print(f"  ⚠ {name}: no indexers — Prowlarr synced nothing "
-                  "(check Prowlarr → Settings → Apps → Test)")
+            print(f"  ⚠ {name}: no indexers despite sync being '{level}' — "
+                  "check Prowlarr → Settings → Apps → Test, and that an "
+                  "indexer's categories overlap this app's Sync Categories")
             continue
         bad = []
         for ix in indexers:
@@ -554,8 +625,12 @@ def check_synced_indexers(services: dict) -> None:
                 print(f"  ⚠ {name}: '{ixname}' → {url}")
             print(f"  ⚠ {name}: {len(bad)}/{len(indexers)} indexer(s) not on a "
                   "Prowlarr proxy URL — these are the 'doctype' test failures.")
-            print(f"       Delete them in {name} → Settings → Indexers, then "
-                  "re-run this script.")
+            # Deliberately does NOT tell you to delete them. The forced sync
+            # already removes what it owns, so anything still listed here is
+            # either hand-added (deleting it loses a working indexer) or proof
+            # Prowlarr cannot reach this *arr (deleting it changes nothing).
+            print(f"       Check Prowlarr → Settings → Apps → {name.capitalize()} "
+                  "→ Test. Do not delete these until that passes.")
         else:
             print(f"  ✓ {name}: {len(indexers)} indexer(s), all proxied by Prowlarr")
 
