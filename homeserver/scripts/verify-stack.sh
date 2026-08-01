@@ -112,6 +112,114 @@ check_port seerr 5055; check_port tautulli 8181; check_port profilarr 6868
 check_port actual 5006; check_port coach 8000
 
 # ---------------------------------------------------------------------------
+sec "Indexer wiring"
+
+# Prowlarr syncs each indexer into the *arrs as a Newznab entry pointing back
+# at itself: `{prowlarrUrl}/{prowlarr indexer id}/` + apiPath `/api`. When that
+# URL stops matching Prowlarr's `/{id}/api` route the request falls through to
+# Prowlarr's SPA and the *arr is handed a web page where XML was expected:
+#
+#   Unable to connect to indexer: 'doctype' is an unexpected token.
+#   The expected token is 'DOCTYPE'. Line 1, position 3.
+#
+# Nothing else here would catch it. The containers are healthy, the ports
+# answer, and Prowlarr's own indexer Test stays green — that tests
+# Prowlarr→indexer, a different hop from the one that is broken.
+akey() { grep -h "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d ' "'"'"; }
+
+PKEY=$(akey PROWLARR_API_KEY)
+
+check_indexers() {
+    local name=$1 port=$2 ver=$3 key json
+    key=$(akey "$(echo "$name" | tr '[:lower:]' '[:upper:]')_API_KEY")
+    if [[ -z "$key" ]]; then
+        warn "$name: no API key in $(basename "$ENV_FILE") — skipping"
+        return
+    fi
+    json=$(curl -fsS --max-time 8 -H "X-Api-Key: $key" \
+        "http://127.0.0.1:$port/api/$ver/indexer" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+        warn "$name: could not read indexer list (not deployed?)"
+        return
+    fi
+    # The classifier is a quoted heredoc and takes its inputs through the
+    # environment: it contains both quote characters, and inlining it as
+    # python3 -c '...' lets the shell eat them silently rather than error —
+    # you get a report with the quotes missing and no hint why.
+    local report
+    report=$(IX_JSON="$json" IX_NAME="$name" python3 - <<'PY'
+import json, os
+
+name = os.environ["IX_NAME"]
+root = "http://gluetun:9696/"
+try:
+    ixs = json.loads(os.environ["IX_JSON"])
+except Exception:
+    print(f"WARN|{name}: indexer list was not JSON")
+    raise SystemExit
+if not ixs:
+    print(f"WARN|{name}: no indexers — Prowlarr has synced nothing")
+    raise SystemExit
+bad = []
+for ix in ixs:
+    url = next((f.get("value") for f in ix.get("fields", [])
+                if f.get("name") == "baseUrl"), "") or ""
+    # Everything after the Prowlarr root must be exactly "<id>/". A leftover
+    # UrlBase makes it "prowlarr/<id>/", which misses the newznab route.
+    tail = url[len(root):] if url.startswith(root) else None
+    if tail is None or not tail.rstrip("/").isdigit():
+        bad.append((ix.get("name", "?"), url or "(unset)"))
+for ixname, url in bad:
+    print(f"BAD|{name}: indexer '{ixname}' -> {url} (not a Prowlarr proxy URL)")
+if bad:
+    print(f"BAD|{name}: {len(bad)}/{len(ixs)} indexer(s) will fail with the "
+          f"'doctype' XML error — delete them in {name}, then re-run bootstrap.py")
+else:
+    print(f"OK|{name}: {len(ixs)} indexer(s), all proxied by Prowlarr")
+PY
+)
+    # Herestring, not a pipe: the ok/bad/warn counters must increment in this
+    # shell, not in a subshell that exits and discards them.
+    while IFS='|' read -r verdict msg; do
+        case "$verdict" in
+            OK)   ok   "$msg" ;;
+            BAD)  bad  "$msg" ;;
+            WARN) warn "$msg" ;;
+        esac
+    done <<< "$report"
+}
+
+check_indexers radarr 7878 v3
+check_indexers sonarr 8989 v3
+check_indexers lidarr 8686 v1
+
+# End-to-end proof on one indexer: issue the exact caps request an *arr makes,
+# through Prowlarr's newznab route, and confirm XML comes back rather than a
+# page. Loopback rather than the gluetun alias only because this runs on the
+# host; it is the same route and the same handler.
+if [[ -n "$PKEY" ]]; then
+    ixid=$(curl -fsS --max-time 8 -H "X-Api-Key: $PKEY" \
+        "http://127.0.0.1:9696/api/v1/indexer" 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)[0]["id"])
+except Exception: pass' 2>/dev/null)
+    if [[ -z "$ixid" ]]; then
+        warn "prowlarr: no indexers configured — nothing to probe"
+    else
+        head=$(curl -fsS --max-time 15 \
+            "http://127.0.0.1:9696/$ixid/api?t=caps&apikey=$PKEY" 2>/dev/null \
+            | head -c 200)
+        case "$head" in
+            # Prowlarr returns the indexer's caps document, or proxies the
+            # indexer's own error XML. Either is XML, which is the point.
+            '<?xml'*|'<caps'*|'<error'*) ok "prowlarr: /$ixid/api?t=caps returns XML" ;;
+            '') warn "prowlarr: caps probe returned nothing (Mullvad down? see gluetun)" ;;
+            *)  bad "prowlarr: /$ixid/api?t=caps returned non-XML — this is the *arr 'doctype' error at its source" ;;
+        esac
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 sec "Ingress"
 
 if ! command -v tailscale >/dev/null 2>&1; then

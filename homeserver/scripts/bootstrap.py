@@ -211,6 +211,33 @@ def wait_for(url: str, label: str, timeout: int = 180) -> None:
     print(f"\nERROR: {label} did not come up within {timeout}s (last: {last_err})")
     sys.exit(1)
 
+def await_command(base: str, key: str, cmd_id: Optional[int], label: str,
+                  timeout: int = 90) -> None:
+    """Poll a queued *arr command to completion and report its real outcome.
+
+    Worth the extra round-trips. A command is accepted asynchronously, so a
+    202 proves only that it was queued — a sync that starts and then fails
+    reports nothing to the caller. The bug this exists to prevent was exactly
+    that shape: a sync announced as done that had in fact never run.
+    """
+    if not cmd_id:
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            status = arr_get(base, key, f"/api/v1/command/{cmd_id}").get("status")
+        except Exception as e:
+            print(f"  ⚠ {label}: could not read command status: {e}")
+            return
+        if status == "completed":
+            print(f"  ✓ {label}: completed")
+            return
+        if status in ("failed", "aborted", "cancelled"):
+            print(f"  ⚠ {label}: {status} — Prowlarr → System → Tasks for why")
+            return
+        time.sleep(2)
+    print(f"  ⚠ {label}: still running after {timeout}s — check Prowlarr → System → Tasks")
+
 # ---------------------------------------------------------------------------
 # Configure an *arr app: root folder + SABnzbd client + media management
 # ---------------------------------------------------------------------------
@@ -434,13 +461,103 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     add_app("Lidarr", "http://lidarr:8686",
             require(env, "LIDARR_API_KEY"),   "Lidarr", "LidarrSettings")
 
-    # Trigger sync
+    # Force a re-push of every indexer definition into every connected app.
+    #
+    # This used to POST /api/v1/applications/sync. That is not a Prowlarr
+    # endpoint and never has been — the application provider controller
+    # exposes only CRUD plus schema/test/testall/action/{name} (checked
+    # against Prowlarr's own openapi.json; there is no path anywhere in the
+    # v1 API containing "sync"). The call 404'd on every run since it was
+    # written. It used a bare requests.post rather than arr_post, so nothing
+    # raised, nothing checked r.status_code, and the script printed
+    # "✓ indexer sync triggered" every time. The one piece of reconciliation
+    # bootstrap.py does not perform itself — the indexer definitions Prowlarr
+    # pushes into Radarr/Sonarr/Lidarr — has therefore never actually run.
+    #
+    # forceSync is the part that matters, not merely the fact of a sync.
+    # arr_put on an application above already raises ProviderUpdatedEvent,
+    # which syncs on its own; but an unforced sync skips any indexer Prowlarr
+    # believes is unchanged, and from Prowlarr's side nothing about the
+    # indexer HAS changed when what moved is prowlarrUrl or syncCategories.
+    # Only the forced path re-issues UpdateIndexer(definition, force) and
+    # rewrites the definition the *arr holds — which is what corrects a
+    # baseUrl that has gone stale relative to the values reconciled above.
     try:
-        requests.post(f"{base}/api/v1/applications/sync",
-                      headers={"X-Api-Key": key}, timeout=15)
-        print("  ✓ Prowlarr: indexer sync triggered")
+        cmd = arr_post(base, key, "/api/v1/command",
+                       {"name": "ApplicationIndexerSync", "forceSync": True})
+        print("  ✓ Prowlarr: forced indexer sync queued")
+        await_command(base, key, cmd.get("id"), "Prowlarr: indexer sync")
     except Exception as e:
-        print(f"  ⚠ Prowlarr: sync trigger failed: {e}")
+        print(f"  ⚠ Prowlarr: sync command failed: {e}")
+
+# ---------------------------------------------------------------------------
+# Verify what Prowlarr actually pushed into the *arrs
+# ---------------------------------------------------------------------------
+def check_synced_indexers(services: dict) -> None:
+    """Report *arr indexers whose baseUrl cannot be a working Prowlarr URL.
+
+    Prowlarr writes each synced indexer into the *arr as
+    `{prowlarrUrl}/{prowlarr indexer id}/` with apiPath `/api`, so the *arr
+    fetches `http://gluetun:9696/<id>/api?t=caps`. Two things routinely leave
+    that path wrong, and both fail identically and unhelpfully — the *arr
+    reports, on Test and on every search:
+
+        Unable to connect to indexer: 'doctype' is an unexpected token.
+        The expected token is 'DOCTYPE'. Line 1, position 3.
+
+    which is .NET's XML parser being handed an HTML page. The request missed
+    Prowlarr's `/{id}/api` newznab route and fell through to Prowlarr's SPA,
+    so what came back was a web page where Newznab XML was expected. Note it
+    is not a connectivity failure: something answered.
+
+      - A stale path prefix. Before the Tailscale Services migration these
+        apps ran with UrlBase set, so any definition synced back then carries
+        `/prowlarr` in the path and now misses the route. The forced sync
+        above rewrites these.
+      - An orphan. Delete an indexer in Prowlarr and re-add it — which is
+        what fixing an indexer's categories often amounts to — and it comes
+        back with a NEW id, while the *arr keeps its entry pointing at the
+        old one. Prowlarr does not clean these up: ApplicationIndexerSync
+        runs with removeRemote=false, so an indexer it holds no mapping for
+        is left alone permanently. A forced sync cannot fix these; they have
+        to be deleted in the *arr by hand, after which the next sync recreates
+        them against the live id.
+
+    Read-only on purpose. Deleting an *arr's indexers behind Prowlarr's back
+    is the sync owner's job, not this script's — we surface the mismatch and
+    name the fix.
+    """
+    expected = "http://gluetun:9696/"
+    for name in ("radarr", "sonarr", "lidarr"):
+        base, key = services[name]
+        api_ver = "v1" if name == "lidarr" else "v3"
+        try:
+            indexers = arr_get(base, key, f"/api/{api_ver}/indexer")
+        except Exception as e:
+            print(f"  ⚠ {name}: could not list indexers: {e}")
+            continue
+        if not indexers:
+            print(f"  ⚠ {name}: no indexers — Prowlarr synced nothing "
+                  "(check Prowlarr → Settings → Apps → Test)")
+            continue
+        bad = []
+        for ix in indexers:
+            url = next((f.get("value") for f in ix.get("fields", [])
+                        if f.get("name") == "baseUrl"), "") or ""
+            # Everything after the Prowlarr root must be exactly "<id>/" —
+            # a leftover UrlBase makes it "prowlarr/<id>/" and misses.
+            tail = url[len(expected):] if url.startswith(expected) else None
+            if tail is None or not tail.rstrip("/").isdigit():
+                bad.append((ix.get("name", "?"), url or "(unset)"))
+        if bad:
+            for ixname, url in bad:
+                print(f"  ⚠ {name}: '{ixname}' → {url}")
+            print(f"  ⚠ {name}: {len(bad)}/{len(indexers)} indexer(s) not on a "
+                  "Prowlarr proxy URL — these are the 'doctype' test failures.")
+            print(f"       Delete them in {name} → Settings → Indexers, then "
+                  "re-run this script.")
+        else:
+            print(f"  ✓ {name}: {len(indexers)} indexer(s), all proxied by Prowlarr")
 
 # ---------------------------------------------------------------------------
 # Configure Plex: create libraries, trigger scan
@@ -616,6 +733,13 @@ def main() -> None:
     print("\n=== Prowlarr ===\n")
     url, key = SERVICES["prowlarr"]
     configure_prowlarr(url, key, env)
+
+    # After the forced sync, confirm from the *arr side that what landed there
+    # is actually usable. Prowlarr reporting a successful sync and the *arr
+    # holding a URL that 404s into Prowlarr's web UI are not mutually
+    # exclusive — orphaned definitions survive every sync untouched.
+    print("\n=== Synced indexers ===\n")
+    check_synced_indexers(SERVICES)
 
     print("\n=== Plex ===\n")
     plex_token = get(env, "PLEX_TOKEN")

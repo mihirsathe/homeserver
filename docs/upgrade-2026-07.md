@@ -1043,6 +1043,11 @@ The reconciliation in 3.7 is only proven by the apps themselves. In a browser:
 - [ ] Lidarr → same → green
 - [ ] Prowlarr → Settings → Apps → Radarr / Sonarr / Lidarr → **Test** → all green
 - [ ] Prowlarr → Indexers → NZBGeek and NZBPlanet both present and enabled
+- [ ] Radarr / Sonarr / Lidarr → Settings → **Indexers** → Test each → green.
+      This is the *arr → Prowlarr hop, and it is the one the two checks above
+      do not cover — they both test Prowlarr's outbound side. A failure here
+      reading `'doctype' is an unexpected token` means the synced indexer URL
+      is stale or orphaned; see [troubleshooting.md](troubleshooting.md).
 - [ ] Bazarr → Settings → Sonarr / Radarr → **Test** → green
 - [ ] Radarr / Sonarr / Lidarr → System → Status → no red indexer alert, no orange
       "remove completed downloads" warning
