@@ -36,6 +36,84 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 ---
 
+## `'doctype' is an unexpected token` on an *arr indexer
+
+**Symptom**: Sonarr/Radarr/Lidarr → Settings → Indexers → Test fails with
+
+```
+Unable to connect to indexer: 'doctype' is an unexpected token.
+The expected token is 'DOCTYPE'. Line 1, position 3.
+```
+
+**This is not a connectivity failure.** It is .NET's XML parser being handed an
+HTML page. Something answered on the other end — it just answered with a web
+page where the *arr expected Newznab XML. "Unable to connect" is the *arr
+mislabelling a parse error, and it sends people to check networking that is
+already fine.
+
+Prowlarr syncs each indexer into the *arrs as a Newznab entry pointing back at
+Prowlarr itself — `http://gluetun:9696/<prowlarr indexer id>/` with API path
+`/api`. So the *arr fetches `http://gluetun:9696/<id>/api?t=caps`. If that
+misses Prowlarr's `/{id}/api` route, the request falls through to Prowlarr's
+web UI and the *arr gets that page's HTML.
+
+Note **Prowlarr's own indexer Test stays green** the whole time. That tests
+Prowlarr → indexer. The broken hop is *arr → Prowlarr, which nothing tests
+until you hit this.
+
+### Which of the three is it
+
+Run on the host, from `/mnt/user/appdata/homeserver/homeserver`:
+
+```bash
+# 1. What URL is the *arr actually calling? (sonarr shown; 7878/v3 radarr, 8686/v1 lidarr)
+SKEY=$(grep ^SONARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $SKEY" http://localhost:8989/api/v3/indexer \
+  | python3 -c 'import json,sys
+for i in json.load(sys.stdin):
+    u=next((f["value"] for f in i["fields"] if f["name"]=="baseUrl"),"")
+    print(i["name"].ljust(35), u)'
+
+# 2. Which indexer ids does Prowlarr actually have?
+PKEY=$(grep ^PROWLARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/indexer \
+  | python3 -c 'import json,sys; print([(i["id"],i["name"]) for i in json.load(sys.stdin)])'
+
+# 3. Replay the exact request the *arr makes (substitute the id from step 1)
+curl -s "http://localhost:9696/<id>/api?t=caps&apikey=$PKEY" | head -c 300
+```
+
+| What you see | Cause | Fix |
+|---|---|---|
+| Step 1 URL contains `/prowlarr/` | **Stale UrlBase.** Definition was synced before the Tailscale Services migration, when these apps served under a path prefix. | Re-run `bootstrap.py` (below). |
+| Step 1 id is missing from step 2's list | **Orphan.** The indexer was deleted and re-added in Prowlarr, so it came back with a new id — including when re-adding is how its categories got fixed. Prowlarr does *not* clean these up: `ApplicationIndexerSync` runs with `removeRemote=false`, so an indexer it holds no mapping for is left in place forever. | Delete that indexer in the *arr → Settings → Indexers, then re-run `bootstrap.py` to have it recreated against the live id. A sync alone will not do it. |
+| Step 3 returns XML, but the *arr still fails | The *arr's stored definition disagrees with Prowlarr. | Re-run `bootstrap.py`. |
+| Step 3 returns an HTML page from the **indexer's** site | Account expired, API key wrong, rate limited, or a Cloudflare interstitial — Prowlarr proxies the body through verbatim. | Prowlarr → Indexers → Test. Fix at the indexer, not here. |
+
+### The fix for everything except orphans
+
+```bash
+python3 scripts/bootstrap.py
+```
+
+It issues a **forced** `ApplicationIndexerSync`, which is what re-pushes
+definitions Prowlarr otherwise considers unchanged — from Prowlarr's side
+nothing about the indexer *has* changed when what moved is `prowlarrUrl` or
+`syncCategories`, so an unforced sync skips it. The script then reports each
+*arr's indexer URLs so you can see the result rather than assume it.
+
+The equivalent in the UI is Prowlarr → Settings → Apps → **Sync App Indexers**.
+
+> Before this was fixed, `bootstrap.py` posted to `/api/v1/applications/sync` —
+> not a Prowlarr endpoint, and never one. It 404'd on every run, the status was
+> never checked, and it printed `✓ Prowlarr: indexer sync triggered` regardless.
+> If you are debugging a stack that predates that fix, that success line means
+> nothing.
+
+`bash scripts/verify-stack.sh` checks all of this on every run.
+
+---
+
 ## Imports cost double disk space (hardlinks broken)
 
 **Symptom**: Radarr successfully imports, but `/mnt/user/data/media/movies/X.mkv` AND `/mnt/user/data/usenet/complete/movies/X.mkv` exist as separate full-size files. `du -sh` shows roughly 2× the expected library size.
