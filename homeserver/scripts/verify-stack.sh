@@ -24,12 +24,24 @@ QUICK=0
 [[ "${1:-}" == "--quick" ]] && QUICK=1
 
 PASS=0; FAIL=0; WARN=0
-ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; ((PASS++)); }
-bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; ((FAIL++)); }
-warn() { printf '  \033[33m!\033[0m %s\n' "$1"; ((WARN++)); }
+# `PASS=$((PASS+1))`, NOT `((PASS++))`. Post-increment evaluates to the value
+# BEFORE the increment, so `((PASS++))` exits 1 while the counter is still 0 —
+# and the function inherits that status. Every `check && ok ... || bad ...`
+# chain in this file would then run BOTH arms on its first call, printing a ✓
+# and a ✗ for the same condition and inflating FAIL. It fires exactly when the
+# run is otherwise clean, which is the worst possible time.
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
+bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
+warn() { printf '  \033[33m!\033[0m %s\n' "$1"; WARN=$((WARN+1)); }
 sec()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-TAILNET=$(grep -h '^TAILNET_NAME=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+# Strip inline comments before quotes. .env.example ships
+# `TAILNET_NAME=        # FILL IN — e.g. tail1a2b3.ts.net`, and filling that in
+# in place leaves the comment on the line. Both Python parsers in this repo do
+# `split("#")[0]`; this one did not, so it produced a hostname with the comment
+# glued on and every hostname-dependent check failed on a healthy stack.
+TAILNET=$(grep -h '^TAILNET_NAME=' "$STACK_DIR/.env" 2>/dev/null \
+          | head -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d ' "'"'")
 
 # ---------------------------------------------------------------------------
 sec "Host"
@@ -228,8 +240,17 @@ elif ! tailscale status >/dev/null 2>&1; then
     bad "tailscaled not connected — admin ingress is down (Unraid GUI + LAN SSH still work)"
 else
     ok "tailscaled connected"
-    tags=$(tailscale status --json 2>/dev/null | tr ',' '\n' | grep -c 'tag:server')
-    [[ "$tags" -gt 0 ]] && ok "host carries tag:server" || bad "host missing tag:server — ACL and approvals key off it"
+    # .Self.Tags specifically. Grepping the whole document also matches
+    # .Peer[*].Tags, so on any tailnet with a second tag:server machine — which
+    # the ACL actively invites — this passed while THIS host was untagged, and
+    # an untagged host is what makes every ACL rule and Service approval
+    # silently not apply.
+    if tailscale status --json 2>/dev/null | python3 -c \
+        'import json,sys; sys.exit(0 if "tag:server" in ((json.load(sys.stdin).get("Self") or {}).get("Tags") or []) else 1)' 2>/dev/null; then
+        ok "host carries tag:server"
+    else
+        bad "host missing tag:server — ACL and Service approvals key off it"
+    fi
 
     if [[ -n "$TAILNET" ]]; then
         # A node generally cannot reach the TailVIP of a service it advertises
@@ -305,13 +326,25 @@ if docker inspect ollama >/dev/null 2>&1; then
         fi
     done
 
-    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null)
-    if [[ -n "$free" ]]; then
-        # OLLAMA_GPU_OVERHEAD reserves 2 GiB so a transcode can always start.
-        [[ "$free" -ge 2048 ]] \
-            && ok "GPU has ${free} MiB free (>= 2 GiB reserved for Plex)" \
-            || bad "only ${free} MiB free — Plex's reservation is not holding"
+    # Assert the RESERVATION IS CONFIGURED, and report free VRAM as information.
+    #
+    # The old check was `memory.free >= 2048`, which inverts what it claims to
+    # test: memory.free counts VRAM nobody has allocated, and Plex's own NVENC
+    # sessions consume it. A box with a model resident and two 4K transcodes
+    # running — the reservation working exactly as designed — reported "Plex's
+    # reservation is not holding" and failed the run. OLLAMA_GPU_OVERHEAD
+    # constrains what OLLAMA may allocate; it says nothing about total free.
+    # (It also broke outright on a second GPU: two lines of nvidia-smi output
+    # into `[[ -ge ]]` is a syntax error, which fell through to `bad`.)
+    overhead=$(docker exec ollama printenv OLLAMA_GPU_OVERHEAD 2>/dev/null | tr -dc '0-9')
+    if [[ -n "$overhead" ]]; then
+        ok "OLLAMA_GPU_OVERHEAD is $(( overhead / 1024 / 1024 )) MiB — Plex's reservation is enforced"
+    else
+        bad "OLLAMA_GPU_OVERHEAD unset in the ollama container — nothing reserves VRAM for Plex"
     fi
+    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)
+    [[ -n "$free" ]] && printf '    (GPU currently %s MiB free — informational; low is normal under load)\n' "$free"
+
 else
     warn "ollama not deployed"
 fi
@@ -323,7 +356,15 @@ own_bad=0
 for d in /mnt/user/appdata/*/; do
     [[ -d "$d" ]] || continue
     case "$d" in
-        */homeserver/|*/chess-coach/) continue ;;   # git repo; deploy key + checkout
+        # The git repo. Not a bind mount.
+        */homeserver/) continue ;;
+        # chess-coach's PARENT must stay root-owned (it holds the GitHub deploy
+        # key; OpenSSH refuses a key owned by another user) but chess-coach/data
+        # is the bind mount and MUST be nobody:users — coach runs as 99:100 on a
+        # plain python-slim image with no chown-at-start entrypoint. Skipping
+        # the whole tree left the one path that can actually break unchecked, so
+        # it is asserted explicitly below instead.
+        */chess-coach/) continue ;;
         # plexinc/pms-docker runs its entrypoint as root by design and manages
         # ownership internally via PLEX_UID/PLEX_GID, so root-owned paths here
         # are correct rather than broken. `docker inspect plex` shows an empty
@@ -344,7 +385,26 @@ for d in /mnt/user/appdata/*/; do
 done
 [[ $own_bad -eq 0 ]] && ok "appdata ownership clean (3 levels deep)" || true
 
-latest=$(ls -t /mnt/user/backups/appdata/*.tar.gz 2>/dev/null | head -1)
+# The one path inside chess-coach that must be nobody:users. Its parent is
+# skipped above (deploy key), so without this the container's most likely
+# failure — a root-owned data dir, which is what Docker creates if
+# setup-unraid.sh never ran — is invisible to this script.
+if [[ -d /mnt/user/appdata/chess-coach/data ]]; then
+    cdo=$(stat -c %U /mnt/user/appdata/chess-coach/data 2>/dev/null)
+    [[ "$cdo" == "nobody" ]] \
+        && ok "chess-coach/data owned by nobody (coach runs as 99:100)" \
+        || bad "chess-coach/data owned by $cdo, expected nobody — coach's SQLite writes will fail"
+fi
+
+# -maxdepth 2 and all three extensions, matching backup-appdata.sh's own
+# search. The Appdata Backup plugin writes DATED SUBDIRECTORIES containing the
+# tarball, so a depth-1 `*.tar.gz` glob matched nothing on a real install: this
+# reported "no appdata backup found" forever, and since WARN never fails the
+# run, the staleness gate below never executed once. A stopped backup plugin is
+# precisely what this exists to catch.
+latest=$(find /mnt/user/backups/appdata -maxdepth 2 \
+              \( -name '*.tar.gz' -o -name '*.tar.zst' -o -name '*.tar' \) \
+              -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
 if [[ -n "$latest" ]]; then
     age=$(( ( $(date +%s) - $(stat -c %Y "$latest") ) / 86400 ))
     [[ "$age" -le 14 ]] \
