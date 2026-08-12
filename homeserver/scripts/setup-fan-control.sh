@@ -52,12 +52,23 @@ echo ""
 # Write credentials to a 0600 file that the fan_control script sources.
 # Creating with restrictive umask first avoids a race where the file is
 # briefly world-readable before chmod lands.
-(umask 077 && cat > "$FAN_DIR/.env" <<EOF
-IDRAC_IP="${IDRAC_IP}"
-IDRAC_USER="${IDRAC_USER}"
-IDRAC_PASS="${IDRAC_PASS}"
-EOF
-)
+#
+# printf %q, NOT an unquoted heredoc. The heredoc wrote the password's raw
+# bytes between double quotes, and this file is `source`d by the boot-time
+# script — so the value was re-parsed as shell every array start:
+#
+#   Hunter$$2        -> IDRAC_PASS=[Hunter232312]   ($$ expanded to a PID)
+#   S3cure$Pa"ss     -> unexpected EOF; IDRAC_PASS empty, fans never set
+#   abc$(cmd)def     -> cmd RUNS, as root, at every array start
+#
+# All three reported "Credentials written … (mode 0600)" and only surfaced
+# later as "the fans are still loud" or repeated iDRAC auth failures. %q emits
+# a form that re-reads as the exact original string.
+(umask 077 && {
+    printf 'IDRAC_IP=%q\n'   "$IDRAC_IP"
+    printf 'IDRAC_USER=%q\n' "$IDRAC_USER"
+    printf 'IDRAC_PASS=%q\n' "$IDRAC_PASS"
+} > "$FAN_DIR/.env")
 chmod 600 "$FAN_DIR/.env"
 ok "  Credentials written to $FAN_DIR/.env (mode 0600)"
 
