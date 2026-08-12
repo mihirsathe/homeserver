@@ -9,7 +9,8 @@ Interactive setup script. Run once before starting the stack.
 
 What it does:
   1. Prompts for any credentials not yet in .env, writes them back
-  2. Auto-generates STACK_DIR and UUID API keys into generated.env
+  2. Auto-generates STACK_DIR, UUID API keys and the Nextcloud passwords
+     into generated.env
   3. Writes a merged .env.docker (convenience single-file env for `docker compose --env-file`)
   4. Writes all app config files to configs/ so no setup wizard is needed
   5. Creates the /mnt/user/data/ directory structure
@@ -27,6 +28,7 @@ Uses only stdlib — no pip dependencies.
 import argparse
 import ipaddress
 import json
+import secrets
 import subprocess
 import sys
 import uuid
@@ -611,6 +613,80 @@ def ensure_ollama_appdata():
     subprocess.run(["chown", "-R", "nobody:users", str(dest)], check=False)
     print(f"  ✓ {dest}/ (Ollama models — exclude from Appdata Backup)")
 
+def _appdata_is_cache_only() -> Optional[bool]:
+    """Is the appdata share shareUseCache=only?
+
+    Returns True/False, or None if the share config can't be read (e.g. this
+    is not an Unraid box, or the file has not been written yet).
+
+    This is the guard for the /mnt/cache bind paths used by the Nextcloud
+    plane. With cache=only every appdata file lives on the cache pool, so
+    /mnt/cache/appdata/X and /mnt/user/appdata/X are the same files reached
+    two ways and mover never touches them. Flip the share to `yes` or `prefer`
+    and that stops being true — files can then also exist on the array, the
+    two paths diverge, and a performance optimisation quietly becomes data
+    corruption. Cheap to check, so check it.
+    """
+    cfg = Path("/boot/config/shares/appdata.cfg")
+    if not cfg.exists():
+        return None
+    for line in cfg.read_text().splitlines():
+        if line.strip().startswith("shareUseCache="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'") == "only"
+    return None
+
+
+def ensure_nextcloud_appdata():
+    """Create the Nextcloud directories, and deliberately do NOT chown them.
+
+    This inverts the pattern used by every ensure_*_appdata() above, so the
+    absence of a chown is the point rather than an oversight:
+
+      * seerr / profilarr / ollama / actual / coach are pinned to 99:100 in
+        docker-compose.yml because their images ship no USER directive. Their
+        bind dirs must be nobody:users BEFORE first start or the container
+        cannot write.
+
+      * Nextcloud and Postgres are the opposite case. Both entrypoints start
+        as root, chown their own volumes, and drop privileges themselves — to
+        www-data (33) and postgres (70). Chowning to nobody:users here would
+        be undone on first start at best, and at worst is exactly what Unraid's
+        Tools -> New Permissions does to break a working install.
+
+    So: create, and get out of the way. verify-stack.sh asserts the resulting
+    uids are 33 and 70 rather than skipping these paths, so damage from a
+    later New Permissions run is caught instead of ignored.
+    """
+    # NOTE: the shareUseCache=only precondition is checked in main()'s
+    # validation step, NOT here. Aborting from this function would exit halfway
+    # through writing config files — after the *arr config.xml files but before
+    # bazarr's and tautulli's — and both of those are single-FILE bind mounts.
+    # Docker creates an empty directory where a missing bind-mount file should
+    # be, so a half-written run followed by `compose up` breaks two services in
+    # a way that is tedious to diagnose. Validation belongs before the first
+    # write, which is where every other check in this script lives.
+    cache_only = _appdata_is_cache_only()
+
+    # App code + config, and the database. /mnt/cache on purpose — serving one
+    # Nextcloud page stats thousands of PHP files, which is the access pattern
+    # shfs punishes hardest.
+    for d in (Path("/mnt/cache/appdata/nextcloud"),
+              Path("/mnt/cache/appdata/nextcloud-db"),
+              Path("/mnt/cache/appdata/nextcloud-dump")):
+        d.mkdir(parents=True, exist_ok=True)
+        print(f"  ✓ {d}/ (ownership left to the container — see decisions.md)")
+
+    # User files. On the array via the user share, because they must span it —
+    # and because bulk file I/O is the wrong workload to worry about FUSE for.
+    data = Path("/mnt/user/nextcloud")
+    data.mkdir(parents=True, exist_ok=True)
+    print(f"  ✓ {data}/ (Nextcloud user files — NOT covered by Appdata Backup)")
+
+    if cache_only is None:
+        print("      note: could not read /boot/config/shares/appdata.cfg to confirm")
+        print("      shareUseCache=only. Verify before first start on a real box.")
+
+
 def write_bazarr(env: dict):
     dest = CONFIGS / "bazarr"
     dest.mkdir(parents=True, exist_ok=True)
@@ -775,12 +851,25 @@ def main() -> None:
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
         "LIDARR_API_KEY", "PROWLARR_API_KEY", "TAUTULLI_API_KEY",
     ]
+    # Passwords, not API keys. token_urlsafe rather than uuid4().hex because
+    # one of these (the admin password) gets typed by a human, and because a
+    # hex string is a weaker password of the same length. It stays safe for
+    # both consumers: the alphabet has no '#' for _parse_env_file's inline
+    # comment strip to truncate at, and no '@' or ':' to break Postgres's
+    # connection string.
+    secret_fields = [
+        "NEXTCLOUD_DB_PASSWORD", "NEXTCLOUD_REDIS_PASSWORD",
+        "NEXTCLOUD_ADMIN_PASSWORD",
+    ]
     auto = {}
     if not env.get("STACK_DIR", "").strip():
         auto["STACK_DIR"] = str(STACK_DIR)
     for k in api_key_fields:
         if not env.get(k, "").strip():
             auto[k] = uuid.uuid4().hex
+    for k in secret_fields:
+        if not env.get(k, "").strip():
+            auto[k] = secrets.token_urlsafe(24)
     if auto:
         env.update(auto)
         write_generated(auto)
@@ -805,12 +894,40 @@ def main() -> None:
         "LIDARR_API_KEY", "PROWLARR_API_KEY",
         "USENET_HOST", "USENET_USER", "USENET_PASS",
         "NZBGEEK_API_KEY", "NZBPLANET_API_KEY",
+        # Generated above, but required here rather than guarded in compose
+        # with `${VAR:?}`. That syntax is interpolated for the whole project on
+        # every invocation, so it turns `docker compose ps` and
+        # `docker compose restart sabnzbd` into hard errors on any box whose
+        # .env predates Nextcloud — 35 documented commands omit --env-file.
+        # An empty NEXTCLOUD_REDIS_PASSWORD would otherwise stand up an
+        # unauthenticated Redis, so it does need catching; this is the layer
+        # where the error can name its own fix.
+        "NEXTCLOUD_DB_PASSWORD", "NEXTCLOUD_REDIS_PASSWORD",
+        "NEXTCLOUD_ADMIN_PASSWORD",
     ]
     missing = [k for k in required if not env.get(k, "").strip()]
     if missing:
         print("ERROR: These required values are still not set:")
         for k in missing:
             print(f"  {k}")
+        sys.exit(1)
+
+    # The Nextcloud plane binds /mnt/cache/appdata/... directly to bypass the
+    # shfs FUSE layer, which is only safe while every appdata file lives on the
+    # cache pool. Checked HERE, before the first file is written, rather than
+    # inside ensure_nextcloud_appdata() — an abort mid-write would leave
+    # bazarr's and tautulli's single-file bind mounts uncreated, and Docker
+    # turns a missing bind-mount file into an empty directory.
+    if _appdata_is_cache_only() is False:
+        print("ERROR: the appdata share is not shareUseCache=only.")
+        print()
+        print("  Nextcloud's appdata is bind-mounted from /mnt/cache/appdata/... so it")
+        print("  bypasses shfs. That is the same set of files as /mnt/user/appdata/...")
+        print("  ONLY while the share is cache-only. With a secondary tier, files can")
+        print("  also live on the array, the two paths diverge, and the speedup becomes")
+        print("  data corruption.")
+        print()
+        print("  Fix: Shares -> appdata -> Secondary storage: none. See docs/decisions.md.")
         sys.exit(1)
 
     # Step 5: Write app configs.
@@ -825,6 +942,7 @@ def main() -> None:
     ensure_ollama_appdata()
     ensure_actual_appdata()
     ensure_chess_coach_appdata()
+    ensure_nextcloud_appdata()
     write_bazarr(env)
     write_tautulli(env)
 
@@ -841,6 +959,7 @@ def main() -> None:
         print("Re-run with --force-overwrite to replace existing files instead.")
         print("-" * 60)
 
+    nc_user = env.get("NEXTCLOUD_ADMIN_USER", "admin")
     print(f"""
 Done.
 
@@ -849,6 +968,11 @@ Next steps:
        docker compose --env-file .env.docker up -d
   2. Wait ~60s for containers to initialise.
   3. python3 scripts/bootstrap.py
+  4. python3 scripts/sync-tailscale-services.py
+
+Nextcloud installs itself on first start — there is no wizard. Log in as
+'{nc_user}' with the generated password:
+       grep ^NEXTCLOUD_ADMIN_PASSWORD= generated.env
 """)
 
 if __name__ == "__main__":

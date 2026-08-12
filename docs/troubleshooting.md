@@ -419,7 +419,7 @@ If VRAM is *not* the problem, this is the ordinary "Plex isn't using hardware tr
 
 ## A container can't reach Ollama
 
-Ollama listens only on the `ai` network and host loopback. There is no `ollama.lan` — Caddy is deliberately not on that network.
+Ollama listens only on the `ai` network and host loopback. It is deliberately advertised as no Tailscale Service, so there is no hostname for it at all.
 
 ```bash
 # From the host
@@ -441,6 +441,139 @@ docker exec <container> curl -fsS http://ollama:11434/api/tags
 ```
 
 Use `http://ollama:11434` — not `localhost:11434` (that's the consumer's own loopback), and not the host LAN IP (nothing is bound there).
+
+---
+
+## Nextcloud links point at the wrong hostname (and why you won't see a 400)
+
+Nextcloud has a `trusted_domains` list and normally answers `400 You are accessing the
+server from an untrusted domain` for anything not on it — the same failure mode as
+SABnzbd's `host_whitelist`, which is why `TAILNET_NAME` is a required value in `.env`.
+
+**This deployment never shows that error, and expecting it will send you the wrong way.**
+Nextcloud's `TrustedDomainHelper` returns "trusted" unconditionally when `overwritehost`
+is set — *"overwritehost is always trusted"* is upstream's own comment — and
+`OVERWRITEHOST` is set in `docker-compose.yml` because TLS terminates at tailscaled. So
+the untrusted-domain gate is unreachable and `trusted_domains` is never consulted at
+request time.
+
+What a mismatch actually looks like: pages load fine, but absolute URLs, share links,
+redirects and CalDAV/CardDAV endpoints all point at whatever `OVERWRITEHOST` says. Rename
+`svc:nextcloud` without updating it and the browser gets a 200 followed by a redirect to a
+name that no longer resolves. Quieter than a 400, and easier to misread as a DNS problem.
+
+`verify-stack.sh` asserts `trusted_domains` directly in its Cloud plane section for exactly
+this reason — the ingress probe cannot distinguish good from bad here.
+
+```bash
+docker exec -u www-data nextcloud php occ config:system:get trusted_domains
+```
+
+Expect `nextcloud.<tailnet>.ts.net` and `nextcloud`. If they're missing or wrong:
+
+```bash
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 0 --value=nextcloud.<tailnet>.ts.net
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 1 --value=nextcloud
+```
+
+**Editing `NEXTCLOUD_TRUSTED_DOMAINS` in `docker-compose.yml` will not fix an existing
+install.** The image applies that variable only during the initial unattended install; it
+is written into `config.php` and never re-read. Fix it with `occ`, and update the Compose
+value too so a rebuild-from-scratch is correct.
+
+The other cause is a renamed Tailscale Service. `svc:nextcloud` has to match the trusted
+domain — if you renamed it, either rename it back or add the new name with `occ`.
+
+---
+
+## Nextcloud loads but links are `http://`, or the browser blocks mixed content
+
+TLS terminates at tailscaled, so the container sees a plain-HTTP request and generates
+`http://` URLs unless told otherwise. The page is served over HTTPS, so the browser then
+blocks its own assets.
+
+```bash
+docker exec nextcloud printenv | grep -E 'OVERWRITE|TRUSTED_PROXIES'
+```
+
+Expect `OVERWRITEPROTOCOL=https`, `OVERWRITEHOST` and `OVERWRITECLIURL` set to the Service
+FQDN, and `TRUSTED_PROXIES=172.16.0.0/12`. Unlike the trusted domains, these *are* read
+from the environment on every start, so fixing them is:
+
+```bash
+docker compose --env-file .env.docker up -d nextcloud
+```
+
+Same class of problem as Actual's `SharedArrayBufferMissing`: the transport was never the
+issue, the origin scheme is. Nothing in this stack injects headers in front of Nextcloud —
+`tailscale serve` terminates TLS and forwards — so if these three are right, look at the
+browser cache before looking anywhere else.
+
+---
+
+## Files are on disk but Nextcloud doesn't show them
+
+Nextcloud keeps a file index in its database. Anything written into
+`/mnt/user/nextcloud` without going through Nextcloud — an rclone restore, a manual copy,
+a `mv` — is invisible until the index catches up.
+
+```bash
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+This is also the required last step of any user-file restore
+([disaster-recovery.md](disaster-recovery.md)).
+
+The share has SMB export off specifically to make this hard to do by accident. If you
+turned it back on, this is the cost.
+
+---
+
+## Nextcloud broke right after running Unraid's New Permissions
+
+**This is the most likely way a working Nextcloud gets broken months from now.** Tools →
+New Permissions chowns everything to `nobody:users`. Nextcloud runs as `www-data` (33) and
+Postgres as `postgres` (70), so both lose access to their own data.
+
+```bash
+bash scripts/verify-stack.sh     # Cloud plane section names the wrong uid
+```
+
+Fix:
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker stop nextcloud nextcloud-cron nextcloud-db
+chown -R 33:33 /mnt/cache/appdata/nextcloud /mnt/user/nextcloud
+chown -R 70:70 /mnt/cache/appdata/nextcloud-db/*/docker
+docker compose --env-file .env.docker up -d nextcloud-db nextcloud nextcloud-redis nextcloud-cron
+```
+
+Do not "fix" these to `nobody:users` — that is the bug, not the cure. See
+[decisions.md](decisions.md) for why this plane is the one exception to the stack's
+ownership convention.
+
+---
+
+## Nextcloud says background jobs have not run
+
+The admin overview flags this when `cron.php` hasn't run recently. `nextcloud-cron` has no
+healthcheck by design — it's a sleep loop, so "is the process alive" proves nothing — and
+the real signal is in Nextcloud's own state:
+
+```bash
+docker exec -u www-data nextcloud php occ config:app:get core lastcron   # unix timestamp
+docker logs nextcloud-cron --tail 30
+```
+
+`/cron.sh` runs busybox crond with a `*/5` crontab, so anything under ~30 minutes old is healthy;
+`verify-stack.sh` asserts exactly that. If the timestamp is stale, the usual causes are the
+container being stopped, or an image-version mismatch after a partial major upgrade —
+`nextcloud` and `nextcloud-cron` must run the same tag.
+
+```bash
+docker compose --env-file .env.docker up -d nextcloud-cron
+```
 
 ---
 

@@ -75,10 +75,14 @@ GUI must never sit behind anything containerised.
 | actual-ai | `sakowicz/actual-ai` | — | (none) | Categorizes transactions Actual's rules engine missed, via the in-stack Ollama on the `ai` plane |
 | profilarr | `santiagosayshey/profilarr` | `svc:profilarr` | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 | ollama | `ollama/ollama` | — (no ingress by design) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
+| nextcloud | `nextcloud:33-apache` | `svc:nextcloud` | 8081 (loopback) | Personal cloud — files, calendar, contacts. Runs as `www-data`, not `nobody:users` — see [Personal Cloud](#personal-cloud) |
+| nextcloud-db | `postgres:18-alpine` | — | (none) | Nextcloud's database. No port published at all; reachable only from the `cloud` plane |
+| nextcloud-redis | `redis:8-alpine` | — | (none) | Transactional file locking + cache. No volume — all derived state |
+| nextcloud-cron | `nextcloud:33-apache` | — | (none) | Runs `cron.php` every 5 min via busybox crond. Same image, so no extra layers |
 
 ### Networks
 
-Four bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
+Six bridge networks carve the stack into blast-radius zones so a compromised container can't trivially pivot across planes:
 
 | Network | Members | Purpose |
 |---------|---------|---------|
@@ -86,6 +90,8 @@ Four bridge networks carve the stack into blast-radius zones so a compromised co
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
 | `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
+| `finance` | `actual_server`, `actual-ai` | Budgeting. `actual-ai` is dual-homed onto `ai` to reach Ollama; nothing else crosses in or out. |
+| `cloud` | `nextcloud`, `nextcloud-db`, `nextcloud-redis`, `nextcloud-cron` | Personal files. **Closed** — nothing else joins, and neither the database nor the cache publishes a port, so the only route to either is from inside this plane. Deliberately *not* dual-homed onto `ai`: Nextcloud is the largest attack surface on the box and anything on `ai` can delete every model. |
 
 Networks are defined inline in the Compose file rather than `external: true` — Unraid's Docker service restarts on every boot and externally-created networks would need a separate User Script to recreate.
 
@@ -197,9 +203,14 @@ If the app has an admin UI, publish it with `tailscale serve --service=svc:<name
 │   ├── bazarr/
 │   ├── tautulli/
 │   ├── profilarr/                    ← SQLite DB (subscribed databases + selected profiles)
-│   └── ollama/                       ← LLM model blobs (multi-GB — EXCLUDE from Appdata Backup)
+│   ├── ollama/                       ← LLM model blobs (multi-GB — EXCLUDE from Appdata Backup)
+│   ├── nextcloud/                    ← app code + config — owned by www-data (33), NOT nobody
+│   ├── nextcloud-db/18/docker/       ← Postgres cluster — owned by postgres (70), NOT nobody
+│   └── nextcloud-dump/               ← weekly pg_dump (see Personal Cloud below)
 ├── usenet-incomplete/                ← cache pool (SSD), shareUseCache=only
 │                                        SABnzbd active downloads + par2/unrar
+├── nextcloud/                        ← array, shareUseCache=no, SMB export OFF
+│                                        Nextcloud user files. NOT covered by Appdata Backup.
 └── data/                             ← spinning array, shareUseCache=yes
     ├── usenet/
     │   └── complete/
@@ -218,6 +229,104 @@ All containers mount `/mnt/user/data` at `/data` inside the container. This shar
 
 ---
 
+## Personal Cloud
+
+Nextcloud replaces Google/iCloud Drive: file sync, calendar and contacts, reached at
+`https://nextcloud.<tailnet>.ts.net/` like every other service here. Four containers on a
+closed `cloud` plane — the app, Postgres, Redis, and a cron worker.
+
+It installs itself. `generate-configs.py` mints the database, Redis and admin passwords
+into `generated.env`, and the container completes an unattended install on first start.
+There is no setup wizard, unlike Profilarr.
+
+```bash
+grep ^NEXTCLOUD_ADMIN_PASSWORD= generated.env    # log in as `admin` with this
+```
+
+### Three things here break a stack convention
+
+Each one looks like a mistake and isn't. [decisions.md](decisions.md) has the full
+reasoning; this is the short version.
+
+**It does not run as `nobody:users`.** Every other pinned service in this stack is pinned
+*because* its image ships no `USER` directive and would otherwise run as root. These are
+the opposite case: Nextcloud's entrypoint needs root to rsync its code in, chown its
+volumes and bind `:80`, then drops to `www-data` (33); Postgres re-execs itself as
+`postgres` (70). Pinning either to `99:100` breaks first boot outright.
+
+> **Never run Unraid's Tools → New Permissions with Nextcloud deployed.** It chowns
+> everything to `nobody:users`, which breaks both containers. `verify-stack.sh` asserts
+> uid 33 and 70 on these paths specifically so the damage is caught rather than ignored.
+
+**Its appdata binds use `/mnt/cache`, not `/mnt/user`.** `/mnt/user` is `shfs` — FUSE — so
+every syscall takes a userspace round trip, and serving one Nextcloud page stats thousands
+of PHP files. This is the access pattern FUSE punishes hardest, and Unraid's own guidance
+on Docker volume mappings names Nextcloud as the worst case. The stack's existing SQLite
+tenants never surfaced it because a handful of files per request hides the overhead.
+
+This is safe **only** because `appdata` is `shareUseCache=only`: every file already lives
+on the cache pool, so `/mnt/cache/appdata/nextcloud` and `/mnt/user/appdata/nextcloud` are
+the same files by two paths, not two copies, and mover never touches them. Both
+`generate-configs.py` and `verify-stack.sh` assert that share setting, because flipping it
+turns a speedup into split-brain.
+
+**Its user files are not under `/mnt/user/data`.** Every container in the stack mounts
+that at `/data`, including SABnzbd and Prowlarr — the two that talk to the internet.
+Personal documents get their own share, mounted only into the two Nextcloud containers.
+Nextcloud needs no hardlinks to the media library, so it loses nothing.
+
+### Backups — the part that is genuinely new
+
+Media is re-sourceable and the *arr configs are rebuildable. **Personal files are neither**,
+and they sit outside `/mnt/user/appdata`, so the Appdata Backup plugin never sees them.
+Array parity survives a dead disk; it does not survive a deleted file, a bad sync, or the
+loss of the array.
+
+`backup-appdata.sh` handles both halves weekly. It runs them *before* its appdata checks so
+an Appdata Backup plugin that quietly stopped cannot take the personal-file backup with it —
+and nothing in the Nextcloud section calls `exit`, so the independence holds in the other
+direction too: a failed `rclone` here (much more likely, since this leg may move hundreds of
+GB over a network that only has to blink once) cannot take down the appdata verification,
+checksum, offsite copy and prune. Failures are recorded and the exit code is resolved once,
+at the end.
+
+| What | How |
+|------|-----|
+| Database | `occ maintenance:mode --on` → `pg_dump` → mode off. Consistent, and the window is under a minute. |
+| User files | `rclone copy` to `BACKUP_NEXTCLOUD_REMOTE`, with Nextcloud back up. |
+
+Maintenance mode clears **before** the file copy — holding it across a multi-hundred-GB
+transfer is not acceptable for a service the household depends on. A file uploaded
+mid-copy can therefore reach the remote without its database row, which `occ files:scan`
+reconciles; the reverse never happens. A `trap` guarantees maintenance mode is cleared
+even if the script aborts, because the alternative is Nextcloud silently down until
+someone notices.
+
+`rclone copy`, never `sync` — `sync` would faithfully mirror a deletion to the remote,
+which is the exact accident the backup exists to survive.
+
+### Version pinning
+
+`nextcloud:33-apache` and `postgres:18-alpine` are the only pinned-major tags in the stack.
+Both upgrades are stateful and one-way: Nextcloud refuses to skip a major and runs
+`occ upgrade` on start, and Postgres 19 will not open an 18 data directory. Pinning is what
+makes the monthly `update-stack.sh` pull safe — it can only ever fetch patch releases.
+Major bumps are a deliberate step; see [operations.md](operations.md).
+
+### Reaching it
+
+| From | How |
+|------|-----|
+| Any tailnet device | `https://nextcloud.<tailnet>.ts.net/` — desktop and mobile sync clients included |
+| The Unraid host | `http://127.0.0.1:8081/` (Nextcloud always permits localhost regardless of trusted domains) |
+| The LAN or the internet | **Not reachable.** Nothing binds `0.0.0.0`; the router still forwards only 32400. |
+| SMB | **Not reachable, by design.** The share has SMB export off — a file written behind Nextcloud's back is invisible to it until `occ files:scan` runs. |
+
+The clients need Tailscale running to sync. That is the accepted cost of not publishing
+it, and it is the one place this stack asks more of a phone than Google Drive did.
+
+---
+
 ## External Access
 
 One port is open on the router. **TCP 32400 → Plex** is the only public ingress; everything else is admin-plane and reachable only through Tailscale.
@@ -230,7 +339,7 @@ Plex-account 2FA is mandatory on every shared account. Relay is toggled off (`PL
 
 ### Everything else — Tailscale
 
-The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, and the Unraid webUI are reachable only from devices on the tailnet. No public URL, no Cloudflare Access, no reverse proxy. Admin devices install Tailscale, tag themselves `tag:admin`, and Tailscale ACLs restrict `tag:admin → tag:server` to the specific admin ports. The server runs `tailscale up --ssh` so SSH also rides the tailnet.
+The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, Actual, the chess coach, Nextcloud, and the Unraid webUI are reachable only from devices on the tailnet. No public URL, no Cloudflare Access, no reverse proxy. Admin devices install Tailscale, tag themselves `tag:admin`, and Tailscale ACLs restrict `tag:admin → tag:server` to the specific admin ports. The server runs `tailscale up --ssh` so SSH also rides the tailnet.
 
 ### Family request flow (no public request portal)
 

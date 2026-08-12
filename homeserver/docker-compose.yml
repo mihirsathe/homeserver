@@ -47,6 +47,11 @@
 #                  has a reason to reach the *arrs or the downloaders, and
 #                  Ollama has no auth of its own, so network membership is
 #                  the access control.
+#   cloud        — nextcloud, its Postgres and its Redis. Personal files.
+#                  Closed: nothing else joins, and neither the database nor
+#                  the cache publishes a port, so the only way to either is
+#                  from inside this plane. Deliberately NOT on `ai` — see
+#                  docs/decisions.md.
 #
 # ADMIN INGRESS — Tailscale Services, no reverse proxy:
 #   Every admin UI is a Tailscale Service (`svc:<name>`) advertised by the
@@ -82,6 +87,44 @@
 #   Tailscale (installed on the Unraid host, not inside containers).
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# Environment shared by `nextcloud` and `nextcloud-cron`.
+#
+# ANCHORED, NOT DUPLICATED, AND THAT IS LOAD-BEARING. The Nextcloud image ships
+# config/*.config.php files that call getenv(), and Nextcloud re-globs and
+# re-includes that directory on EVERY php invocation — web request and
+# cron.php alike. So these are per-process, not baked into config.php at
+# install: a variable set on one container and not the other gives the two
+# containers genuinely different behaviour against the same /var/www/html.
+#
+# The one that bites hardest is REDIS_HOST. Without it, redis.config.php does
+# not set `memcache.locking`, so that process falls back to DBLockingProvider
+# while the other uses MemcacheLockingProvider — two lock stores that cannot
+# see each other. A cron files:scan then takes locks a concurrent web upload
+# ignores, which is precisely the transactional file locking the Redis exists
+# to provide. It fails silently and intermittently, under load, months later.
+#
+# Anything genuinely web-only (admin credentials, upload limits, the
+# install-time trusted domains) stays on the `nextcloud` service.
+# ---------------------------------------------------------------------------
+x-nextcloud-env: &nextcloud-env
+  TZ: ${TZ}
+  POSTGRES_HOST: nextcloud-db
+  POSTGRES_DB: nextcloud
+  POSTGRES_USER: nextcloud
+  POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+  REDIS_HOST: nextcloud-redis
+  REDIS_HOST_PASSWORD: ${NEXTCLOUD_REDIS_PASSWORD}
+  # Read at runtime from the environment, so both containers need them or
+  # background jobs generate host-less URLs in notifications and activity mail.
+  OVERWRITEPROTOCOL: https
+  OVERWRITEHOST: nextcloud.${TAILNET_NAME}
+  OVERWRITECLIURL: https://nextcloud.${TAILNET_NAME}
+  # Docker's default bridge space. tailscale serve proxies from the host, so
+  # the container sees the bridge gateway as the peer.
+  TRUSTED_PROXIES: 172.16.0.0/12
+  PHP_MEMORY_LIMIT: 512M
+
 networks:
   downloaders:
     name: downloaders
@@ -100,6 +143,12 @@ networks:
   # Not `internal: true` — `ollama pull` has to reach registry.ollama.ai.
   ai:
     name: ai
+    driver: bridge
+  # Personal-cloud plane. Nextcloud + its Postgres + its Redis, and nothing
+  # else. Not `internal: true` — Nextcloud has to reach its own app store and
+  # update channel.
+  cloud:
+    name: cloud
     driver: bridge
 
 services:
@@ -654,8 +703,9 @@ services:
       # for host-side debugging from the Unraid terminal, not for LAN or
       # Tailscale access. Nothing binds 0.0.0.0 and the router forwards only
       # 32400, so the only clients are stack containers and the host itself.
-      # Deliberately NOT fronted by Caddy — there is no *.lan hostname for
-      # Ollama, because nothing on the tailnet needs to reach it.
+      # Deliberately advertised as no Tailscale Service, so there is no
+      # hostname for Ollama at all — nothing on the tailnet needs to reach it,
+      # and it has no authentication if anything did.
       - "127.0.0.1:11434:11434"
     restart: unless-stopped
     healthcheck:
@@ -700,8 +750,10 @@ services:
   # Note that anything on this network can also delete models — Ollama has no
   # read-only mode. That's an accepted trade for now given every member is a
   # container we chose to put there, and models re-pull in minutes. If the app
-  # has an admin UI, add it to CADDY_SERVICES in generate-configs.py for
-  # <name>.lan routing; that's the app's UI, not Ollama's API.
+  # has an admin UI, add a row to SERVICES in scripts/sync-tailscale-services.py
+  # and re-run it — that publishes the app's own UI as svc:<name>, not Ollama's
+  # API. (This used to say CADDY_SERVICES in generate-configs.py; that symbol
+  # and the whole *.lan naming layer were deleted with the Caddy ingress.)
   # ----------------------------------------------------------------------------
   # CHESS COACH — personal chess analysis + coaching webapp
   # https://github.com/mihirsathe/chess-coach
@@ -794,21 +846,22 @@ services:
   # ---------------------------------------------------------------------------
   # ACTUAL BUDGET — envelope / zero-based budgeting sync server
   #
-  # HTTPS IS PROVIDED BY `tailscale serve`, NOT BY THIS CONTAINER AND NOT BY CADDY.
+  # HTTPS IS PROVIDED BY `tailscale serve`, NOT BY THIS CONTAINER.
   #
   #   Actual's web client uses SharedArrayBuffer for its SQLite engine, and
   #   browsers only expose SharedArrayBuffer in a Secure Context — HTTPS, or
-  #   localhost. Over plain HTTP on a LAN hostname it fails with
-  #   SharedArrayBufferMissing: it does not degrade, it does not load. So it
-  #   cannot sit behind Caddy's `auto_https off` plain-HTTP vhost like every
-  #   other admin UI here.
+  #   localhost. Over plain HTTP it fails with SharedArrayBufferMissing: it
+  #   does not degrade, it does not load. That is what made the old plain-HTTP
+  #   ingress untenable and forced the move to Tailscale Services, where every
+  #   service gets a real certificate — so Actual is no longer a special case.
   #
-  #   One-time setup on the host, persists across reboots:
-  #       tailscale serve --bg http://127.0.0.1:5006
+  #   Published like every other UI, by scripts/sync-tailscale-services.py:
+  #       tailscale serve --service=svc:actual --bg 127.0.0.1:5006
+  #   reachable at https://actual.<tailnet>.ts.net/
   #
-  #   Tailscale terminates TLS at https://<node>.<tailnet>.ts.net with a real,
-  #   publicly-trusted cert and proxies to this container on plain HTTP. The
-  #   browser sees HTTPS, so the secure context is satisfied.
+  #   Tailscale terminates TLS with a real, publicly-trusted cert and proxies
+  #   to this container on plain HTTP. The browser sees HTTPS, so the secure
+  #   context is satisfied.
   #
   #   Why not `tailscale cert` + ACTUAL_HTTPS_KEY/CERT? Because certs handed
   #   over as files are the caller's problem to renew — tailscaled has no idea
@@ -870,8 +923,10 @@ services:
   # correcting its work in Actual is the intended workflow, not a fight with
   # it. Its guesses are tagged in transaction notes so they stay auditable.
   #
-  # No `depends_on` for Ollama: that server lives outside this compose file.
-  # A run that can't reach it fails, logs, and retries on the next tick.
+  # No `depends_on` for Ollama even though it IS in this compose file: a run
+  # that can't reach it fails, logs, and retries on the next tick, so gating
+  # startup on it buys nothing. (An earlier revision said Ollama "lives outside
+  # this compose file" — true before it landed on the `ai` plane, false since.)
   # ---------------------------------------------------------------------------
   actual-ai:
     image: docker.io/sakowicz/actual-ai:latest
@@ -929,3 +984,298 @@ services:
       resources:
         limits:
           memory: 256M
+
+  # ===========================================================================
+  # NEXTCLOUD — personal cloud (files, calendar, contacts)
+  #
+  # Four containers on the closed `cloud` plane: the app, Postgres, Redis, and
+  # a cron worker. This is the Phase-7 "replace Google/iCloud Drive" tenant
+  # from docs/vision/phases.md.
+  #
+  # TWO CONVENTIONS ARE DELIBERATELY BROKEN HERE. Both are load-bearing, both
+  # look like mistakes, and docs/decisions.md explains each in full.
+  #
+  #   1. NO `user:` PINNING. Everywhere else in this file a service is pinned
+  #      to ${PUID}:${PGID} — but look at *why*: actual_server, ollama and
+  #      coach are pinned because their images ship no USER directive and
+  #      would otherwise run as root. These images are the opposite case.
+  #      Nextcloud's entrypoint *needs* root to rsync its code in, chown the
+  #      volumes and bind :80, then it drops to www-data (33). Postgres
+  #      re-execs itself via `gosu postgres` (70). Pinning either to 99:100
+  #      breaks first boot — Postgres cannot even create its socket in
+  #      /var/run/postgresql, which is owned by the postgres user.
+  #
+  #      So appdata here is owned by 33 and 70, not nobody:users. Unraid's
+  #      Tools -> New Permissions would chown it all to nobody:users and break
+  #      both. verify-stack.sh asserts the *correct* uids rather than merely
+  #      skipping these paths, so that damage is caught rather than ignored.
+  #
+  #   2. /mnt/cache/appdata, NOT /mnt/user/appdata. Every other service in
+  #      this file uses the /mnt/user path. /mnt/user is shfs — FUSE — so
+  #      every syscall takes a userspace round trip, and serving one Nextcloud
+  #      page stats thousands of PHP files. Unraid's standing guidance on
+  #      Docker volume mappings names Nextcloud as the worst case for exactly
+  #      this reason. The stack's existing SQLite tenants never surfaced it:
+  #      a handful of files per request hides the overhead completely.
+  #
+  #      This is safe ONLY because the appdata share is shareUseCache=only, so
+  #      every file already lives on the cache pool and these are the same
+  #      files by a second path — not a second copy. Mover never touches the
+  #      share, so they cannot diverge. generate-configs.py and
+  #      verify-stack.sh both assert shareUseCache=only for that reason; if
+  #      anyone ever flips it, this optimisation silently becomes split-brain.
+  #
+  #      Do not "tidy" these back to /mnt/user.
+  #
+  # USER FILES ARE NOT UNDER /mnt/user/data. Every container in this stack
+  # in the media path mounts /mnt/user/data at /data — including sabnzbd,
+  # which downloads from the internet for a living. (Prowlarr is equally
+  # internet-facing but mounts only /config, so it is not itself the exposure;
+  # sabnzbd alone is enough.) Personal documents get their own
+  # share, mounted only into the two Nextcloud app containers. Nextcloud needs
+  # no hardlinks to the media library, so it gains nothing from being there.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # NEXTCLOUD-DB — Postgres, private to the cloud plane
+  #
+  # Version-pinned on purpose. Postgres 19 will refuse to open an 18 data
+  # directory, so a blind `compose pull` from update-stack.sh must never be
+  # able to cross a major. Pinning the major means the monthly job can only
+  # ever fetch patch releases; major upgrades are a deliberate, documented
+  # step (docs/operations.md).
+  #
+  # No `ports:` at all — not even loopback. Nothing outside this plane has any
+  # business reaching the database, and unlike every admin UI here there is no
+  # Tailscale Service to be a backend for.
+  # ---------------------------------------------------------------------------
+  nextcloud-db:
+    image: postgres:18-alpine
+    container_name: nextcloud-db
+    networks:
+      - cloud
+    environment:
+      - TZ=${TZ}
+      - POSTGRES_DB=nextcloud
+      - POSTGRES_USER=nextcloud
+      # These three secrets are generated into generated.env. They are NOT
+      # guarded with compose's `${VAR:?}` mandatory-variable syntax: that is
+      # interpolated for the whole project on every invocation, so it turns
+      # `docker compose ps` and `docker compose restart sabnzbd` into hard
+      # errors on any box whose .env predates Nextcloud. generate-configs.py's
+      # `required` list is where a missing value is caught instead — one layer
+      # up, where the fix (re-run the script) is also what the message says.
+      - POSTGRES_PASSWORD=${NEXTCLOUD_DB_PASSWORD}
+    volumes:
+      # MOUNTS /var/lib/postgresql, NOT /var/lib/postgresql/data.
+      #
+      # Postgres 18 moved PGDATA to /var/lib/postgresql/$PG_MAJOR/docker and
+      # moved the image's VOLUME up to /var/lib/postgresql, to match the
+      # pg_ctlcluster layout. Binding the old .../data path does not just fail
+      # to capture the cluster — the 18 entrypoint actively detects a mount
+      # there, reports it as an unused/old database, and exits 1. The container
+      # then crash-loops, never goes healthy, and `nextcloud`'s
+      # depends_on: service_healthy never releases, so the whole plane stays
+      # down. (Loud, at least: nothing is silently written elsewhere.)
+      #
+      # Mounting one level up is upstream's own recommendation and keeps a
+      # future pg_upgrade --link inside a single mount boundary. The live
+      # cluster therefore lives at:
+      #     /mnt/cache/appdata/nextcloud-db/18/docker
+      # and a major upgrade adds a sibling directory rather than needing a new
+      # bind. /mnt/cache rather than /mnt/user — see the header block above.
+      - /mnt/cache/appdata/nextcloud-db:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud -d nextcloud || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # NEXTCLOUD-REDIS — transactional file locking + cache
+  #
+  # No volume, and `--save ""` disables snapshotting: everything in here is
+  # derived state. Losing it clears file locks and a warm cache, which is the
+  # recoverable direction — a stale lock that outlived its writer is the
+  # failure you actually want to avoid.
+  #
+  # Passworded even though it is alone on a closed plane. Ollama's access
+  # control is network membership because it has no auth mechanism at all;
+  # Redis has one, generate-configs.py already knows how to mint secrets, so
+  # there is no reason to leave it open.
+  # ---------------------------------------------------------------------------
+  nextcloud-redis:
+    image: redis:8-alpine
+    container_name: nextcloud-redis
+    networks:
+      - cloud
+    # NOTE: --requirepass puts the password in the container's argv, so it is
+    # visible in `ps` on the host and in `docker inspect`. That is accepted
+    # here rather than hidden: the official redis image reads no password env
+    # var (REDIS_ARGS/REDIS_PASSWORD are redis-stack conventions, not this
+    # image's — verified against its entrypoint), so the only way to keep it
+    # out of argv is a mounted redis.conf. On a single-admin box where reading
+    # argv already means being root, that is not worth another generated file;
+    # the actual boundary is the closed `cloud` plane. Revisit if this box ever
+    # gets a second admin.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${NEXTCLOUD_REDIS_PASSWORD}"]
+    environment:
+      - TZ=${TZ}
+      # redis-cli reads this, so the healthcheck below needs no --pass
+      # argument — which does keep it out of the healthcheck's own argv.
+      - REDISCLI_AUTH=${NEXTCLOUD_REDIS_PASSWORD}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # NEXTCLOUD — the app
+  #
+  # Installs itself unattended from the NEXTCLOUD_ADMIN_* and POSTGRES_* vars
+  # on first start; there is no browser wizard to complete, unlike Profilarr.
+  #
+  # THREE ENV VARS EXIST BECAUSE TAILSCALE TERMINATES TLS, and each fixes a
+  # failure that looks like something else:
+  #
+  #   NEXTCLOUD_TRUSTED_DOMAINS — Nextcloud 400s on any Host header it does
+  #     not recognise ("You are accessing the server from an untrusted
+  #     domain"). This is the same failure SAB's host_whitelist has, and the
+  #     reason TAILNET_NAME is already a required value in .env. Both the FQDN
+  #     and the bare MagicDNS name are listed, because MagicDNS puts the
+  #     tailnet domain in the search path and https://nextcloud/ resolves too.
+  #
+  #     CAVEAT: the entrypoint applies this at INSTALL time only. Changing
+  #     tailnets later needs
+  #       docker exec -u www-data nextcloud php occ config:system:set \
+  #           trusted_domains 0 --value=nextcloud.<newtailnet>
+  #
+  #   OVERWRITEPROTOCOL — without it Nextcloud sees a plain-HTTP request from
+  #     tailscaled and generates http:// URLs, which the browser then blocks
+  #     as mixed content on an https:// page. The app is behind TLS but has no
+  #     way to know it. Same shape as Actual's Secure Context problem: the
+  #     transport was never the issue, the origin is.
+  #
+  #   TRUSTED_PROXIES — so brute-force protection and rate limiting see the
+  #     real tailnet client IP from X-Forwarded-For instead of attributing
+  #     every request on the box to the docker bridge gateway.
+  #
+  # These three are read from the environment on every start (the image's
+  # config/reverse-proxy.config.php calls getenv()), so unlike the trusted
+  # domains they are fixable with a restart.
+  # ---------------------------------------------------------------------------
+  nextcloud:
+    image: nextcloud:33-apache
+    container_name: nextcloud
+    depends_on:
+      nextcloud-db:    { condition: service_healthy }
+      nextcloud-redis: { condition: service_healthy }
+    networks:
+      - cloud
+    environment:
+      # Merged from the x-nextcloud-env anchor above — see the warning there
+      # about why nextcloud and nextcloud-cron must share it.
+      <<: *nextcloud-env
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      # Install-time only, and only meaningful on the container that runs the
+      # installer. Space-separated; both forms — see the block above.
+      NEXTCLOUD_TRUSTED_DOMAINS: nextcloud.${TAILNET_NAME} nextcloud
+      PHP_UPLOAD_LIMIT: 16G
+      # The image caps request bodies at 1 GB by default, which silently
+      # truncates any upload larger than that. 0 removes the cap; PHP_UPLOAD_LIMIT
+      # above is then the real ceiling.
+      APACHE_BODY_LIMIT: 0
+    volumes:
+      # App code, config/ and custom_apps/. /mnt/cache — see header.
+      - /mnt/cache/appdata/nextcloud:/var/www/html
+      # User files. Mounted at the image's DEFAULT data path so no
+      # NEXTCLOUD_DATA_DIR override is needed — and deliberately NOT at /data,
+      # which in every other container in this file means the media share.
+      #
+      # Previews land under here (data/appdata_<instanceid>/preview), which is
+      # the one thing in Nextcloud that grows without bound. On the array is
+      # exactly where that belongs — slower to generate, but it keeps it off
+      # the 480 GB cache pool. Cache-pool fill is the most common real
+      # incident on this box (docs/disaster-recovery.md).
+      - /mnt/user/nextcloud:/var/www/html/data
+    ports:
+      # Loopback only, same as every other backend here: this is both the
+      # svc:nextcloud serve target and the host debug path.
+      - "127.0.0.1:8081:80"
+    restart: unless-stopped
+    healthcheck:
+      # curl IS present in this image — the upstream Dockerfile invokes it
+      # directly at build time and purges only gnupg/dirmngr. Verified rather
+      # than assumed, because seerr and profilarr both shipped curl-based
+      # probes into images with no curl and never once reported healthy.
+      #
+      # Matching on "installed":true rather than on HTTP status is deliberate:
+      # status.php answers 200 during maintenance mode too, so the weekly
+      # backup window does not flip this container unhealthy.
+      test: ["CMD-SHELL", "curl -fsS http://localhost/status.php | grep -q '\"installed\":true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # First boot installs Nextcloud and creates the schema. A patch upgrade
+      # runs `occ upgrade` here too. update-stack.sh waits 300s in total.
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ---------------------------------------------------------------------------
+  # NEXTCLOUD-CRON — background jobs
+  #
+  # Same image, so no extra layers are pulled. `/cron.sh` execs
+  # `busybox crond -f`, driving a crontab the image installs as
+  # `*/5 * * * * php -f /var/www/html/cron.php` — so jobs run every FIVE
+  # minutes. Without this container Nextcloud falls back to AJAX cron, which
+  # only fires while someone has a browser open and which its own admin panel
+  # flags as unsuitable.
+  #
+  # It gets the SAME environment as the web container via the anchor — see the
+  # warning at the top of this file. Sharing /var/www/html is not enough;
+  # Nextcloud's config is getenv()-driven per process.
+  #
+  # No healthcheck on purpose. crond spends almost all its time idle, so "is
+  # the process alive" says nothing about whether jobs actually ran, and pgrep
+  # is not guaranteed present in a Debian slim image. The signal that matters
+  # lives in Nextcloud's own state, so verify-stack.sh asserts it there via
+  # `occ config:app:get core lastcron`.
+  # ---------------------------------------------------------------------------
+  nextcloud-cron:
+    image: nextcloud:33-apache
+    container_name: nextcloud-cron
+    entrypoint: /cron.sh
+    depends_on:
+      nextcloud: { condition: service_healthy }
+    networks:
+      - cloud
+    environment:
+      <<: *nextcloud-env
+    volumes:
+      - /mnt/cache/appdata/nextcloud:/var/www/html
+      - /mnt/user/nextcloud:/var/www/html/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Headroom over PHP_MEMORY_LIMIT (512M) so a preview-generation or
+          # file-scan job cannot be OOM-killed by the container ceiling before
+          # PHP's own limit has a chance to fail it cleanly.
+          memory: 768M

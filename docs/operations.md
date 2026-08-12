@@ -18,7 +18,9 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 | Task | Frequency | How |
 |------|-----------|-----|
-| Container image updates | Monthly (1st, 3am) | `update-stack.sh` via User Scripts |
+| Container image updates | Monthly (1st, 3am) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
+| Nextcloud / Postgres major upgrade | Deliberate, never scheduled | See [Nextcloud major upgrades](#nextcloud-major-upgrades) below |
+| Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
 | Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
@@ -79,6 +81,28 @@ df -h /mnt/user/data /mnt/user/appdata
 
 # Restart a single container without touching others
 docker compose restart radarr
+
+# --- Nextcloud ---------------------------------------------------------
+# occ must run as www-data; the image runs Apache as that user.
+docker exec -u www-data nextcloud php occ status
+docker exec -u www-data nextcloud php occ config:system:get trusted_domains
+
+# Did the cron container actually run? (unix timestamp; crond fires cron.php every 5 min)
+docker exec -u www-data nextcloud php occ config:app:get core lastcron
+
+# Files on disk that Nextcloud doesn't know about — the fix after any
+# out-of-band write into /mnt/user/nextcloud
+docker exec -u www-data nextcloud php occ files:scan --all
+
+# Stuck in maintenance mode (a backup run that died before its trap fired)
+docker exec -u www-data nextcloud php occ maintenance:mode --off
+
+# How much the user files and the previews are eating
+du -sh /mnt/user/nextcloud
+du -sh /mnt/user/nextcloud/appdata_*/preview 2>/dev/null
+
+# Database size and liveness
+docker exec nextcloud-db psql -U nextcloud -d nextcloud -c "\l+ nextcloud"
 ```
 
 ---
@@ -119,9 +143,70 @@ NVENC/NVDEC acceleration requires an active Plex Pass subscription. Without it, 
 
 The array uses single parity (one 16 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
-### 32 GB RAM
+### 32 GB RAM — and memory ceilings now sum to 30.75 GB of it
 
 At current RAM, heavy simultaneous workloads (many active transcodes + downloads + metadata scanning) can feel constrained. The Xeon Gold 6146 dual-socket platform supports up to 768 GB (24× DIMM slots). Adding RAM is the single highest-ROI upgrade.
+
+The Nextcloud plane took the stack's declared `deploy.resources.limits.memory` total from
+26.75 GB to **30.75 GB**. Ceilings are limits, not reservations, and every tenant here is
+bursty or schedulable — nothing reserves what it declares — but this is tighter than the
+31.25 GB that was previously flagged as having no headroom for error, so it is written down
+rather than absorbed silently.
+
+Escalation ladder if the box starts swapping or the OOM killer appears in `dmesg`, cheapest
+first:
+
+1. **Plex 8G → 6G.** Far above its realistic peak (a few hundred MB per transcode session
+   plus database cache). The least load-bearing 2 GB on the box, by the same reasoning that
+   already took Ollama from 8G to 4G.
+2. **Nextcloud 2G → 1.5G and cron 768M → 512M.** Costs preview-generation throughput.
+3. **RAM to 128 GB.** [vision/phases.md](vision/phases.md) §1.2 — 4× 32 GB DDR4-2666 ECC
+   RDIMM, roughly $100–160 used, and the answer that makes this table stop mattering.
+
+### Nextcloud sync needs Tailscale running on the device
+
+Nextcloud is a Tailscale Service like everything else, so a phone or laptop only syncs while
+it is on the tailnet. Google Drive did not ask that. It is the accepted cost of not
+publishing the service, and it is the one user-facing regression in replacing a cloud
+provider with this box. [decisions.md](decisions.md) records what would change the answer.
+
+### Nextcloud previews live on the array, not the cache pool
+
+Preview generation reads and writes `/mnt/user/nextcloud/appdata_*/preview`, which is on
+spinning disks, so first-time thumbnailing of a large photo import is slow. This is
+deliberate: previews are the one thing in a Nextcloud data directory that grows without
+bound, and cache-pool fill is the most common real incident on this stack. They are also
+excluded from the offsite copy, being regenerable.
+
+### Nextcloud major upgrades
+
+`nextcloud:33-apache` and `postgres:18-alpine` are pinned, so `update-stack.sh` can only
+ever pull patch releases. That is intentional — both upgrades are one-way, and an
+unattended 3 a.m. job is the wrong place for a one-way migration.
+
+To move majors, do it deliberately and one at a time (Nextcloud refuses to skip):
+
+```bash
+bash scripts/backup-appdata.sh          # dump first — this is the rollback
+# edit docker-compose.yml: nextcloud:33-apache -> nextcloud:34-apache (BOTH services)
+docker compose --env-file .env.docker pull nextcloud nextcloud-cron
+docker compose --env-file .env.docker up -d nextcloud nextcloud-cron
+docker compose --env-file .env.docker logs -f nextcloud    # watch `occ upgrade` run
+docker exec -u www-data nextcloud php occ status
+```
+
+Both `nextcloud` and `nextcloud-cron` use the image — bump them together or the cron
+container runs a mismatched `cron.php` against an upgraded database.
+
+Postgres is the harder one: a major bump needs `pg_upgrade` or a dump-and-restore, because
+the new server will not open the old data directory. The dump from `backup-appdata.sh` is
+exactly what a restore-into-a-new-major needs.
+
+Watch for one interaction: `update-stack.sh` waits 300s for services to report healthy. A
+Nextcloud patch upgrade runs `occ upgrade` at start, and on a large instance that can
+exceed the window — the script then reports failure and skips the image prune, which is the
+safe direction but reads alarmingly. Check `docker logs nextcloud` before assuming a
+broken release.
 
 ### Local AI is capped by 6 GB of VRAM, and yields to Plex
 
@@ -194,6 +279,31 @@ Plex tokens don't expire on their own but rotate if you sign out on all devices.
 1. Sign in to Plex Web, Settings → General → Show the token.
 2. Delete `PLEX_TOKEN=...` from `generated.env`.
 3. `python3 scripts/bootstrap.py` — prompts for the new token (hidden input via `getpass`).
+
+### Nextcloud passwords
+All three live in `generated.env`. They are *not* interchangeable — the admin password is a
+Nextcloud account, the other two are service credentials that the app reads at start.
+
+**Admin password** — change it in the Nextcloud web UI (top-right → Settings → Security),
+then update `NEXTCLOUD_ADMIN_PASSWORD` in `generated.env` to match. The env var is only
+consumed at install time, so the UI is authoritative once installed; keeping the file in
+sync is for your benefit, not the container's.
+
+**Database / Redis passwords** — these are shared secrets between two containers, so they
+have to change together:
+1. Delete the line from `generated.env` (`NEXTCLOUD_DB_PASSWORD` or `NEXTCLOUD_REDIS_PASSWORD`).
+2. `python3 scripts/generate-configs.py` — re-rolls it and rewrites `.env.docker`.
+3. For Redis: `docker compose --env-file .env.docker up -d nextcloud-redis nextcloud nextcloud-cron`. Redis holds no persistent state, so it just restarts with the new password.
+4. For Postgres: the password is stored *in the database*, so re-rolling the env var alone
+   locks Nextcloud out. Change it in Postgres first, then re-roll:
+   ```bash
+   docker exec nextcloud-db psql -U nextcloud -d nextcloud -c "ALTER USER nextcloud WITH PASSWORD '<new>';"
+   ```
+   `-U nextcloud`, not `-u postgres`: `POSTGRES_USER=nextcloud`, so initdb created
+   only the `nextcloud` superuser role. Connecting as `postgres` fails with
+   `role "postgres" does not exist` — and if you then re-roll the env var anyway,
+   you have locked Nextcloud out of a database whose password never changed.
+   Then put `<new>` in `generated.env` by hand and `up -d nextcloud nextcloud-cron`.
 
 ### iDRAC password (only if `setup-fan-control.sh` was run)
 1. Update via the iDRAC Web UI.
