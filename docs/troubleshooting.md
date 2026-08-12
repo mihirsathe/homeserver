@@ -36,6 +36,185 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 ---
 
+## `'doctype' is an unexpected token` on an *arr indexer
+
+**Symptom**: Sonarr/Radarr/Lidarr → Settings → Indexers → Test fails with
+
+```
+Unable to connect to indexer: 'doctype' is an unexpected token.
+The expected token is 'DOCTYPE'. Line 1, position 3.
+```
+
+**This is not a connectivity failure.** It is .NET's XML parser being handed an
+HTML page. Something answered on the other end — it just answered with a web
+page where the *arr expected Newznab XML. "Unable to connect" is the *arr
+mislabelling a parse error, and it sends people to check networking that is
+already fine.
+
+Prowlarr syncs each indexer into the *arrs as a Newznab entry pointing back at
+Prowlarr itself — `http://gluetun:9696/<prowlarr indexer id>/` with API path
+`/api`. So the *arr fetches `http://gluetun:9696/<id>/api?t=caps`. If that
+misses Prowlarr's `/{id}/api` route, the request falls through to Prowlarr's
+web UI and the *arr gets that page's HTML.
+
+Note **Prowlarr's own indexer Test stays green** the whole time. That tests
+Prowlarr → indexer. The broken hop is *arr → Prowlarr, which nothing tests
+until you hit this.
+
+### Which of the three is it
+
+Run on the host, from `/mnt/user/appdata/homeserver/homeserver`:
+
+```bash
+# 1. What URL is the *arr actually calling? (sonarr shown; 7878/v3 radarr, 8686/v1 lidarr)
+SKEY=$(grep ^SONARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $SKEY" http://localhost:8989/api/v3/indexer \
+  | python3 -c 'import json,sys
+for i in json.load(sys.stdin):
+    u=next((f["value"] for f in i["fields"] if f["name"]=="baseUrl"),"")
+    print(i["name"].ljust(35), u)'
+
+# 2. Which indexer ids does Prowlarr actually have?
+PKEY=$(grep ^PROWLARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/indexer \
+  | python3 -c 'import json,sys; print([(i["id"],i["name"]) for i in json.load(sys.stdin)])'
+
+# 3. Replay the exact request the *arr makes (substitute the id from step 1)
+curl -s "http://localhost:9696/<id>/api?t=caps&apikey=$PKEY" | head -c 300
+```
+
+**Check the sync level first**, because it changes what all of this means:
+
+```bash
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/applications \
+  | python3 -c 'import json,sys
+for a in json.load(sys.stdin): print(a["name"], a.get("syncLevel"))'
+```
+
+If the app is `disabled`, **none of the table below applies**. Prowlarr excludes
+disabled apps from `SyncEnabled()`, so it will never add or remove indexers
+there — that *arr is hand-managed, its indexers are supposed to point straight
+at the indexer, and an empty list means nothing is set up rather than something
+is broken. Skip to the last section.
+
+| What you see | Cause | Fix |
+|---|---|---|
+| Step 1 URL contains `/prowlarr/` | **Stale UrlBase.** Definition was synced before the Tailscale Services migration, when these apps served under a path prefix. | Re-run `bootstrap.py` (below). |
+| Step 1 id is missing from step 2's list | **Orphan.** The indexer was deleted and re-added in Prowlarr, so it came back with a new id — including when re-adding is how its categories got fixed. | Re-run `bootstrap.py`. The forced sync removes these itself. One that survives means Prowlarr could not reach that *arr — test the app connection; **do not delete it by hand**. |
+| Step 3 returns XML, but the *arr still fails | The *arr's stored definition disagrees with Prowlarr. | Re-run `bootstrap.py`. |
+| Step 3 returns an HTML page from the **indexer's** site | Account expired, API key wrong, rate limited, or a Cloudflare interstitial — Prowlarr proxies the body through verbatim. | Prowlarr → Indexers → Test. Fix at the indexer, not here. |
+
+### The fix, for a sync-enabled app
+
+```bash
+python3 scripts/bootstrap.py
+```
+
+It issues a **forced** `ApplicationIndexerSync`, which is what re-pushes
+definitions Prowlarr otherwise considers unchanged — from Prowlarr's side
+nothing about the indexer *has* changed when what moved is `prowlarrUrl` or
+`syncCategories`, so an unforced sync skips it. The script then reports each
+*arr's indexer URLs so you can see the result rather than assume it.
+
+> **That command deletes as well as adds.** `ApplicationService.cs:125` is
+> `SyncIndexers(enabledApps, indexers, true, ForceSync)` against the signature
+> `(applications, indexers, removeRemote = false, forceSync = false)` — so
+> `removeRemote` is **true**. Prowlarr adopts indexers it finds in the *arr that
+> were "setup manually in the app" into its mapping table, then removes any
+> whose mapped Prowlarr indexer no longer exists. Hand-added indexers in a
+> sync-**enabled** *arr can be deleted by it. Apps with sync disabled are never
+> touched, which is what makes disabling the sync the safe way to hand-manage
+> one *arr.
+
+Recovery if indexers were lost this way: Sonarr writes weekly backups to
+`/mnt/user/appdata/sonarr/Backups/scheduled/`. Read one without a destructive
+restore —
+
+```bash
+mkdir -p /tmp/peek && cd /tmp/peek
+unzip -o /mnt/user/appdata/sonarr/Backups/scheduled/<newest>.zip >/dev/null
+python3 - <<'PY'
+import sqlite3, json, glob
+cur = sqlite3.connect(glob.glob("**/sonarr.db", recursive=True)[0]).execute("SELECT * FROM Indexers")
+cols = [d[0] for d in cur.description]
+for row in cur:
+    r = dict(zip(cols, row))
+    print(r.get("Name"), "|", r.get("Implementation"))
+    print("   ", r.get("Settings"))
+PY
+```
+
+— then re-create what it shows in the UI.
+
+> Before this was fixed, `bootstrap.py` posted to `/api/v1/applications/sync` —
+> not a Prowlarr endpoint, and never one. It 404'd on every run, the status was
+> never checked, and it printed `✓ Prowlarr: indexer sync triggered` regardless.
+> If you are debugging a stack that predates that fix, that success line means
+> nothing.
+
+`bash scripts/verify-stack.sh` checks all of this on every run.
+
+---
+
+## Prowlarr keeps resetting an *arr's indexer categories
+
+**Symptom**: you set an indexer's categories in Sonarr (or Radarr/Lidarr), and
+some time later they are back to a narrower set — often a single top-level
+category. It looks like Prowlarr is "unchecking the TV category".
+
+It is doing exactly that, and it is two separate mechanisms compounding.
+
+**1. `bootstrap.py` used to overwrite your selection.** `add_app()` reconciled
+`syncCategories` on every run, forcing Prowlarr's per-app category list back to
+the one hardcoded in the script. That `PUT` raises `ProviderUpdatedEvent`, which
+triggers a sync, which rewrites the *arr. Fixed: `syncCategories` is now set
+**only when the connection is first created** and never reconciled afterwards —
+it is your choice, not the script's. `prowlarrUrl`, `baseUrl` and `apiKey` are
+still reconciled, because those track `docker-compose.yml`.
+
+**2. Prowlarr narrows to the intersection.** `Sonarr.cs:272` sets the synced
+indexer's `categories` field to `SupportedCategories(app.SyncCategories)` — the
+intersection of the app's list with what that indexer *advertises in its caps*.
+`IndexerCapabilitiesCategories.cs:131` walks top-level categories **and their
+subcategories**, so the comparison is against the flattened tree. A category you
+select that the indexer does not advertise is silently dropped; selecting more
+of them does not widen anything.
+
+To see the real ceiling, walk `subCategories` — a flat read of `categories`
+shows only the parents (`1000`, `2000`, `5000`…) and badly understates it:
+
+```bash
+PKEY=$(grep ^PROWLARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/indexer \
+  | python3 -c 'import json,sys
+def walk(cs):
+    for c in cs or []:
+        yield c["id"]
+        yield from walk(c.get("subCategories"))
+WANT={"Sonarr":{5000,5010,5020,5030,5040,5045,5050,5060,5070,5080},
+      "Radarr":{2000,2010,2020,2030,2040,2045,2050,2060},
+      "Lidarr":{3000,3010,3020,3030,3040}}
+for i in json.load(sys.stdin):
+    ids={c for c in walk((i.get("capabilities") or {}).get("categories")) if c<100000}
+    print(i["name"], "advertises:", sorted(ids))
+    for app,want in WANT.items():
+        print("   ->", app, "would receive:", sorted(ids & want) or "NOTHING - will not sync")'
+```
+
+Categories at `100000+` are Prowlarr's indexer-specific namespace and never
+intersect a standard list, so they are filtered out above. If an app's row says
+`NOTHING`, that indexer is skipped for that app entirely — `AddIndexer` returns
+early when the intersection is empty.
+
+**If you want an *arr's indexers under your own control**, set its Prowlarr
+connection to **Sync Level: Disabled** (Prowlarr → Settings → Apps). Prowlarr
+then neither adds, updates, nor removes indexers there, and `bootstrap.py`
+leaves the connection alone and reports the disabled state on each run rather
+than treating the empty/direct indexer list as a fault. Add the indexers
+directly in that *arr instead.
+
+---
+
 ## Imports cost double disk space (hardlinks broken)
 
 **Symptom**: Radarr successfully imports, but `/mnt/user/data/media/movies/X.mkv` AND `/mnt/user/data/usenet/complete/movies/X.mkv` exist as separate full-size files. `du -sh` shows roughly 2× the expected library size.
@@ -146,7 +325,7 @@ Plex (port 32400) is fronted by nothing — it's the only service on the router 
 
 SAB UI doesn't load, Prowlarr UI doesn't load — `https://sab.<tailnet>.ts.net/` and `https://prowlarr.<tailnet>.ts.net/` hang or refuse. `docker compose ps` shows `gluetun` as `unhealthy` or `restarting`.
 
-This is the kill-switch doing its job: Mullvad dropped, and `FIREWALL=on` has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
+This is the kill-switch doing its job: Mullvad dropped, and gluetun's firewall has blocked all egress for every container sharing Gluetun's netns (SAB, Prowlarr) until the tunnel comes back up. **Do not disable the kill-switch to work around this** — that reverts the whole threat-model assumption.
 
 1. `docker logs gluetun --tail 50` — look for WireGuard handshake failures or DNS resolution errors.
 2. Verify `VPN_PRIVATE_KEY`, `VPN_ADDRESS`, `VPN_CITY` in `.env` match a current Mullvad WireGuard config. Mullvad occasionally revokes keys; regenerate via the account page if needed.
@@ -240,7 +419,7 @@ If VRAM is *not* the problem, this is the ordinary "Plex isn't using hardware tr
 
 ## A container can't reach Ollama
 
-Ollama listens only on the `ai` network and host loopback. There is no `ollama.lan` — Caddy is deliberately not on that network.
+Ollama listens only on the `ai` network and host loopback. It is deliberately advertised as no Tailscale Service, so there is no hostname for it at all.
 
 ```bash
 # From the host
@@ -262,6 +441,139 @@ docker exec <container> curl -fsS http://ollama:11434/api/tags
 ```
 
 Use `http://ollama:11434` — not `localhost:11434` (that's the consumer's own loopback), and not the host LAN IP (nothing is bound there).
+
+---
+
+## Nextcloud links point at the wrong hostname (and why you won't see a 400)
+
+Nextcloud has a `trusted_domains` list and normally answers `400 You are accessing the
+server from an untrusted domain` for anything not on it — the same failure mode as
+SABnzbd's `host_whitelist`, which is why `TAILNET_NAME` is a required value in `.env`.
+
+**This deployment never shows that error, and expecting it will send you the wrong way.**
+Nextcloud's `TrustedDomainHelper` returns "trusted" unconditionally when `overwritehost`
+is set — *"overwritehost is always trusted"* is upstream's own comment — and
+`OVERWRITEHOST` is set in `docker-compose.yml` because TLS terminates at tailscaled. So
+the untrusted-domain gate is unreachable and `trusted_domains` is never consulted at
+request time.
+
+What a mismatch actually looks like: pages load fine, but absolute URLs, share links,
+redirects and CalDAV/CardDAV endpoints all point at whatever `OVERWRITEHOST` says. Rename
+`svc:nextcloud` without updating it and the browser gets a 200 followed by a redirect to a
+name that no longer resolves. Quieter than a 400, and easier to misread as a DNS problem.
+
+`verify-stack.sh` asserts `trusted_domains` directly in its Cloud plane section for exactly
+this reason — the ingress probe cannot distinguish good from bad here.
+
+```bash
+docker exec -u www-data nextcloud php occ config:system:get trusted_domains
+```
+
+Expect `nextcloud.<tailnet>.ts.net` and `nextcloud`. If they're missing or wrong:
+
+```bash
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 0 --value=nextcloud.<tailnet>.ts.net
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 1 --value=nextcloud
+```
+
+**Editing `NEXTCLOUD_TRUSTED_DOMAINS` in `docker-compose.yml` will not fix an existing
+install.** The image applies that variable only during the initial unattended install; it
+is written into `config.php` and never re-read. Fix it with `occ`, and update the Compose
+value too so a rebuild-from-scratch is correct.
+
+The other cause is a renamed Tailscale Service. `svc:nextcloud` has to match the trusted
+domain — if you renamed it, either rename it back or add the new name with `occ`.
+
+---
+
+## Nextcloud loads but links are `http://`, or the browser blocks mixed content
+
+TLS terminates at tailscaled, so the container sees a plain-HTTP request and generates
+`http://` URLs unless told otherwise. The page is served over HTTPS, so the browser then
+blocks its own assets.
+
+```bash
+docker exec nextcloud printenv | grep -E 'OVERWRITE|TRUSTED_PROXIES'
+```
+
+Expect `OVERWRITEPROTOCOL=https`, `OVERWRITEHOST` and `OVERWRITECLIURL` set to the Service
+FQDN, and `TRUSTED_PROXIES=172.16.0.0/12`. Unlike the trusted domains, these *are* read
+from the environment on every start, so fixing them is:
+
+```bash
+docker compose --env-file .env.docker up -d nextcloud
+```
+
+Same class of problem as Actual's `SharedArrayBufferMissing`: the transport was never the
+issue, the origin scheme is. Nothing in this stack injects headers in front of Nextcloud —
+`tailscale serve` terminates TLS and forwards — so if these three are right, look at the
+browser cache before looking anywhere else.
+
+---
+
+## Files are on disk but Nextcloud doesn't show them
+
+Nextcloud keeps a file index in its database. Anything written into
+`/mnt/user/nextcloud` without going through Nextcloud — an rclone restore, a manual copy,
+a `mv` — is invisible until the index catches up.
+
+```bash
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+This is also the required last step of any user-file restore
+([disaster-recovery.md](disaster-recovery.md)).
+
+The share has SMB export off specifically to make this hard to do by accident. If you
+turned it back on, this is the cost.
+
+---
+
+## Nextcloud broke right after running Unraid's New Permissions
+
+**This is the most likely way a working Nextcloud gets broken months from now.** Tools →
+New Permissions chowns everything to `nobody:users`. Nextcloud runs as `www-data` (33) and
+Postgres as `postgres` (70), so both lose access to their own data.
+
+```bash
+bash scripts/verify-stack.sh     # Cloud plane section names the wrong uid
+```
+
+Fix:
+
+```bash
+cd /mnt/user/appdata/homeserver/homeserver
+docker compose --env-file .env.docker stop nextcloud nextcloud-cron nextcloud-db
+chown -R 33:33 /mnt/cache/appdata/nextcloud /mnt/user/nextcloud
+chown -R 70:70 /mnt/cache/appdata/nextcloud-db/*/docker
+docker compose --env-file .env.docker up -d nextcloud-db nextcloud nextcloud-redis nextcloud-cron
+```
+
+Do not "fix" these to `nobody:users` — that is the bug, not the cure. See
+[decisions.md](decisions.md) for why this plane is the one exception to the stack's
+ownership convention.
+
+---
+
+## Nextcloud says background jobs have not run
+
+The admin overview flags this when `cron.php` hasn't run recently. `nextcloud-cron` has no
+healthcheck by design — it's a sleep loop, so "is the process alive" proves nothing — and
+the real signal is in Nextcloud's own state:
+
+```bash
+docker exec -u www-data nextcloud php occ config:app:get core lastcron   # unix timestamp
+docker logs nextcloud-cron --tail 30
+```
+
+`/cron.sh` runs busybox crond with a `*/5` crontab, so anything under ~30 minutes old is healthy;
+`verify-stack.sh` asserts exactly that. If the timestamp is stale, the usual causes are the
+container being stopped, or an image-version mismatch after a partial major upgrade —
+`nextcloud` and `nextcloud-cron` must run the same tag.
+
+```bash
+docker compose --env-file .env.docker up -d nextcloud-cron
+```
 
 ---
 

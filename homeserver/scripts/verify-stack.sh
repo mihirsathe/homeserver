@@ -24,12 +24,24 @@ QUICK=0
 [[ "${1:-}" == "--quick" ]] && QUICK=1
 
 PASS=0; FAIL=0; WARN=0
-ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; ((PASS++)); }
-bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; ((FAIL++)); }
-warn() { printf '  \033[33m!\033[0m %s\n' "$1"; ((WARN++)); }
+# `PASS=$((PASS+1))`, NOT `((PASS++))`. Post-increment evaluates to the value
+# BEFORE the increment, so `((PASS++))` exits 1 while the counter is still 0 —
+# and the function inherits that status. Every `check && ok ... || bad ...`
+# chain in this file would then run BOTH arms on its first call, printing a ✓
+# and a ✗ for the same condition and inflating FAIL. It fires exactly when the
+# run is otherwise clean, which is the worst possible time.
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
+bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
+warn() { printf '  \033[33m!\033[0m %s\n' "$1"; WARN=$((WARN+1)); }
 sec()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-TAILNET=$(grep -h '^TAILNET_NAME=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+# Strip inline comments before quotes. .env.example ships
+# `TAILNET_NAME=        # FILL IN — e.g. tail1a2b3.ts.net`, and filling that in
+# in place leaves the comment on the line. Both Python parsers in this repo do
+# `split("#")[0]`; this one did not, so it produced a hostname with the comment
+# glued on and every hostname-dependent check failed on a healthy stack.
+TAILNET=$(grep -h '^TAILNET_NAME=' "$STACK_DIR/.env" 2>/dev/null \
+          | head -1 | cut -d= -f2- | cut -d'#' -f1 | tr -d ' "'"'")
 
 # ---------------------------------------------------------------------------
 sec "Host"
@@ -59,7 +71,7 @@ fi
 # ---------------------------------------------------------------------------
 sec "Containers"
 
-EXPECTED="gluetun sabnzbd prowlarr radarr sonarr lidarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach"
+EXPECTED="gluetun sabnzbd prowlarr radarr sonarr lidarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach nextcloud nextcloud-db nextcloud-redis nextcloud-cron"
 for c in $EXPECTED; do
     state=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)
     if [[ -z "$state" ]]; then
@@ -109,7 +121,158 @@ check_port() {
 check_port radarr 7878; check_port sonarr 8989; check_port lidarr 8686
 check_port prowlarr 9696; check_port sab 8080; check_port bazarr 6767
 check_port seerr 5055; check_port tautulli 8181; check_port profilarr 6868
-check_port actual 5006; check_port coach 8000
+check_port actual 5006; check_port coach 8000; check_port nextcloud 8081
+
+# ---------------------------------------------------------------------------
+sec "Indexer wiring"
+
+# Prowlarr syncs each indexer into the *arrs as a Newznab entry pointing back
+# at itself: `{prowlarrUrl}/{prowlarr indexer id}/` + apiPath `/api`. When that
+# URL stops matching Prowlarr's `/{id}/api` route the request falls through to
+# Prowlarr's SPA and the *arr is handed a web page where XML was expected:
+#
+#   Unable to connect to indexer: 'doctype' is an unexpected token.
+#   The expected token is 'DOCTYPE'. Line 1, position 3.
+#
+# Nothing else here would catch it. The containers are healthy, the ports
+# answer, and Prowlarr's own indexer Test stays green — that tests
+# Prowlarr→indexer, a different hop from the one that is broken.
+#
+# All of that applies ONLY to an *arr whose Prowlarr connection is sync-enabled.
+# Disabling one app's sync is a supported way to hand-manage that *arr's
+# indexers, and a hand-managed indexer is SUPPOSED to point straight at the
+# indexer rather than at a Prowlarr proxy URL. Reporting that as a fault turns
+# a deliberate configuration into a false alarm — so the sync level is read
+# first and decides how the list is judged.
+akey() { grep -h "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d ' "'"'"; }
+
+PKEY=$(akey PROWLARR_API_KEY)
+
+# name -> syncLevel, one line each. Empty if Prowlarr is unreachable, which
+# degrades every app below to "unknown" and suppresses the verdicts rather
+# than inventing them.
+APP_LEVELS=$(curl -fsS --max-time 8 -H "X-Api-Key: $PKEY" \
+    "http://127.0.0.1:9696/api/v1/applications" 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+    for a in json.load(sys.stdin):
+        print(str(a.get("name","")).lower(), a.get("syncLevel"))
+except Exception: pass' 2>/dev/null)
+
+check_indexers() {
+    local name=$1 port=$2 ver=$3 key json level
+    key=$(akey "$(echo "$name" | tr '[:lower:]' '[:upper:]')_API_KEY")
+    if [[ -z "$key" ]]; then
+        warn "$name: no API key in $(basename "$ENV_FILE") — skipping"
+        return
+    fi
+    json=$(curl -fsS --max-time 8 -H "X-Api-Key: $key" \
+        "http://127.0.0.1:$port/api/$ver/indexer" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+        warn "$name: could not read indexer list (not deployed?)"
+        return
+    fi
+    level=$(awk -v n="$name" '$1==n {print $2}' <<< "$APP_LEVELS")
+    # The classifier is a quoted heredoc and takes its inputs through the
+    # environment: it contains both quote characters, and inlining it as
+    # python3 -c '...' lets the shell eat them silently rather than error —
+    # you get a report with the quotes missing and no hint why.
+    local report
+    report=$(IX_JSON="$json" IX_NAME="$name" IX_LEVEL="$level" python3 - <<'PY'
+import json, os
+
+name = os.environ["IX_NAME"]
+level = os.environ.get("IX_LEVEL", "").strip()
+root = "http://gluetun:9696/"
+try:
+    ixs = json.loads(os.environ["IX_JSON"])
+except Exception:
+    print(f"WARN|{name}: indexer list was not JSON")
+    raise SystemExit
+
+if not level:
+    print(f"WARN|{name}: Prowlarr sync level unknown (Prowlarr unreachable, or "
+          "no app connection) — indexer URLs not judged")
+    raise SystemExit
+
+if level == "disabled":
+    # Hand-managed by choice. Prowlarr excludes disabled apps from
+    # SyncEnabled(), so it neither adds nor removes here; a direct indexer URL
+    # is correct and an empty list is a setup gap, not a wiring fault.
+    if ixs:
+        print(f"OK|{name}: {len(ixs)} indexer(s), Prowlarr sync disabled "
+              "(hand-managed — URLs intentionally not proxied)")
+    else:
+        print(f"WARN|{name}: no indexers, and Prowlarr sync is disabled for it "
+              "— it cannot search until indexers are added by hand")
+    raise SystemExit
+
+if not ixs:
+    print(f"WARN|{name}: no indexers despite sync '{level}' — check Prowlarr → "
+          "Settings → Apps → Test, and category overlap with the indexer's caps")
+    raise SystemExit
+
+bad = []
+for ix in ixs:
+    url = next((f.get("value") for f in ix.get("fields", [])
+                if f.get("name") == "baseUrl"), "") or ""
+    # Everything after the Prowlarr root must be exactly "<id>/". A leftover
+    # UrlBase makes it "prowlarr/<id>/", which misses the newznab route.
+    tail = url[len(root):] if url.startswith(root) else None
+    if tail is None or not tail.rstrip("/").isdigit():
+        bad.append((ix.get("name", "?"), url or "(unset)"))
+for ixname, url in bad:
+    print(f"BAD|{name}: indexer '{ixname}' -> {url} (not a Prowlarr proxy URL)")
+if bad:
+    # No "delete these" advice: the forced sync already removes what Prowlarr
+    # owns, so a survivor is either hand-added or proof Prowlarr cannot reach
+    # this app. Deleting it loses a working indexer or fixes nothing.
+    print(f"BAD|{name}: {len(bad)}/{len(ixs)} indexer(s) will fail with the "
+          f"'doctype' XML error — test Prowlarr → Settings → Apps → {name}")
+else:
+    print(f"OK|{name}: {len(ixs)} indexer(s), all proxied by Prowlarr")
+PY
+)
+    # Herestring, not a pipe: the ok/bad/warn counters must increment in this
+    # shell, not in a subshell that exits and discards them.
+    while IFS='|' read -r verdict msg; do
+        case "$verdict" in
+            OK)   ok   "$msg" ;;
+            BAD)  bad  "$msg" ;;
+            WARN) warn "$msg" ;;
+        esac
+    done <<< "$report"
+}
+
+check_indexers radarr 7878 v3
+check_indexers sonarr 8989 v3
+check_indexers lidarr 8686 v1
+
+# End-to-end proof on one indexer: issue the exact caps request an *arr makes,
+# through Prowlarr's newznab route, and confirm XML comes back rather than a
+# page. Loopback rather than the gluetun alias only because this runs on the
+# host; it is the same route and the same handler.
+if [[ -n "$PKEY" ]]; then
+    ixid=$(curl -fsS --max-time 8 -H "X-Api-Key: $PKEY" \
+        "http://127.0.0.1:9696/api/v1/indexer" 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)[0]["id"])
+except Exception: pass' 2>/dev/null)
+    if [[ -z "$ixid" ]]; then
+        warn "prowlarr: no indexers configured — nothing to probe"
+    else
+        head=$(curl -fsS --max-time 15 \
+            "http://127.0.0.1:9696/$ixid/api?t=caps&apikey=$PKEY" 2>/dev/null \
+            | head -c 200)
+        case "$head" in
+            # Prowlarr returns the indexer's caps document, or proxies the
+            # indexer's own error XML. Either is XML, which is the point.
+            '<?xml'*|'<caps'*|'<error'*) ok "prowlarr: /$ixid/api?t=caps returns XML" ;;
+            '') warn "prowlarr: caps probe returned nothing (Mullvad down? see gluetun)" ;;
+            *)  bad "prowlarr: /$ixid/api?t=caps returned non-XML — this is the *arr 'doctype' error at its source" ;;
+        esac
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 sec "Ingress"
@@ -120,8 +283,17 @@ elif ! tailscale status >/dev/null 2>&1; then
     bad "tailscaled not connected — admin ingress is down (Unraid GUI + LAN SSH still work)"
 else
     ok "tailscaled connected"
-    tags=$(tailscale status --json 2>/dev/null | tr ',' '\n' | grep -c 'tag:server')
-    [[ "$tags" -gt 0 ]] && ok "host carries tag:server" || bad "host missing tag:server — ACL and approvals key off it"
+    # .Self.Tags specifically. Grepping the whole document also matches
+    # .Peer[*].Tags, so on any tailnet with a second tag:server machine — which
+    # the ACL actively invites — this passed while THIS host was untagged, and
+    # an untagged host is what makes every ACL rule and Service approval
+    # silently not apply.
+    if tailscale status --json 2>/dev/null | python3 -c \
+        'import json,sys; sys.exit(0 if "tag:server" in ((json.load(sys.stdin).get("Self") or {}).get("Tags") or []) else 1)' 2>/dev/null; then
+        ok "host carries tag:server"
+    else
+        bad "host missing tag:server — ACL and Service approvals key off it"
+    fi
 
     if [[ -n "$TAILNET" ]]; then
         # A node generally cannot reach the TailVIP of a service it advertises
@@ -137,7 +309,7 @@ else
         if grep -q 'svc:' <<<"$serve_json"; then
             # The CLI does surface service proxies here, so per-service state
             # is meaningful.
-            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach; do
+            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach nextcloud; do
                 if grep -q "svc:$s" <<<"$serve_json"; then
                     ok "svc:$s advertised by this host"
                 else
@@ -197,15 +369,161 @@ if docker inspect ollama >/dev/null 2>&1; then
         fi
     done
 
-    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null)
-    if [[ -n "$free" ]]; then
-        # OLLAMA_GPU_OVERHEAD reserves 2 GiB so a transcode can always start.
-        [[ "$free" -ge 2048 ]] \
-            && ok "GPU has ${free} MiB free (>= 2 GiB reserved for Plex)" \
-            || bad "only ${free} MiB free — Plex's reservation is not holding"
+    # Assert the RESERVATION IS CONFIGURED, and report free VRAM as information.
+    #
+    # The old check was `memory.free >= 2048`, which inverts what it claims to
+    # test: memory.free counts VRAM nobody has allocated, and Plex's own NVENC
+    # sessions consume it. A box with a model resident and two 4K transcodes
+    # running — the reservation working exactly as designed — reported "Plex's
+    # reservation is not holding" and failed the run. OLLAMA_GPU_OVERHEAD
+    # constrains what OLLAMA may allocate; it says nothing about total free.
+    # (It also broke outright on a second GPU: two lines of nvidia-smi output
+    # into `[[ -ge ]]` is a syntax error, which fell through to `bad`.)
+    overhead=$(docker exec ollama printenv OLLAMA_GPU_OVERHEAD 2>/dev/null | tr -dc '0-9')
+    if [[ -n "$overhead" ]]; then
+        ok "OLLAMA_GPU_OVERHEAD is $(( overhead / 1024 / 1024 )) MiB — Plex's reservation is enforced"
+    else
+        bad "OLLAMA_GPU_OVERHEAD unset in the ollama container — nothing reserves VRAM for Plex"
     fi
+    free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)
+    [[ -n "$free" ]] && printf '    (GPU currently %s MiB free — informational; low is normal under load)\n' "$free"
+
 else
     warn "ollama not deployed"
+fi
+
+# ---------------------------------------------------------------------------
+sec "Cloud plane"
+
+if docker inspect nextcloud >/dev/null 2>&1; then
+    # The /mnt/cache binds are only safe while every appdata file lives on the
+    # cache pool. If someone gives the share a secondary storage tier, files
+    # can also land on the array, /mnt/cache/appdata/X and /mnt/user/appdata/X
+    # stop being the same files, and a speedup becomes split-brain. This is
+    # the check that catches it — it develops silently, months later.
+    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+    if [[ -z "$cachecfg" ]]; then
+        warn "cannot read appdata share config — verify shareUseCache=only by hand"
+    elif [[ "$cachecfg" == "only" ]]; then
+        ok "appdata is cache-only (the /mnt/cache nextcloud binds are safe)"
+    else
+        bad "appdata shareUseCache=$cachecfg, expected 'only' — /mnt/cache and /mnt/user can now DIVERGE"
+    fi
+
+    # Ownership, asserted rather than assumed. Unraid's Tools -> New
+    # Permissions chowns everything to nobody:users, which breaks both of
+    # these — and leaves the containers looking fine until they restart.
+    if [[ -d /mnt/user/appdata/nextcloud ]]; then
+        got=$(stat -c %u /mnt/user/appdata/nextcloud 2>/dev/null)
+        [[ "$got" == "33" ]] \
+            && ok "appdata/nextcloud owned by www-data (33)" \
+            || bad "appdata/nextcloud owned by uid $got, expected 33 (New Permissions run?)"
+    fi
+    # Postgres 18 keeps its cluster at <bind>/<major>/docker, not at the bind
+    # root — the bind is /var/lib/postgresql, one level above PGDATA. The bind
+    # root itself stays root-owned (docker creates it; the entrypoint only
+    # chowns PGDATA), so asserting on it would fail on a perfectly good install.
+    # Globbed rather than hardcoding 18 so a major upgrade doesn't silently
+    # turn this check off.
+    for pgdata in /mnt/user/appdata/nextcloud-db/*/docker; do
+        [[ -d "$pgdata" ]] || continue
+        got=$(stat -c %u "$pgdata" 2>/dev/null)
+        [[ "$got" == "70" ]] \
+            && ok "$(basename "$(dirname "$pgdata")")/docker cluster owned by postgres (70)" \
+            || bad "postgres cluster owned by uid $got, expected 70 (New Permissions run?)"
+    done
+
+    occ() { docker exec -u www-data nextcloud php occ "$@" 2>/dev/null; }
+
+    # One round trip, read twice. `occ status` is one of the few commands that
+    # still answers while Nextcloud is in maintenance mode, which is exactly
+    # the state we most need it to report on.
+    ncstatus=$(occ status)
+    if echo "$ncstatus" | grep -q 'installed: true'; then
+        ok "nextcloud installed"
+        echo "$ncstatus" | grep -q 'maintenance: false' \
+            && ok "nextcloud not in maintenance mode" \
+            || bad "nextcloud is in MAINTENANCE MODE — a backup run left it there? (occ maintenance:mode --off)"
+    else
+        bad "nextcloud reports not installed"
+    fi
+
+    if [[ -n "$TAILNET" ]]; then
+        # NOTE the wording: this does NOT produce a 400. Nextcloud's
+        # TrustedDomainHelper returns true unconditionally when `overwritehost`
+        # is set — "overwritehost is always trusted" is upstream's own comment —
+        # and OVERWRITEHOST is set here, so the untrusted-domain gate in
+        # base.php is unreachable. The real symptom of a mismatch is subtler and
+        # worse: pages serve, but absolute URLs and redirects point at the stale
+        # hostname. Worth asserting for exactly that reason; just don't expect
+        # a clean error to announce it.
+        occ config:system:get trusted_domains | grep -q "nextcloud.$TAILNET" \
+            && ok "trusted_domains includes nextcloud.$TAILNET" \
+            || bad "trusted_domains missing nextcloud.$TAILNET — links/redirects will point at the wrong host"
+    fi
+
+    # The cron container has no healthcheck by design (crond is idle between fires, and
+    # pgrep is not guaranteed present). This is the signal that actually
+    # matters: did a background job run recently. /cron.sh runs busybox crond, firing every 5 min.
+    last=$(occ config:app:get core lastcron | tr -d '[:space:]')
+    if [[ -n "$last" && "$last" =~ ^[0-9]+$ ]]; then
+        age=$(( ( $(date +%s) - last ) / 60 ))
+        [[ "$age" -le 30 ]] \
+            && ok "nextcloud background jobs ran ${age}m ago" \
+            || bad "nextcloud background jobs last ran ${age}m ago — is nextcloud-cron running?"
+    else
+        warn "could not read nextcloud lastcron (fresh install?)"
+    fi
+
+    docker exec nextcloud-db pg_isready -U nextcloud -d nextcloud >/dev/null 2>&1 \
+        && ok "nextcloud-db accepting connections" \
+        || bad "nextcloud-db not accepting connections"
+
+    # Plane isolation, asserted from docker's own state rather than by trying
+    # to open a socket from inside another container. A connection test needs
+    # a binary in the *other* image (bash/nc/curl), and when that binary is
+    # missing the test fails in the direction that looks like a pass — which
+    # is how seerr and profilarr ran for months with healthchecks that could
+    # never succeed. Network membership is the invariant anyway.
+    for c in nextcloud nextcloud-db nextcloud-redis nextcloud-cron; do
+        docker inspect "$c" >/dev/null 2>&1 || continue
+        nets=$(docker inspect "$c" -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+        [[ "$(echo "$nets" | tr -s ' ' | sed 's/ $//')" == "cloud" ]] \
+            && ok "$c is on cloud only" \
+            || bad "$c is on: $nets — the cloud plane must be closed"
+    done
+
+    # The user files are NOT in appdata, so the Appdata Backup plugin never
+    # sees them. This is the only warning anyone gets.
+    #
+    # The assertion itself is free; only the size is not. `du -sh` here walks a
+    # share that may hold a migrated cloud library — hundreds of GB and a lot
+    # of inodes — through the shfs FUSE layer, so it is gated behind --quick
+    # along with the hardlink and VPN-egress checks. This script is only useful
+    # if it stays cheap enough to actually re-run.
+    if [[ -d /mnt/user/nextcloud ]]; then
+        if grep -qsE '^BACKUP_NEXTCLOUD_REMOTE=[^"'\''[:space:]]' "$STACK_DIR/.env"; then
+            ok "nextcloud user files have an offsite target configured"
+        else
+            warn "nextcloud user files have NO offsite backup (BACKUP_NEXTCLOUD_REMOTE unset) — nothing else covers them"
+        fi
+        if [[ $QUICK -eq 0 ]]; then
+            ncsize=$(du -sh /mnt/user/nextcloud 2>/dev/null | cut -f1)
+            [[ -n "$ncsize" ]] && ok "nextcloud user files: $ncsize"
+        fi
+    fi
+
+    latest_dump=$(ls -t /mnt/cache/appdata/nextcloud-dump/*.sql.gz 2>/dev/null | head -1)
+    if [[ -n "$latest_dump" ]]; then
+        dage=$(( ( $(date +%s) - $(stat -c %Y "$latest_dump") ) / 86400 ))
+        [[ "$dage" -le 8 ]] \
+            && ok "nextcloud db dump is ${dage}d old" \
+            || warn "newest nextcloud db dump is ${dage}d old"
+    else
+        warn "no nextcloud db dump found (backup-appdata.sh not run yet?)"
+    fi
+else
+    warn "nextcloud not deployed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -215,7 +533,20 @@ own_bad=0
 for d in /mnt/user/appdata/*/; do
     [[ -d "$d" ]] || continue
     case "$d" in
-        */homeserver/|*/chess-coach/) continue ;;   # git repo; deploy key + checkout
+        # The git repo. Not a bind mount.
+        */homeserver/) continue ;;
+        # chess-coach's PARENT must stay root-owned (it holds the GitHub deploy
+        # key; OpenSSH refuses a key owned by another user) but chess-coach/data
+        # is the bind mount and MUST be nobody:users — coach runs as 99:100 on a
+        # plain python-slim image with no chown-at-start entrypoint. Skipping
+        # the whole tree left the one path that can actually break unchecked, so
+        # it is asserted explicitly below instead.
+        */chess-coach/) continue ;;
+        # The Nextcloud plane is legitimately NOT nobody:users — its images drop
+        # to www-data and postgres themselves. Asserted positively in the Cloud
+        # plane section, because "not nobody" is correct for these but "anything
+        # at all" is not.
+        */nextcloud/|*/nextcloud-db/|*/nextcloud-dump/) continue ;;
         # plexinc/pms-docker runs its entrypoint as root by design and manages
         # ownership internally via PLEX_UID/PLEX_GID, so root-owned paths here
         # are correct rather than broken. `docker inspect plex` shows an empty
@@ -236,7 +567,26 @@ for d in /mnt/user/appdata/*/; do
 done
 [[ $own_bad -eq 0 ]] && ok "appdata ownership clean (3 levels deep)" || true
 
-latest=$(ls -t /mnt/user/backups/appdata/*.tar.gz 2>/dev/null | head -1)
+# The one path inside chess-coach that must be nobody:users. Its parent is
+# skipped above (deploy key), so without this the container's most likely
+# failure — a root-owned data dir, which is what Docker creates if
+# setup-unraid.sh never ran — is invisible to this script.
+if [[ -d /mnt/user/appdata/chess-coach/data ]]; then
+    cdo=$(stat -c %U /mnt/user/appdata/chess-coach/data 2>/dev/null)
+    [[ "$cdo" == "nobody" ]] \
+        && ok "chess-coach/data owned by nobody (coach runs as 99:100)" \
+        || bad "chess-coach/data owned by $cdo, expected nobody — coach's SQLite writes will fail"
+fi
+
+# -maxdepth 2 and all three extensions, matching backup-appdata.sh's own
+# search. The Appdata Backup plugin writes DATED SUBDIRECTORIES containing the
+# tarball, so a depth-1 `*.tar.gz` glob matched nothing on a real install: this
+# reported "no appdata backup found" forever, and since WARN never fails the
+# run, the staleness gate below never executed once. A stopped backup plugin is
+# precisely what this exists to catch.
+latest=$(find /mnt/user/backups/appdata -maxdepth 2 \
+              \( -name '*.tar.gz' -o -name '*.tar.zst' -o -name '*.tar' \) \
+              -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
 if [[ -n "$latest" ]]; then
     age=$(( ( $(date +%s) - $(stat -c %Y "$latest") ) / 86400 ))
     [[ "$age" -le 14 ]] \

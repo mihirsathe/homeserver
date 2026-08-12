@@ -53,6 +53,13 @@ ENV_FILES = [STACK_DIR / ".env", STACK_DIR / "generated.env"]
 # sab and prowlarr point at gluetun's published ports because both share
 # gluetun's network namespace and have no host port of their own.
 #
+# nextcloud is the one service where the NAME here is load-bearing beyond
+# routing: it has to match the trusted domain baked in at install time
+# (NEXTCLOUD_TRUSTED_DOMAINS in docker-compose.yml, built from TAILNET_NAME).
+# Rename it and Nextcloud answers 400 "untrusted domain" — the route works,
+# the app refuses. Fix with `occ config:system:set trusted_domains`, not by
+# reverting the rename.
+#
 # Deliberately absent:
 #   plex   — own auth, own *.plex.direct certs, own forwarded port. Proxying it
 #            adds a hop and breaks direct-connection negotiation.
@@ -72,6 +79,7 @@ SERVICES: dict[str, int] = {
     "profilarr": 6868,
     "actual":    5006,
     "coach":     8000,
+    "nextcloud": 8081,
 }
 
 # Services are tagged so the existing ACL grant (tag:admin -> tag:server)

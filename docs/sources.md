@@ -6,12 +6,12 @@ Every package, image, plugin, and driver used in this stack — where it comes f
 
 ## Docker Images
 
-All pulled at deploy time via `docker compose pull` and refreshed monthly by `update-stack.sh`. Each maintainer's stable rolling tag is used — hotio publishes `:release`, Plex publishes `:public`, the rest track `:latest`.
+All pulled at deploy time via `docker compose pull` and refreshed monthly by `update-stack.sh`. Most track their maintainer's stable rolling tag — hotio publishes `:release`, Plex publishes `:public`, the rest track `:latest`.
+
+**The Nextcloud plane is the exception: its tags are major-pinned.** Nextcloud refuses to skip a major version and Postgres will not open a data directory from an older major, so both upgrades are stateful and one-way. Pinning means the unattended monthly pull can only ever fetch patch releases; major bumps are a deliberate step ([operations.md](operations.md#nextcloud-major-upgrades)).
 
 | Container | Image | Tag | Registry | Maintainer |
 |-----------|-------|-----|----------|------------|
-| caddy | `caddy` | `:2-alpine` | Docker Hub | Caddy authors (official) |
-| adguard | `adguard/adguardhome` | `:latest` | Docker Hub | AdGuard (official) |
 | gluetun | `qmcgaw/gluetun` | `:latest` | Docker Hub | qdm12 (community, widely used) |
 | sabnzbd | `ghcr.io/hotio/sabnzbd` | `:release` | GitHub Container Registry | hotio |
 | prowlarr | `ghcr.io/hotio/prowlarr` | `:release` | GitHub Container Registry | hotio |
@@ -24,6 +24,14 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
 | profilarr | `santiagosayshey/profilarr` | `:latest` | Docker Hub | Santiago ([GitHub org Dictionarry-Hub](https://github.com/Dictionarry-Hub/profilarr) · [Docker Hub](https://hub.docker.com/r/santiagosayshey/profilarr)) |
 | ollama | `ollama/ollama` | `:latest` | Docker Hub | Ollama Inc. (official) |
+| actual_server | `actualbudget/actual-server` | `:latest` | Docker Hub | Actual Budget (official) |
+| actual-ai | `sakowicz/actual-ai` | `:latest` | Docker Hub | sakowicz (community) |
+| coach | *(built locally)* | — | — | [mihirsathe/chess-coach](https://github.com/mihirsathe/chess-coach) — private repo, `build:` not `image:` |
+| nextcloud · nextcloud-cron | `nextcloud` | `:33-apache` | Docker Hub | Nextcloud GmbH (official) |
+| nextcloud-db | `postgres` | `:18-alpine` | Docker Hub | PostgreSQL / Docker Official Images |
+| nextcloud-redis | `redis` | `:8-alpine` | Docker Hub | Redis / Docker Official Images |
+
+**`nextcloud:33-apache`** is the upstream official image, not `linuxserver/nextcloud` and not Nextcloud AIO. AIO would need the Docker socket and would own its own containers, which is incompatible with a single version-controlled Compose file; the reasoning, and the OpenCloud / Seafile alternatives, are recorded in [decisions.md](decisions.md). The `-apache` variant is used rather than `-fpm` because it needs no separate web-server container and ships the `.well-known` CalDAV/CardDAV rewrites already configured.
 
 **hotio** (`ghcr.io/hotio`) is the de facto standard for *arr app images — tightly maintained, consistent `PUID`/`PGID`/`UMASK` environment model, fast to release updates. Source: [hotio.dev](https://hotio.dev).
 
@@ -31,7 +39,7 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 
 **`ollama/ollama`** is the upstream official image, run unmodified — the GPU-sharing behaviour is entirely environment variables in `docker-compose.yml`, so there is no custom image or sidecar to keep patched.
 
-**plexinc/pms-docker** is the official Plex image; used instead of a hotio Plex image because the official image's `PLEX_PREFERENCE_*` environment variable mechanism is how hardware transcoding preferences are pre-configured at first boot.
+**plexinc/pms-docker** is the official Plex image, used instead of a hotio Plex image because it handles `PLEX_CLAIM`, `ADVERTISE_IP`/`ALLOWED_NETWORKS` and the nvidia runtime properly. It does **not** support a `PLEX_PREFERENCE_*` mechanism — that claim was wrong, and hardware-transcoding preferences are set by `bootstrap.py` over the `/:/prefs` API.
 
 ---
 

@@ -222,6 +222,33 @@ def wait_for(url: str, label: str, timeout: int = 180) -> None:
     print(f"\nERROR: {label} did not come up within {timeout}s (last: {last_err})")
     sys.exit(1)
 
+def await_command(base: str, key: str, cmd_id: Optional[int], label: str,
+                  timeout: int = 90) -> None:
+    """Poll a queued *arr command to completion and report its real outcome.
+
+    Worth the extra round-trips. A command is accepted asynchronously, so a
+    202 proves only that it was queued — a sync that starts and then fails
+    reports nothing to the caller. The bug this exists to prevent was exactly
+    that shape: a sync announced as done that had in fact never run.
+    """
+    if not cmd_id:
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            status = arr_get(base, key, f"/api/v1/command/{cmd_id}").get("status")
+        except Exception as e:
+            print(f"  ⚠ {label}: could not read command status: {e}")
+            return
+        if status == "completed":
+            print(f"  ✓ {label}: completed")
+            return
+        if status in ("failed", "aborted", "cancelled"):
+            print(f"  ⚠ {label}: {status} — Prowlarr → System → Tasks for why")
+            return
+        time.sleep(2)
+    print(f"  ⚠ {label}: still running after {timeout}s — check Prowlarr → System → Tasks")
+
 # ---------------------------------------------------------------------------
 # Configure an *arr app: root folder + SABnzbd client + media management
 # ---------------------------------------------------------------------------
@@ -396,23 +423,41 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     }
 
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
-        # Both Prowlarr and the *arrs serve at root now (UrlBase stripped);
-        # URLs carry no urlbase suffix. prowlarrUrl points the *arr back at
-        # Prowlarr through gluetun's netns alias because Prowlarr itself has
-        # no bridge endpoint of its own. syncCategories pulled from the
-        # per-app map above so Sonarr/Lidarr get TV/Audio categories instead
-        # of Movies — reconcile_fields propagates this to any pre-existing
-        # Sonarr/Lidarr entries that were created with the wrong list.
-        desired_fields = {
-            "prowlarrUrl":    "http://gluetun:9696",
-            "baseUrl":        app_url,
-            "apiKey":         app_key,
-            "syncCategories": sync_categories[name],
+        # TWO CLASSES OF FIELD HERE, and the split is the whole point.
+        #
+        # INFRASTRUCTURE — where things live. These track docker-compose.yml, so
+        # the script owns them and reconciles them on every run; a container
+        # rename or an ingress change has to propagate or the link breaks.
+        # Both Prowlarr and the *arrs serve at root now (UrlBase stripped), so
+        # the URLs carry no urlbase suffix, and prowlarrUrl points back through
+        # gluetun's netns alias because Prowlarr has no bridge endpoint of its
+        # own.
+        #
+        # POLICY — syncCategories: which categories Prowlarr pushes to this app.
+        # That is a USER choice made in Prowlarr's UI, and this script has no
+        # business overwriting it. Set once when the connection is created,
+        # never touched again.
+        #
+        # It used to be reconciled alongside the infrastructure fields, and that
+        # is precisely how this stack spent months clobbering the Sonarr indexer
+        # settings on every bootstrap run: reconcile_fields forced the list back
+        # to ours, the PUT raised ProviderUpdatedEvent, Prowlarr re-synced, and
+        # Sonarr.cs:272 set each synced indexer's `categories` field to
+        # SupportedCategories(app.SyncCategories) — the INTERSECTION of our list
+        # with that indexer's advertised caps, top-level and subcategories alike
+        # (IndexerCapabilitiesCategories.cs:131). So a category this map names
+        # but the indexer does not advertise silently does nothing, and one the
+        # user selected but this map omits is silently dropped. Neither is the
+        # script's call to make, which is why the field is create-only.
+        infra_fields = {
+            "prowlarrUrl": "http://gluetun:9696",
+            "baseUrl":     app_url,
+            "apiKey":      app_key,
         }
         existing_apps = arr_get(base, key, "/api/v1/applications")
         existing = next((a for a in existing_apps if a.get("name") == name), None)
         if existing is not None:
-            if reconcile_fields(existing, fields=desired_fields):
+            if reconcile_fields(existing, fields=infra_fields):
                 try:
                     arr_put(base, key, f"/api/v1/applications/{existing['id']}", existing)
                     print(f"  ✓ Prowlarr: {name} reconciled")
@@ -420,12 +465,22 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
                     print(f"  ⚠ Prowlarr: failed to reconcile {name}: {e}")
             else:
                 print(f"  ✓ Prowlarr: {name} already connected")
+            # A disabled sync is a deliberate choice, and it is left alone.
+            # Prowlarr excludes disabled apps from SyncEnabled(), so it will
+            # never populate this *arr's indexers — they are hand-managed, which
+            # is supported, not broken. Say so here so the indexer report at the
+            # end of the run is not misread as a fault.
+            if existing.get("syncLevel") == "disabled":
+                print(f"  · Prowlarr: {name} sync is DISABLED — its indexers are "
+                      "hand-managed; Prowlarr will not add or remove any")
             return
         try:
             arr_post(base, key, "/api/v1/applications", {
                 "name": name,
                 "syncLevel": "fullSync",
-                "fields": [{"name": k, "value": v} for k, v in desired_fields.items()],
+                "fields": [{"name": k, "value": v} for k, v in
+                           {**infra_fields,
+                            "syncCategories": sync_categories[name]}.items()],
                 "implementationName": name,
                 "implementation": impl,
                 "configContract": contract,
@@ -445,17 +500,216 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     add_app("Lidarr", "http://lidarr:8686",
             require(env, "LIDARR_API_KEY"),   "Lidarr", "LidarrSettings")
 
-    # Trigger sync
+    # Force a re-push of every indexer definition into every connected app.
+    #
+    # This used to POST /api/v1/applications/sync. That is not a Prowlarr
+    # endpoint and never has been — the application provider controller
+    # exposes only CRUD plus schema/test/testall/action/{name} (checked
+    # against Prowlarr's own openapi.json; there is no path anywhere in the
+    # v1 API containing "sync"). The call 404'd on every run since it was
+    # written. It used a bare requests.post rather than arr_post, so nothing
+    # raised, nothing checked r.status_code, and the script printed
+    # "✓ indexer sync triggered" every time. The one piece of reconciliation
+    # bootstrap.py does not perform itself — the indexer definitions Prowlarr
+    # pushes into Radarr/Sonarr/Lidarr — has therefore never actually run.
+    #
+    # forceSync is the part that matters, not merely the fact of a sync.
+    # arr_put on an application above already raises ProviderUpdatedEvent,
+    # which syncs on its own; but an unforced sync skips any indexer Prowlarr
+    # believes is unchanged, and from Prowlarr's side nothing about the
+    # indexer HAS changed when what moved is prowlarrUrl or syncCategories.
+    # Only the forced path re-issues UpdateIndexer(definition, force) and
+    # rewrites the definition the *arr holds — which is what corrects a
+    # baseUrl that has gone stale relative to the values reconciled above.
+    #
+    # THIS COMMAND ALSO DELETES. ApplicationService.cs:125 calls
+    # SyncIndexers(enabledApps, indexers, true, ForceSync) against the signature
+    # (applications, indexers, removeRemote = false, forceSync = false) — so
+    # removeRemote is TRUE here. Prowlarr adopts indexers it finds in the *arr
+    # that were "setup manually in the app" into its mapping table, then removes
+    # any whose mapped Prowlarr indexer no longer exists. Hand-added indexers in
+    # a sync-ENABLED *arr are therefore fair game for deletion. Apps whose sync
+    # is disabled are excluded by SyncEnabled() and never touched, which is what
+    # makes disabling the sync a safe way to hand-manage one *arr's indexers.
     try:
-        requests.post(f"{base}/api/v1/applications/sync",
-                      headers={"X-Api-Key": key}, timeout=15)
-        print("  ✓ Prowlarr: indexer sync triggered")
+        cmd = arr_post(base, key, "/api/v1/command",
+                       {"name": "ApplicationIndexerSync", "forceSync": True})
+        print("  ✓ Prowlarr: forced indexer sync queued")
+        await_command(base, key, cmd.get("id"), "Prowlarr: indexer sync")
     except Exception as e:
-        print(f"  ⚠ Prowlarr: sync trigger failed: {e}")
+        print(f"  ⚠ Prowlarr: sync command failed: {e}")
+
+# ---------------------------------------------------------------------------
+# Verify what Prowlarr actually pushed into the *arrs
+# ---------------------------------------------------------------------------
+def check_synced_indexers(services: dict) -> None:
+    """Report *arr indexers whose baseUrl cannot be a working Prowlarr URL.
+
+    Prowlarr writes each synced indexer into the *arr as
+    `{prowlarrUrl}/{prowlarr indexer id}/` with apiPath `/api`, so the *arr
+    fetches `http://gluetun:9696/<id>/api?t=caps`. Two things routinely leave
+    that path wrong, and both fail identically and unhelpfully — the *arr
+    reports, on Test and on every search:
+
+        Unable to connect to indexer: 'doctype' is an unexpected token.
+        The expected token is 'DOCTYPE'. Line 1, position 3.
+
+    which is .NET's XML parser being handed an HTML page. The request missed
+    Prowlarr's `/{id}/api` newznab route and fell through to Prowlarr's SPA,
+    so what came back was a web page where Newznab XML was expected. Note it
+    is not a connectivity failure: something answered.
+
+      - A stale path prefix. Before the Tailscale Services migration these
+        apps ran with UrlBase set, so any definition synced back then carries
+        `/prowlarr` in the path and now misses the route. The forced sync
+        above rewrites these.
+      - An orphan. Delete an indexer in Prowlarr and re-add it — which is
+        what fixing an indexer's categories often amounts to — and it comes
+        back with a NEW id, while the *arr keeps its entry pointing at the
+        old one. The forced sync above removes these itself (it runs with
+        removeRemote=true), so one surviving here means Prowlarr could not
+        reach that *arr, not that you need to delete it by hand.
+
+    ONLY MEANINGFUL FOR SYNC-ENABLED APPS. If Prowlarr's connection for an
+    *arr is disabled, that *arr's indexers are hand-managed on purpose — they
+    are SUPPOSED to point straight at the indexer rather than at a Prowlarr
+    proxy URL, and an empty list means nothing more than "not set up yet".
+    Reporting either as a fault is how a deliberate configuration gets
+    mistaken for a breakage, so the sync level is read first and drives
+    everything below.
+
+    Read-only on purpose. Deleting an *arr's indexers is never this script's
+    call — we surface the mismatch and name the fix.
+    """
+    expected = "http://gluetun:9696/"
+
+    # Prowlarr's sync level per app decides how to read each *arr's list.
+    # Fetched once; a failure here degrades to "unknown", which suppresses the
+    # verdicts rather than inventing them.
+    levels = {}
+    try:
+        pbase, pkey = services["prowlarr"]
+        for app in arr_get(pbase, pkey, "/api/v1/applications"):
+            levels[str(app.get("name", "")).lower()] = app.get("syncLevel")
+    except Exception as e:
+        print(f"  ⚠ could not read Prowlarr's app connections: {e}")
+
+    for name in ("radarr", "sonarr", "lidarr"):
+        base, key = services[name]
+        api_ver = "v1" if name == "lidarr" else "v3"
+        try:
+            indexers = arr_get(base, key, f"/api/{api_ver}/indexer")
+        except Exception as e:
+            print(f"  ⚠ {name}: could not list indexers: {e}")
+            continue
+
+        level = levels.get(name)
+        if level == "disabled" or (name in levels and level is None):
+            print(f"  · {name}: {len(indexers)} indexer(s); Prowlarr sync is "
+                  "disabled for this app — hand-managed, nothing to reconcile")
+            if not indexers:
+                print(f"       {name} has NO indexers and Prowlarr will not add "
+                      "any. Add them in its own UI, or re-enable the sync in "
+                      "Prowlarr → Settings → Apps.")
+            continue
+        if name not in levels:
+            print(f"  ⚠ {name}: Prowlarr has no app connection for it — "
+                  "it will never receive indexers")
+            continue
+
+        if not indexers:
+            print(f"  ⚠ {name}: no indexers despite sync being '{level}' — "
+                  "check Prowlarr → Settings → Apps → Test, and that an "
+                  "indexer's categories overlap this app's Sync Categories")
+            continue
+        bad = []
+        for ix in indexers:
+            url = next((f.get("value") for f in ix.get("fields", [])
+                        if f.get("name") == "baseUrl"), "") or ""
+            # Everything after the Prowlarr root must be exactly "<id>/" —
+            # a leftover UrlBase makes it "prowlarr/<id>/" and misses.
+            tail = url[len(expected):] if url.startswith(expected) else None
+            if tail is None or not tail.rstrip("/").isdigit():
+                bad.append((ix.get("name", "?"), url or "(unset)"))
+        if bad:
+            for ixname, url in bad:
+                print(f"  ⚠ {name}: '{ixname}' → {url}")
+            print(f"  ⚠ {name}: {len(bad)}/{len(indexers)} indexer(s) not on a "
+                  "Prowlarr proxy URL — these are the 'doctype' test failures.")
+            # Deliberately does NOT tell you to delete them. The forced sync
+            # already removes what it owns, so anything still listed here is
+            # either hand-added (deleting it loses a working indexer) or proof
+            # Prowlarr cannot reach this *arr (deleting it changes nothing).
+            print(f"       Check Prowlarr → Settings → Apps → {name.capitalize()} "
+                  "→ Test. Do not delete these until that passes.")
+        else:
+            print(f"  ✓ {name}: {len(indexers)} indexer(s), all proxied by Prowlarr")
 
 # ---------------------------------------------------------------------------
 # Configure Plex: create libraries, trigger scan
 # ---------------------------------------------------------------------------
+def apply_plex_preferences(plex):
+    """Set the server preferences docker-compose.yml used to pretend it set.
+
+    The compose file carried fourteen PLEX_PREFERENCE_* environment variables
+    and a comment claiming plexinc/pms-docker applies them to Preferences.xml
+    on first boot. It does not — that image's first-run script handles only
+    PLEX_UID, PLEX_GID, PLEX_CLAIM, ADVERTISE_IP, ALLOWED_NETWORKS and
+    CHANGE_CONFIG_DIR_OWNERSHIP, and PLEX_PREFERENCE appears nowhere in the
+    repository. So every one of them was silently ignored, most importantly
+    the two that switch on NVENC — meaning the entire hardware-transcoding
+    setup (the nvidia runtime, the Nvidia-Driver plugin, the VRAM reservation
+    Ollama is built around) did nothing until somebody happened to tick the box
+    in the Plex UI.
+
+    This is the mechanism that actually works: authenticated PUT to /:/prefs,
+    which is what the web UI itself calls. Runs on every bootstrap and is
+    idempotent — setting a preference to its current value is a no-op.
+
+    Deliberately NOT fatal. A rejected preference should not abort a bootstrap
+    that has already created libraries; it is reported and the run continues.
+    """
+    prefs = {
+        # The two that matter. Without these, Plex transcodes on CPU no matter
+        # what the compose file or the driver plugin say.
+        "TranscoderH264BackgroundPreset": "veryfast",
+        "HardwareAcceleratedCodecs": 1,
+        "HardwareAcceleratedEncoders": 1,
+        # Privacy / noise, all previously inert.
+        "CrashReportsOptedOut": 1,
+        "PushNotificationsEnabled": 0,
+        "RelayEnabled": 0,
+        "DlnaEnabled": 0,
+        # Library maintenance.
+        "GenerateBIFBehavior": 1,
+        "GenerateChapterThumbBehavior": 1,
+        "MusicAnalysisBehavior": 1,
+        "ScheduledLibraryUpdatesEnabled": 1,
+        "ScheduledLibraryUpdateAt": 3,
+    }
+    ok, failed = 0, []
+    for key, value in prefs.items():
+        try:
+            plex.settings.get(key).set(value)
+            ok += 1
+        except Exception as e:  # unknown key on this Plex version, or read-only
+            failed.append(f"{key} ({type(e).__name__})")
+    try:
+        plex.settings.save()
+        print(f"  ✓ Plex: applied {ok} server preferences (incl. NVENC on)")
+    except Exception as e:
+        print(f"  ⚠ Plex: could not save preferences: {e}")
+        print("    Set Settings → Transcoder → 'Use hardware acceleration' by hand.")
+        return
+    if failed:
+        print(f"    note: skipped {len(failed)} unknown/read-only: {', '.join(failed[:4])}")
+
+    # Hardware transcoding also requires an active Plex Pass. The preference
+    # sets cleanly without one and is then ignored at playback, which is why
+    # this is worth saying out loud rather than leaving to a docs footnote.
+    print("    (NVENC additionally requires an active Plex Pass on this account)")
+
+
 def configure_plex(token: str, lan_ip: str):
     """Create libraries + trigger scan. Returns the connected PlexServer so
     downstream steps (Tautulli pre-seed) can reuse it, or None on failure."""
@@ -472,6 +726,8 @@ def configure_plex(token: str, lan_ip: str):
         print(f"  ⚠ Plex: could not connect: {e}")
         print("    Check PLEX_LAN_IP and PLEX_TOKEN in .env")
         return None
+
+    apply_plex_preferences(plex)
 
     existing = {s.title for s in plex.library.sections()}
 
@@ -627,6 +883,13 @@ def main() -> None:
     print("\n=== Prowlarr ===\n")
     url, key = SERVICES["prowlarr"]
     configure_prowlarr(url, key, env)
+
+    # After the forced sync, confirm from the *arr side that what landed there
+    # is actually usable. Prowlarr reporting a successful sync and the *arr
+    # holding a URL that 404s into Prowlarr's web UI are not mutually
+    # exclusive — orphaned definitions survive every sync untouched.
+    print("\n=== Synced indexers ===\n")
+    check_synced_indexers(SERVICES)
 
     print("\n=== Plex ===\n")
     plex_token = get(env, "PLEX_TOKEN")

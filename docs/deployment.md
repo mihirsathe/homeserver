@@ -167,7 +167,7 @@ python3 scripts/bootstrap.py
 
 Waits for all services, wires the stack together via API, and creates Plex libraries. Prompts for a Plex token from Plex Web → Settings → General → Show.
 
-**Hardware transcoding requires an active Plex Pass subscription.** The compose file and bootstrap flow pre-configure NVENC/NVDEC, but Plex refuses to enable them without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), the Plex account is almost certainly missing Pass.
+**Hardware transcoding requires an active Plex Pass subscription.** `bootstrap.py` turns NVENC/NVDEC on via Plex's `/:/prefs` API, but Plex ignores the setting at playback without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), check in this order: (1) `bootstrap.py` printed `✓ Plex: applied N server preferences`, (2) Settings → Transcoder shows hardware acceleration ticked, (3) the account has Plex Pass. Before this was fixed the answer was almost always (1) — the preferences were set by environment variables the image ignores.
 
 Finally, open **Seerr** at `https://seerr.<tailnet>.ts.net/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
@@ -214,6 +214,48 @@ docker exec <container> curl -fsS http://ollama:11434/api/tags
 ```
 
 Note that Ollama has **no authentication** — anything on the `ai` network can also delete models. That network is isolated from the media planes and nothing outside the host can reach it (no Tailscale Service, no `0.0.0.0` bind), but it's why access is opt-in rather than stack-wide.
+
+### Nextcloud first-run
+
+Nextcloud installs itself — there is no wizard. `generate-configs.py` generated the
+database, Redis and admin passwords into `generated.env`, and the container consumed them
+on first start.
+
+```bash
+grep ^NEXTCLOUD_ADMIN_PASSWORD= generated.env
+```
+
+Log in at `https://nextcloud.<tailnet>.ts.net/` as `admin` (or whatever
+`NEXTCLOUD_ADMIN_USER` is set to) once Step 6.5 has published `svc:nextcloud`.
+
+**Then check Administration settings → Overview.** Nextcloud's own security-and-setup
+warnings are the fastest way to confirm the reverse-proxy plumbing is right, and four
+specific results are what you want:
+
+| Expected | What it proves |
+|----------|----------------|
+| No "untrusted domain" — the page loads at all | `NEXTCLOUD_TRUSTED_DOMAINS` matched the Service name |
+| No reverse-proxy / `X-Forwarded-For` warning | `TRUSTED_PROXIES` is right, so rate limiting sees real client IPs |
+| No `.well-known` CalDAV/CardDAV warning | The image's Apache rules are intact — calendar and contacts will work |
+| No "background jobs have not run" | `nextcloud-cron` is alive. Allow one 15-minute cycle before judging this |
+
+If the page renders as `http://` links or mixed-content-blocks, that is `OVERWRITEPROTOCOL`
+— see [troubleshooting.md](troubleshooting.md).
+
+**Set the offsite backup target before you put real files in it.** `BACKUP_NEXTCLOUD_REMOTE`
+in `.env` is the *only* backup these files get; the Appdata Backup plugin covers
+`/mnt/user/appdata` and Nextcloud's user files are not in it.
+
+```bash
+rclone config                                   # if you have not already
+# .env:  BACKUP_NEXTCLOUD_REMOTE=b2:my-bucket/nextcloud
+bash scripts/backup-appdata.sh                  # run once by hand to prove it works
+docker exec -u www-data nextcloud php occ status # maintenance: false — the trap cleared it
+```
+
+Finally, install the desktop and mobile clients and point them at
+`https://nextcloud.<tailnet>.ts.net`. They need Tailscale running on that device to sync —
+that is the accepted cost of not publishing it.
 
 ---
 
@@ -262,6 +304,14 @@ the whole point of the change, so do not move on until you see it.
 | `svc:seerr` | `127.0.0.1:5055` |
 | `svc:tautulli` | `127.0.0.1:8181` |
 | `svc:profilarr` | `127.0.0.1:6868` |
+| `svc:actual` | `127.0.0.1:5006` |
+| `svc:coach` | `127.0.0.1:8000` |
+| `svc:nextcloud` | `127.0.0.1:8081` |
+
+`svc:nextcloud` is the one entry whose *name* matters beyond routing: it has to match the
+trusted domain Nextcloud baked in at install time. Rename it and Nextcloud answers
+`400 untrusted domain` — the route works, the app refuses. See
+[troubleshooting.md](troubleshooting.md).
 
 Plex is deliberately absent — it keeps its own port, its own auth and its own
 `*.plex.direct` certificates. Ollama is absent too: it has no authentication,

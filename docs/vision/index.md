@@ -28,7 +28,7 @@ The plan is eight sequential phases ordered by dependency and impact. Each phase
 | [4 — Wiring](phases.md#phase-4--structured-wiring) | Cat6A to every room, patch panel | High | Future |
 | [5 — Home Automation](home-automation.md) | Proxmox HA, Home Assistant, Thread/Matter | Medium | Future |
 | [6 — Cameras](phases.md#phase-6--security-cameras) | Frigate NVR, PoE cameras, AI detection | Medium | Future |
-| [7 — Personal Cloud](phases.md#phase-7--personal-cloud) | Nextcloud, Immich, Vaultwarden | Low | Future (Tailscale already in use — not a Phase-7 item) |
+| [7 — Personal Cloud](phases.md#phase-7--personal-cloud) | Nextcloud, Immich, Vaultwarden | Low | **Nextcloud deployed**; the rest future (Tailscale already in use — not a Phase-7 item) |
 | [8 — Media Upgrades](phases.md#phase-8--advanced-media-upgrades) | GPU, array expansion, indexers | Low | Future |
 
 ---

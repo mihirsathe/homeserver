@@ -74,6 +74,18 @@ read -rp "Type 'yes' to proceed: " confirm
 [[ "$confirm" == "yes" ]] || die "Aborted."
 
 echo ""
+# Free-space pre-flight. The staging dir below lands on the appdata share,
+# which is cache-ONLY and cannot spill to the array, and the extract is of the
+# WHOLE archive regardless of how many services were selected. Running the pool
+# out of space mid-restore is a bad way to find that out.
+need=$(( $(stat -c %s "$chosen") / 1048576 * 3 ))
+avail=$(df -Pm /mnt/user/appdata | awk 'NR==2 {print $4}')
+if [[ -n "$avail" && "$avail" -lt "$need" ]]; then
+    echo "ERROR: need ~${need}MB free on the cache pool to stage this restore; ${avail}MB available." >&2
+    exit 1
+fi
+
+echo ""
 echo "Stopping containers..."
 # shellcheck disable=SC2086
 compose stop $services
@@ -81,7 +93,24 @@ compose stop $services
 # Extract to a temp dir first, then move per service. This avoids wiping
 # services the user didn't ask to restore, even if the archive is full-appdata.
 tmp=$(mktemp -d -p /mnt/user/appdata .restore.XXXXXX)
-trap 'rm -rf "$tmp"' EXIT
+
+# From here until the explicit `up -d` below, the selected services are STOPPED.
+# This script is `set -e`, so any failure in between — most obviously a
+# truncated or corrupt archive, which is exactly what you discover *while*
+# restoring — used to exit without restarting anything, leaving the stack down
+# with no message saying so. The trap restarts whatever we stopped, on every
+# exit path, before cleaning up the staging dir.
+restore_cleanup() {
+    rc=$?
+    rm -rf "$tmp"
+    if (( rc != 0 )); then
+        echo "" >&2
+        echo "Restore aborted (exit $rc) — restarting the services it stopped." >&2
+        # shellcheck disable=SC2086
+        compose up -d $services || echo "WARNING: could not restart: $services" >&2
+    fi
+}
+trap restore_cleanup EXIT
 
 echo "Extracting to staging dir: $tmp"
 case "$chosen" in
@@ -108,8 +137,31 @@ for svc in $services; do
         mv "$APPDATA_DIR/$svc" "$APPDATA_DIR/$svc.pre-restore-$(date +%Y%m%d-%H%M%S)"
     fi
     mv "$src" "$APPDATA_DIR/$svc"
-    chown -R nobody:users "$APPDATA_DIR/$svc"
-    echo "  ✓ $svc restored (previous kept as $svc.pre-restore-*)"
+
+    # Ownership is NOT nobody:users for every service. Most images here ship no
+    # USER directive and are pinned to 99:100 in docker-compose.yml, so they
+    # need it — but the Nextcloud plane's images drop privileges themselves and
+    # BREAK if chowned to nobody:users. That is the same damage Unraid's
+    # Tools -> New Permissions does, and this script would otherwise inflict it
+    # as part of a documented recovery procedure.
+    case "$svc" in
+        nextcloud|nextcloud-cron)
+            chown -R 33:33 "$APPDATA_DIR/$svc"      # www-data
+            echo "  ✓ $svc restored, owned by www-data (33) — NOT nobody:users"
+            ;;
+        nextcloud-db)
+            chown -R 70:70 "$APPDATA_DIR/$svc"      # postgres
+            echo "  ✓ $svc restored, owned by postgres (70) — NOT nobody:users"
+            ;;
+        nextcloud-dump|nextcloud-redis)
+            # Dumps are read by root; redis persists nothing. Leave as restored.
+            echo "  ✓ $svc restored (ownership left as-is)"
+            ;;
+        *)
+            chown -R nobody:users "$APPDATA_DIR/$svc"
+            echo "  ✓ $svc restored (previous kept as $svc.pre-restore-*)"
+            ;;
+    esac
 done
 
 echo ""
@@ -121,7 +173,13 @@ echo ""
 echo "Waiting up to 180s for services to report healthy..."
 deadline=$(( $(date +%s) + 180 ))
 while (( $(date +%s) < deadline )); do
+    # Seed from the services we restored, then clear each as it is observed.
+    # The old loop only inspected lines `compose ps` printed, so a service
+    # missing from the output — which is what an exited container looks like —
+    # was silently counted as healthy.
     bad=""
+    declare -A seen=()
+    ps_out=$(compose ps --all --format json 2>/dev/null)
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         s=$(echo "$line" | sed -n 's/.*"Service" *: *"\([^"]*\)".*/\1/p')
@@ -133,7 +191,11 @@ while (( $(date +%s) < deadline )); do
         elif [[ -n "$hp" && "$hp" != "healthy" ]]; then
             bad+=" $s(health=$hp)"
         fi
-    done < <(compose ps --format json)
+        seen["$s"]=1
+    done <<< "$ps_out"
+    for want in $services; do
+        [[ -n "${seen[$want]:-}" ]] || bad+=" $want(absent-from-ps)"
+    done
 
     if [[ -z "$bad" ]]; then
         echo "  All restored services healthy."
