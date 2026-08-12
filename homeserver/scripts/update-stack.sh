@@ -65,7 +65,11 @@ done
 # Pre-flight: appdata must have room for fresh image layers.
 # df reports 1K blocks; convert to MB. /mnt/user/appdata is a share, not a
 # mountpoint, so check its backing mount via `-P` which resolves it properly.
-FREE_MB=$(df -Pm /mnt/user/appdata 2>/dev/null | awk 'NR==2 {print $4}')
+# `|| true` is load-bearing: under `set -o pipefail` this substitution inherits
+# df's exit status, so if /mnt/user/appdata is missing the script died right
+# here — silently, before the "could not determine free space" branch below
+# could ever run, and with nothing in the log after the startup line.
+FREE_MB=$(df -Pm /mnt/user/appdata 2>/dev/null | awk 'NR==2 {print $4}' || true)
 if [[ -z "${FREE_MB:-}" ]]; then
     echo "[$(ts)] WARN: could not determine free space on /mnt/user/appdata"
 elif (( FREE_MB < MIN_FREE_MB )); then
@@ -78,6 +82,12 @@ fi
 compose() {
     /usr/bin/docker compose -f "$COMPOSE_FILE" --env-file "$DOCKER_ENV" "$@"
 }
+
+# The set the health gate must account for. Captured before the pull so a
+# service that fails to come back is detected by its ABSENCE, not just by a
+# status line it never gets to print.
+EXPECT_SVCS=$(compose config --services 2>/dev/null | tr '\n' ' ')
+[[ -n "$EXPECT_SVCS" ]] || { echo "[$(ts)] ERROR: could not enumerate services"; exit 1; }
 
 if (( DRY_RUN )); then
     echo "[$(ts)] Dry run: would run 'compose pull' and 'compose up -d'"
@@ -100,9 +110,21 @@ compose up -d
 echo "[$(ts)] Post-flight: waiting up to 300s for services to settle..."
 deadline=$(( $(date +%s) + 300 ))
 while (( $(date +%s) < deadline )); do
-    # compose ps --format json emits one JSON object per line (not an array).
+    # compose ps --all --format json emits one JSON object per line (not an array).
     # Each has Health (may be empty for no-healthcheck services) and State.
+    # Seed with every EXPECTED service, then remove each one observed healthy.
+    # The old loop derived `bad` only from what `compose ps` printed, so
+    # "service not mentioned" read as "service is fine" — and `compose ps`
+    # omits exited containers without --all, and its own failure inside
+    # `< <(...)` is invisible to set -e/pipefail. Either way the gate passed,
+    # and the script then ran `docker image prune -f`, deleting exactly the
+    # previous layers the comment below says it preserves for rollback.
     bad=""
+    ps_out=$(compose ps --all --format json 2>/dev/null)
+    if [[ -z "$ps_out" ]]; then
+        bad=" compose-ps-returned-nothing"
+    fi
+    declare -A seen=()
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         svc=$(echo "$line" | sed -n 's/.*"Service" *: *"\([^"]*\)".*/\1/p')
@@ -115,7 +137,14 @@ while (( $(date +%s) < deadline )); do
         elif [[ -n "$hp" && "$hp" != "healthy" ]]; then
             bad+=" $svc(health=$hp)"
         fi
-    done < <(compose ps --format json)
+        [[ -n "$svc" ]] && seen["$svc"]=1
+    done <<< "$ps_out"
+
+    # A service that never appeared at all is the case the old loop could not
+    # see. Report it explicitly rather than letting silence read as success.
+    for want in $EXPECT_SVCS; do
+        [[ -n "${seen[$want]:-}" ]] || bad+=" $want(absent-from-ps)"
+    done
 
     if [[ -z "$bad" ]]; then
         echo "[$(ts)] All services healthy."
