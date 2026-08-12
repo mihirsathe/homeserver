@@ -156,7 +156,7 @@ services:
   # ---------------------------------------------------------------------------
   # GLUETUN — outbound VPN for SABnzbd + Prowlarr
   #
-  # Mullvad WireGuard. FIREWALL=on enforces a kill-switch: if the tunnel drops,
+  # Mullvad WireGuard. The firewall enforces a kill-switch: if the tunnel drops,
   # SAB and Prowlarr have zero outbound connectivity. This is the whole point
   # — a misconfiguration fails closed, not open.
   #
@@ -177,9 +177,31 @@ services:
       - WIREGUARD_PRIVATE_KEY=${VPN_PRIVATE_KEY}
       - WIREGUARD_ADDRESSES=${VPN_ADDRESS}
       - SERVER_CITIES=${VPN_CITY}
-      - FIREWALL=on
-      # Ports we want reachable from the LAN host through the gluetun netns.
-      - FIREWALL_VPN_INPUT_PORTS=8080,9696
+      # The kill-switch. NOTE THE VARIABLE NAME — gluetun reads only this long
+      # form; there is no `FIREWALL` retro-key, so the `FIREWALL=on` this file
+      # used to set was a silent no-op. Behaviour was correct anyway (the
+      # image's default is on), which is exactly why it went unnoticed: anyone
+      # who set it to `off` while debugging, or audited that the kill-switch
+      # was explicitly enabled, would have got an answer unrelated to what they
+      # set. Verified against settings/firewall.go.
+      - FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on
+      #
+      # FIREWALL_VPN_INPUT_PORTS=8080,9696 was here, with a comment saying it
+      # made SAB and Prowlarr "reachable from the LAN host through the gluetun
+      # netns". It does the opposite of what that says: tunnelup.go passes
+      # those ports to SetAllowedPort(..., data.vpnIntf), i.e. it opens them
+      # for connections arriving FROM THE MULLVAD TUNNEL. It contributes
+      # nothing to LAN or published-port reachability, which enable.go already
+      # allows unconditionally ("Allows packets from any IP address to go
+      # through eth0 / local network to reach Gluetun").
+      #
+      # So it punched two holes in the kill-switch firewall on the tunnel side
+      # — one of them to Prowlarr, which generate-configs.py deliberately
+      # configures with AuthenticationMethod=None because it is supposed to be
+      # unreachable except through Tailscale. Removed.
+      #
+      # If a port ever genuinely needs opening from the LAN side, the correct
+      # knob is FIREWALL_INPUT_PORTS.
       - TZ=${TZ}
     networks:
       - downloaders

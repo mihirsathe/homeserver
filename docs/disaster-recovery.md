@@ -269,7 +269,7 @@ Tailscale-side outages (rare) resolve without intervention. During an outage you
 
 **Symptom**: SAB UI (`svc:sab`) and Prowlarr UI (`svc:prowlarr`) hang or refuse. `docker compose ps` shows `gluetun` `unhealthy`. Radarr/Sonarr can't queue new grabs.
 
-This is the kill-switch: Mullvad dropped, `FIREWALL=on` is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
+This is the kill-switch: Mullvad dropped, and gluetun's firewall is blocking all egress from containers sharing Gluetun's netns. **Never disable the kill-switch to unstick this** — that's the whole point of the setup.
 
 1. `docker logs gluetun --tail 50` — expect WireGuard handshake failures, DNS errors, or a revoked-key message.
 2. Verify `VPN_PRIVATE_KEY` / `VPN_ADDRESS` / `VPN_CITY` in `.env` match a current Mullvad WireGuard config. Regenerate on the Mullvad account page if the key was revoked.
