@@ -39,7 +39,7 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 
 **`ollama/ollama`** is the upstream official image, run unmodified — the GPU-sharing behaviour is entirely environment variables in `docker-compose.yml`, so there is no custom image or sidecar to keep patched.
 
-**plexinc/pms-docker** is the official Plex image; used instead of a hotio Plex image because the official image's `PLEX_PREFERENCE_*` environment variable mechanism is how hardware transcoding preferences are pre-configured at first boot.
+**plexinc/pms-docker** is the official Plex image, used instead of a hotio Plex image because it handles `PLEX_CLAIM`, `ADVERTISE_IP`/`ALLOWED_NETWORKS` and the nvidia runtime properly. It does **not** support a `PLEX_PREFERENCE_*` mechanism — that claim was wrong, and hardware-transcoding preferences are set by `bootstrap.py` over the `/:/prefs` API.
 
 ---
 
