@@ -83,14 +83,28 @@ curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/indexer \
 curl -s "http://localhost:9696/<id>/api?t=caps&apikey=$PKEY" | head -c 300
 ```
 
+**Check the sync level first**, because it changes what all of this means:
+
+```bash
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/applications \
+  | python3 -c 'import json,sys
+for a in json.load(sys.stdin): print(a["name"], a.get("syncLevel"))'
+```
+
+If the app is `disabled`, **none of the table below applies**. Prowlarr excludes
+disabled apps from `SyncEnabled()`, so it will never add or remove indexers
+there — that *arr is hand-managed, its indexers are supposed to point straight
+at the indexer, and an empty list means nothing is set up rather than something
+is broken. Skip to the last section.
+
 | What you see | Cause | Fix |
 |---|---|---|
 | Step 1 URL contains `/prowlarr/` | **Stale UrlBase.** Definition was synced before the Tailscale Services migration, when these apps served under a path prefix. | Re-run `bootstrap.py` (below). |
-| Step 1 id is missing from step 2's list | **Orphan.** The indexer was deleted and re-added in Prowlarr, so it came back with a new id — including when re-adding is how its categories got fixed. Prowlarr does *not* clean these up: `ApplicationIndexerSync` runs with `removeRemote=false`, so an indexer it holds no mapping for is left in place forever. | Delete that indexer in the *arr → Settings → Indexers, then re-run `bootstrap.py` to have it recreated against the live id. A sync alone will not do it. |
+| Step 1 id is missing from step 2's list | **Orphan.** The indexer was deleted and re-added in Prowlarr, so it came back with a new id — including when re-adding is how its categories got fixed. | Re-run `bootstrap.py`. The forced sync removes these itself. One that survives means Prowlarr could not reach that *arr — test the app connection; **do not delete it by hand**. |
 | Step 3 returns XML, but the *arr still fails | The *arr's stored definition disagrees with Prowlarr. | Re-run `bootstrap.py`. |
 | Step 3 returns an HTML page from the **indexer's** site | Account expired, API key wrong, rate limited, or a Cloudflare interstitial — Prowlarr proxies the body through verbatim. | Prowlarr → Indexers → Test. Fix at the indexer, not here. |
 
-### The fix for everything except orphans
+### The fix, for a sync-enabled app
 
 ```bash
 python3 scripts/bootstrap.py
@@ -102,7 +116,35 @@ nothing about the indexer *has* changed when what moved is `prowlarrUrl` or
 `syncCategories`, so an unforced sync skips it. The script then reports each
 *arr's indexer URLs so you can see the result rather than assume it.
 
-The equivalent in the UI is Prowlarr → Settings → Apps → **Sync App Indexers**.
+> **That command deletes as well as adds.** `ApplicationService.cs:125` is
+> `SyncIndexers(enabledApps, indexers, true, ForceSync)` against the signature
+> `(applications, indexers, removeRemote = false, forceSync = false)` — so
+> `removeRemote` is **true**. Prowlarr adopts indexers it finds in the *arr that
+> were "setup manually in the app" into its mapping table, then removes any
+> whose mapped Prowlarr indexer no longer exists. Hand-added indexers in a
+> sync-**enabled** *arr can be deleted by it. Apps with sync disabled are never
+> touched, which is what makes disabling the sync the safe way to hand-manage
+> one *arr.
+
+Recovery if indexers were lost this way: Sonarr writes weekly backups to
+`/mnt/user/appdata/sonarr/Backups/scheduled/`. Read one without a destructive
+restore —
+
+```bash
+mkdir -p /tmp/peek && cd /tmp/peek
+unzip -o /mnt/user/appdata/sonarr/Backups/scheduled/<newest>.zip >/dev/null
+python3 - <<'PY'
+import sqlite3, json, glob
+cur = sqlite3.connect(glob.glob("**/sonarr.db", recursive=True)[0]).execute("SELECT * FROM Indexers")
+cols = [d[0] for d in cur.description]
+for row in cur:
+    r = dict(zip(cols, row))
+    print(r.get("Name"), "|", r.get("Implementation"))
+    print("   ", r.get("Settings"))
+PY
+```
+
+— then re-create what it shows in the UI.
 
 > Before this was fixed, `bootstrap.py` posted to `/api/v1/applications/sync` —
 > not a Prowlarr endpoint, and never one. It 404'd on every run, the status was
@@ -111,6 +153,65 @@ The equivalent in the UI is Prowlarr → Settings → Apps → **Sync App Indexe
 > nothing.
 
 `bash scripts/verify-stack.sh` checks all of this on every run.
+
+---
+
+## Prowlarr keeps resetting an *arr's indexer categories
+
+**Symptom**: you set an indexer's categories in Sonarr (or Radarr/Lidarr), and
+some time later they are back to a narrower set — often a single top-level
+category. It looks like Prowlarr is "unchecking the TV category".
+
+It is doing exactly that, and it is two separate mechanisms compounding.
+
+**1. `bootstrap.py` used to overwrite your selection.** `add_app()` reconciled
+`syncCategories` on every run, forcing Prowlarr's per-app category list back to
+the one hardcoded in the script. That `PUT` raises `ProviderUpdatedEvent`, which
+triggers a sync, which rewrites the *arr. Fixed: `syncCategories` is now set
+**only when the connection is first created** and never reconciled afterwards —
+it is your choice, not the script's. `prowlarrUrl`, `baseUrl` and `apiKey` are
+still reconciled, because those track `docker-compose.yml`.
+
+**2. Prowlarr narrows to the intersection.** `Sonarr.cs:272` sets the synced
+indexer's `categories` field to `SupportedCategories(app.SyncCategories)` — the
+intersection of the app's list with what that indexer *advertises in its caps*.
+`IndexerCapabilitiesCategories.cs:131` walks top-level categories **and their
+subcategories**, so the comparison is against the flattened tree. A category you
+select that the indexer does not advertise is silently dropped; selecting more
+of them does not widen anything.
+
+To see the real ceiling, walk `subCategories` — a flat read of `categories`
+shows only the parents (`1000`, `2000`, `5000`…) and badly understates it:
+
+```bash
+PKEY=$(grep ^PROWLARR_API_KEY .env.docker | cut -d= -f2)
+curl -s -H "X-Api-Key: $PKEY" http://localhost:9696/api/v1/indexer \
+  | python3 -c 'import json,sys
+def walk(cs):
+    for c in cs or []:
+        yield c["id"]
+        yield from walk(c.get("subCategories"))
+WANT={"Sonarr":{5000,5010,5020,5030,5040,5045,5050,5060,5070,5080},
+      "Radarr":{2000,2010,2020,2030,2040,2045,2050,2060},
+      "Lidarr":{3000,3010,3020,3030,3040}}
+for i in json.load(sys.stdin):
+    ids={c for c in walk((i.get("capabilities") or {}).get("categories")) if c<100000}
+    print(i["name"], "advertises:", sorted(ids))
+    for app,want in WANT.items():
+        print("   ->", app, "would receive:", sorted(ids & want) or "NOTHING - will not sync")'
+```
+
+Categories at `100000+` are Prowlarr's indexer-specific namespace and never
+intersect a standard list, so they are filtered out above. If an app's row says
+`NOTHING`, that indexer is skipped for that app entirely — `AddIndexer` returns
+early when the intersection is empty.
+
+**If you want an *arr's indexers under your own control**, set its Prowlarr
+connection to **Sync Level: Disabled** (Prowlarr → Settings → Apps). Prowlarr
+then neither adds, updates, nor removes indexers there, and `bootstrap.py`
+leaves the connection alone and reports the disabled state on each run rather
+than treating the empty/direct indexer list as a fault. Add the indexers
+directly in that *arr instead.
 
 ---
 
