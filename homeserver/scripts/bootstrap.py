@@ -22,6 +22,7 @@ What it does:
 
 import argparse
 import getpass
+import re
 import subprocess
 import sys
 
@@ -76,7 +77,17 @@ def _parse_env_file(path: Path) -> dict:
                 continue
             if "=" in line:
                 key, _, val = line.partition("=")
-                val = val.split("#")[0].strip()
+                # A `#` only starts a comment when it FOLLOWS WHITESPACE —
+                # matching dotenv convention, where `KEY=#foo` is the literal
+                # value `#foo`. `val.split("#")[0]` treated every `#` as a
+                # comment, which silently truncated any password containing one
+                # — `p@ss#word1` became `p@ss`. That failure hid well: the
+                # freshly-typed value is still in memory on the first run, so
+                # sabnzbd.ini was written correctly and everything worked. Only
+                # a LATER run re-read `.env`, got the truncated value, and left
+                # the provider rejecting the login with nothing in any log
+                # pointing at the password.
+                val = re.split(r"\s#", val, maxsplit=1)[0].strip()
                 env[key.strip()] = val
     return env
 

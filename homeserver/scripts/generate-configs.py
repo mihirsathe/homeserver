@@ -28,6 +28,7 @@ Uses only stdlib — no pip dependencies.
 import argparse
 import ipaddress
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -56,7 +57,17 @@ def _parse_env_file(path: Path) -> dict:
                 continue
             if "=" in line:
                 key, _, val = line.partition("=")
-                val = val.split("#")[0].strip()
+                # A `#` only starts a comment when it FOLLOWS WHITESPACE —
+                # matching dotenv convention, where `KEY=#foo` is the literal
+                # value `#foo`. `val.split("#")[0]` treated every `#` as a
+                # comment, which silently truncated any password containing one
+                # — `p@ss#word1` became `p@ss`. That failure hid well: the
+                # freshly-typed value is still in memory on the first run, so
+                # sabnzbd.ini was written correctly and everything worked. Only
+                # a LATER run re-read `.env`, got the truncated value, and left
+                # the provider rejecting the login with nothing in any log
+                # pointing at the password.
+                val = re.split(r"\s#", val, maxsplit=1)[0].strip()
                 env[key.strip()] = val
     return env
 
@@ -892,7 +903,22 @@ def main() -> None:
         "NEXTCLOUD_ADMIN_PASSWORD",
     ]
     auto = {}
-    if not env.get("STACK_DIR", "").strip():
+    # Reconcile, don't just fill-if-blank. STACK_DIR is DERIVED from this
+    # script's own location, not typed by anyone, so a stored value that
+    # disagrees with where the script is actually running from is stale by
+    # definition — and the old `if not set` meant the stale one won forever.
+    #
+    # You hit this without ever "moving the repo": restoring generated.env from
+    # a backup onto a differently-laid-out box, or running the script once from
+    # a checkout somewhere else before deploying, both leave a STACK_DIR that
+    # no longer exists. Every `${STACK_DIR}/configs/...` bind then resolves to
+    # a dead path, and Docker turns a missing bind-mount FILE into an empty
+    # DIRECTORY — so SAB and all four *arrs come up with no config at all and
+    # self-generated API keys, and bootstrap.py 401s against them.
+    #
+    # It also printed the new path as "Stack directory:" while writing the old
+    # one, which is about as misleading as this can get.
+    if env.get("STACK_DIR", "").strip() != str(STACK_DIR):
         auto["STACK_DIR"] = str(STACK_DIR)
     for k in api_key_fields:
         if not env.get(k, "").strip():
