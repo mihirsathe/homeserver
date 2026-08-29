@@ -248,9 +248,12 @@ If the page renders as `http://` links or mixed-content-blocks, that is `OVERWRI
 in `.env` is the *only* backup these files get; the Appdata Backup plugin covers
 `/mnt/user/appdata` and Nextcloud's user files are not in it.
 
+The target is AWS S3 Glacier Deep Archive — [aws-backup-setup.md](aws-backup-setup.md)
+is the full walkthrough (bucket, IAM user, rclone remote). The short version:
+
 ```bash
-rclone config                                   # if you have not already
-# .env:  BACKUP_NEXTCLOUD_REMOTE=b2:my-bucket/nextcloud
+rclone config create aws s3 ...                  # see aws-backup-setup.md for the full command
+# .env:  BACKUP_NEXTCLOUD_REMOTE=aws:my-bucket/nextcloud
 bash scripts/backup-appdata.sh                  # run once by hand to prove it works
 docker exec -u www-data nextcloud php occ status # maintenance: false — the trap cleared it
 ```

@@ -409,6 +409,41 @@ Three details in it are deliberate:
   would faithfully replicate the exact accident this backup exists to survive. The remote
   only grows; prune it deliberately.
 
+### The offsite target is AWS S3 Glacier Deep Archive
+
+Decided 2026-08-29, both legs (`BACKUP_REMOTE` and `BACKUP_NEXTCLOUD_REMOTE`), one
+bucket, everything Deep Archive. [aws-backup-setup.md](aws-backup-setup.md) is the
+setup walkthrough.
+
+Deep Archive is ~$1/TB-month — a quarter of Glacier Instant Retrieval, a fifth of
+B2. The trade is that **every restore starts with a 12–48 hour thaw** and a full
+disaster restore of a few hundred GB costs ~$40–50 in retrieval + egress. That was
+weighed against a split design (archives cold, Nextcloud files in Instant
+Retrieval for fast single-file recovery) and taken anyway: this is
+disaster insurance, not an undo button. Nextcloud's own trash bin and versions
+app cover the fat-fingered delete; the offsite copy exists for fire, theft, and
+array loss, where two days of thaw is noise. One storage class also means one
+mental model and one restore procedure —
+[disaster-recovery.md](disaster-recovery.md) documents the thaw-first flow, and
+operations.md carries a yearly restore drill because a backup whose restore path
+has never been exercised isn't one.
+
+Two properties of the setup are load-bearing, not hygiene:
+
+- **The box's IAM credentials cannot delete** — no `s3:DeleteObject`, no version
+  operations. The internet-facing half of this stack (downloaders behind Gluetun,
+  a PHP app with an app store) means box compromise is the realistic threat, and
+  a backup the box can destroy is not offsite in any sense that matters.
+- **Bucket versioning with 30-day noncurrent expiry** closes the overwrite hole
+  the no-delete policy leaves: `PutObject` over an existing key would otherwise
+  destroy the old bytes just as thoroughly as a delete.
+
+AWS over B2 despite B2's simpler pricing: Deep Archive undercuts it 5×, the
+no-delete IAM + versioning combination above is exactly expressible in S3's
+permission model, and rclone's S3 backend does thaw (`backend restore`) natively.
+The known cost is that S3's pricing has more line items — the guide sets a $5
+billing alarm precisely because "surprise bill" is the classic AWS failure mode.
+
 ### Nextcloud is not on the `ai` plane
 
 It would work — Nextcloud's Assistant app takes an OpenAI-compatible base URL, and Ollama

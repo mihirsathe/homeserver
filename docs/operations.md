@@ -20,7 +20,8 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 |------|-----------|-----|
 | Container image updates | Monthly (2nd, 3am — the 1st belongs to the parity check) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
 | Nextcloud / Postgres major upgrade | Deliberate, never scheduled | See [Nextcloud major upgrades](#nextcloud-major-upgrades) below |
-| Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
+| Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup. Listing needs no thaw (Deep Archive gates content reads, not metadata) |
+| Restore drill: thaw + pull back one file | Yearly | [disaster-recovery.md](disaster-recovery.md#user-file-restore) — with Deep Archive the restore *path* is the part most likely to rust, and the thaw takes 12–48h you don't want to discover mid-disaster |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
 | Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin; `media_stack_backup` verifies + offsites it at 5am |
 | Mover (cache → array) | Hourly, on the hour | Unraid built-in schedule — the reason `usenet-incomplete` must stay `cache=only` |
@@ -44,6 +45,8 @@ The weekly flow is two stages: the **Appdata Backup plugin** writes the archive 
 | `BACKUP_LOCAL_RETENTION_DAYS` | `14` | Local archives (and their checksums) older than this are pruned at the end of each run. |
 
 Both remote knobs require `rclone` on the host; if a remote is set but rclone is missing, the script warns and skips rather than failing the run.
+
+The offsite target is AWS S3 Glacier Deep Archive — [aws-backup-setup.md](aws-backup-setup.md) covers the bucket, IAM user, and rclone remote. The `DEEP_ARCHIVE` storage class is baked into the rclone remote config, so the script uploads cold with no flags; the corollary is that **restores need a 12–48h thaw first** — [disaster-recovery.md](disaster-recovery.md) accounts for it.
 
 ---
 

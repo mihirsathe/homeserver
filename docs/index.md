@@ -15,6 +15,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting
 | [Deployment](deployment.md) | Step-by-step setup from a fresh Unraid install |
 | [Upgrade Runbook](upgrade-2026-07.md) | The live run: catching a first-setup box up to current `master`, moving ingress to Tailscale Services, and landing the four in-flight tenants in one sitting |
 | [Operations](operations.md) | Maintenance schedule, diagnostics commands, known limitations |
+| [AWS Backup Setup](aws-backup-setup.md) | Offsite target: S3 Glacier Deep Archive bucket, IAM, rclone remote, restore drill |
 | [Sources](sources.md) | Every image, plugin, package, and driver — where it comes from |
 | [Decisions](decisions.md) | Why things are the way they are, and expansion paths |
 | [Vision](vision/index.md) | Long-term infrastructure roadmap — 8 phases from media server to full home platform |
