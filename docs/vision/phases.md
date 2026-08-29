@@ -36,7 +36,7 @@ Configure Unraid's notification system for: drive errors, SMART warnings, parity
 
 > **Status:** Basic deployment is done. The tailnet exists, the server advertises `tag:server`, admin devices are tagged `tag:admin`, and `tailscale up --ssh` is live (see [deployment.md](../deployment.md#3a--tailscale)). The items below are the hardening work still outstanding.
 
-- Tailscale ACLs: tighten `tag:admin → tag:server` to the specific admin ports (7878, 8989, 8686, 9696, 8080, 5055, 6767, 8181, 80/443 for Unraid UI). Deny everything else.
+- Tailscale ACLs: ingress moved to per-service Tailscale Services (`svc:<name>`, HTTPS on 443) — backends bind to loopback only, so there are no raw admin ports on the tailnet to scope any more. Tighten grants so `tag:admin` is the only tag that can reach each `svc:*` (plus 80/443 on the host itself for the Unraid UI and Tailscale SSH). Deny everything else.
 - Enforce SSO + device posture check; require MagicDNS + HTTPS certs for any browser-facing admin UI
 - Short key-expiry for admin devices (30–90 days); indefinite for the server node
 - Quarterly audit of machines + ACLs in the Tailscale admin console
@@ -201,11 +201,12 @@ Storage: 500GB–2TB on the array for 30–90 day retention of event clips. Cont
 
 *Goal: Replace cloud subscriptions with self-hosted alternatives.*
 
-> **Status:** Nextcloud is **deployed**. It runs as four containers on a closed `cloud`
-> plane with PostgreSQL and Redis, files on the array in their own share, published as
-> `svc:nextcloud`. See [software.md](../software.md#personal-cloud) for the deployed
-> design and [decisions.md](../decisions.md) for why it is Nextcloud rather than
-> OpenCloud, Seafile or Nextcloud AIO. The rest of this phase is still future work.
+> **Status:** Nextcloud **deployed 2026-08-29**. Four containers on the closed `cloud`
+> plane (PostgreSQL, Redis, files on their own array-direct share), installed and healthy;
+> `svc:nextcloud` publication and the offsite backup target are the remaining steps. See
+> [software.md](../software.md#personal-cloud) for the design and
+> [decisions.md](../decisions.md) for why it is Nextcloud rather than OpenCloud, Seafile
+> or Nextcloud AIO. The rest of this phase is still future work.
 
 ### 7.1 Service Catalog
 
@@ -227,7 +228,7 @@ Tailscale is already the admin plane in today's stack — not a Phase-7 addition
 
 ### 7.2 Key Services
 
-**Nextcloud**: ~~deploy with~~ **deployed** with PostgreSQL + Redis, data on the array, reached over Tailscale as `svc:nextcloud`. The 2–4 GB RAM budget held — the plane declares 4 GB of ceilings across four containers, which took the stack total to 30.75 GB of 32 GB and makes §1.2 (RAM to 128 GB) the next thing to do rather than a nice-to-have.
+**Nextcloud**: deployed 2026-08-29 with PostgreSQL + Redis, data on the array, to be reached over Tailscale as `svc:nextcloud` once the service is published. The 2–4 GB RAM budget held — the plane declares 4 GB of ceilings across four containers, which took the stack total to 30.75 GB of 32 GB and makes §1.2 (RAM to 128 GB) the next thing to do rather than a nice-to-have.
 
 **Immich**: store photo library on array, back up to Backblaze B2 — personal photos are irreplaceable. Can use the RTX 3050 for faster ML inference.
 

@@ -87,9 +87,9 @@ Six bridge networks carve the stack into blast-radius zones so a compromised con
 | Network | Members | Purpose |
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (the gluetun kill-switch, `FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on`). |
-| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
-| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
-| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
+| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr`, `seerr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
+| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `coach` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+| `ai` | `ollama`, `actual-ai`, `coach` | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 | `finance` | `actual_server`, `actual-ai` | Budgeting. `actual-ai` is dual-homed onto `ai` to reach Ollama; nothing else crosses in or out. |
 | `cloud` | `nextcloud`, `nextcloud-db`, `nextcloud-redis`, `nextcloud-cron` | Personal files. **Closed** — nothing else joins, and neither the database nor the cache publishes a port, so the only route to either is from inside this plane. Deliberately *not* dual-homed onto `ai`: Nextcloud is the largest attack surface on the box and anything on `ai` can delete every model. |
 
@@ -223,13 +223,15 @@ If the app has an admin UI, publish it with `tailscale serve --service=svc:<name
         └── music/                    ← Lidarr final library
 ```
 
-All containers mount `/mnt/user/data` at `/data` inside the container. This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
+Every container in the *media* path mounts `/mnt/user/data` at `/data` inside the container (the non-media tenants deliberately don't — `actual_server` and `coach` rebind `/data` to their own appdata, and Prowlarr mounts only `/config`). This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
 
 `usenet-incomplete/` is a separate cache-only share, bind-mounted into SAB at `/incomplete`. Active downloads, par2 repair, and unrar all hammer this path, so it lives on SSD where those operations are 10–20× faster than on spinning disks. `shareUseCache=only` means mover never migrates these files to the array. When a download completes, SAB moves the assembled file from `/incomplete` (SSD) to `/data/usenet/complete/` (array) — a one-time cross-filesystem copy. From there, hardlinks to `/data/media/` work normally.
 
 ---
 
 ## Personal Cloud
+
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 Nextcloud replaces Google/iCloud Drive: file sync, calendar and contacts, reached at
 `https://nextcloud.<tailnet>.ts.net/` like every other service here. Four containers on a
@@ -270,8 +272,9 @@ the same files by two paths, not two copies, and mover never touches them. Both
 `generate-configs.py` and `verify-stack.sh` assert that share setting, because flipping it
 turns a speedup into split-brain.
 
-**Its user files are not under `/mnt/user/data`.** Every container in the stack mounts
-that at `/data`, including SABnzbd and Prowlarr — the two that talk to the internet.
+**Its user files are not under `/mnt/user/data`.** Every container in the *media* path
+mounts that at `/data`, including SABnzbd — the internet-facing downloader (Prowlarr,
+equally internet-facing, mounts only `/config`).
 Personal documents get their own share, mounted only into the two Nextcloud containers.
 Nextcloud needs no hardlinks to the media library, so it loses nothing.
 

@@ -21,7 +21,7 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
 ## Step 2 — Manual steps that require human judgment
 
 1. **Assign array disks** — verify drive serial numbers before assigning (Main tab)
-   - Parity: 16TB HDD · Disk 1–4: 8TB HDDs · Cache: both 480GB SSDs
+   - Parity: 6TB HDD · Disk 1–4: 6TB HDDs · Cache: both 480GB SSDs
 2. **Plug in UPS data cable** (skip if UPS is not yet physically installed — safe to add later) — USB-B end → UPS, USB-A end → any rear R640 USB port. `setup-unraid.sh` has already written `/boot/config/plugins/dynamix/ups.cfg` with `SERVICE=enable`, `CABLE=usb`, `BATTERYLEVEL=20`, `MINUTES=5`. After the reboot in sub-step 4 below, verify with `apcaccess status` — expect `STATUS : ONLINE` and a non-zero `BCHARGE` / `TIMELEFT`.
 3. **Start array and format** — Main → Start → check format boxes → Format
 4. **Reboot** — activates Nvidia-Driver (container toolkit is bundled, no second reboot)
@@ -34,8 +34,8 @@ Fan control is **not** provisioned by default — non-Dell GPUs sometimes make i
    If the container test fails: Apps → "nvidia container toolkit" → Install → restart Docker (Settings → Docker → toggle).
 6. **Set User Script schedules** — Settings → User Scripts:
    - `media_stack_up` → At Startup of Array
-   - `media_stack_update` → Monthly (1st, 3am)
-   - `media_stack_backup` → Weekly (Sunday, 4am, after Appdata Backup)
+   - `media_stack_update` → Monthly (2nd, 3am — custom cron `0 3 2 * *`; the 1st is the parity check)
+   - `media_stack_backup` → Weekly (Sunday, 5am — custom cron `0 5 * * 0`, an hour after the Appdata Backup plugin's 4am run so it never races the archive being written)
    - `fan_control` → At Startup of Array *(only if you ran `setup-fan-control.sh`)*
 
 ---
@@ -217,6 +217,8 @@ Note that Ollama has **no authentication** — anything on the `ai` network can 
 
 ### Nextcloud first-run
 
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
+
 Nextcloud installs itself — there is no wizard. `generate-configs.py` generated the
 database, Redis and admin passwords into `generated.env`, and the container consumed them
 on first start.
@@ -354,8 +356,8 @@ tailscale down ; tailscale up --ssh --advertise-tags=tag:server
 ### The Unraid GUI stays off all of this on purpose
 
 The GUI keeps the host's `:80` and is never fronted by anything. On Unraid,
-**stopping the array stops Docker** — `docker.img` is loop-mounted from a pool
-at `/var/lib/docker` — so any admin path that depends on a container is
+**stopping the array stops Docker** — Docker's data root is a directory on
+the cache pool at `/var/lib/docker` — so any admin path that depends on a container is
 unavailable in exactly the situations where you most need a way in. The GUI at
 `http://<server-name>/` and Tailscale SSH are the two paths that survive
 everything, which is why neither is behind a proxy or a container.

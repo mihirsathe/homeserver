@@ -1129,7 +1129,7 @@ The real test of 3.8. When convenient:
 ```bash
 # Stop the array from the Unraid GUI and restart it, then:
 docker compose --env-file .env.docker ps      # everything back up, healthy
-curl -fsS http://radarr.lan/ping              # from the Mac
+curl -fsS https://radarr.tail9f0cb1.ts.net/ping   # from the Mac (the *.lan names are gone)
 ```
 
 ---
@@ -1305,6 +1305,11 @@ key isn't registered or `GIT_SSH_COMMAND` isn't exported in *this* shell.
 cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker build coach
 ```
+
+*[Post-run note, 2026-08: this box runs Docker in **directory mode** on the
+cache pool — there is no `docker.img` vDisk, so the vDisk sizing and
+recreate-to-grow advice below does not apply here. The headroom check itself
+(`df -h /var/lib/docker`) is still valid; the ceiling is just the cache pool.]*
 
 **Check `docker.img` headroom first — this build needs roughly 10 GB free and
 the Unraid default vDisk is only 20 GB:**

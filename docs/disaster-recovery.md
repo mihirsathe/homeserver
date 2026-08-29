@@ -20,7 +20,7 @@ Before reaching for any of the procedures below, confirm the failure mode:
 2. Stop the array (Main → Stop). Containers must come down first if any are writing to the array — check with `docker compose ps`, expect `restart: unless-stopped` to bring them back after.
 3. Physically replace the disk. Label it with its bay number before pulling so you don't swap the wrong slot.
 4. Start the array → Unraid offers to rebuild onto the new disk from parity.
-5. Rebuild runs at ~100 MB/s → roughly **8 hours per TB** for an 8 TB drive (~64 h). Array remains usable during rebuild; I/O is slower because every read reconstructs from parity.
+5. Rebuild takes roughly **10–14 h** for a 6 TB drive (the May 2026 full parity check took ~10 h). Array remains usable during rebuild; I/O is slower because every read reconstructs from parity.
 6. After rebuild completes, SMART-monitor the new drive for a week — infant mortality is real.
 
 **What you lose**: nothing, assuming no second drive fails during the rebuild window.
@@ -33,9 +33,9 @@ Before reaching for any of the procedures below, confirm the failure mode:
 
 Less impactful than a data disk failure — no data loss risk, just a window of no protection.
 
-1. Replace the disk physically (must be ≥ size of largest data disk; ours is 16 TB).
+1. Replace the disk physically (must be ≥ size of largest data disk; ours is 6 TB).
 2. Main → Unraid detects the missing parity → assign the new drive as Parity.
-3. Start the array → parity sync begins. ~30–45 h for 16 TB. Data is served normally during sync.
+3. Start the array → parity sync begins. ~10–14 h for 6 TB (the May 2026 full check took ~10 h). Data is served normally during sync.
 
 During the sync window, a data disk failure is unrecoverable. Try not to do heavy writes during this period.
 
@@ -161,6 +161,8 @@ Uncategorized transactions simply stay uncategorized, and you can categorize the
 in the meantime.
 
 ## Nextcloud data loss or corruption
+
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 **The one entry in this document about data that cannot be re-sourced.** Media can be
 re-downloaded and the *arr config rebuilt; personal files cannot. Read

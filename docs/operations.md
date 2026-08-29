@@ -18,17 +18,32 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 | Task | Frequency | How |
 |------|-----------|-----|
-| Container image updates | Monthly (1st, 3am) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
+| Container image updates | Monthly (2nd, 3am — the 1st belongs to the parity check) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
 | Nextcloud / Postgres major upgrade | Deliberate, never scheduled | See [Nextcloud major upgrades](#nextcloud-major-upgrades) below |
 | Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
-| Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin |
+| Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin; `media_stack_backup` verifies + offsites it at 5am |
+| Mover (cache → array) | Hourly, on the hour | Unraid built-in schedule — the reason `usenet-incomplete` must stay `cache=only` |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
 | Prune unused Ollama models | Quarterly | `docker exec ollama ollama list`, then `ollama rm <model>` — model blobs sit on the 480 GB cache pool |
 | SMART check (cache SSDs) | Quarterly | iDRAC storage view or PERC UI (SMART not available via Unraid) |
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |
 | UPS self-test / battery health | Quarterly | `apcaccess status` for a quick read; `apctest` walks an interactive battery/calibration test |
+
+> The Nextcloud maintenance rows are live as of 2026-08-29 (plane deployed); the quarterly offsite-verify row stays moot until `BACKUP_NEXTCLOUD_REMOTE` is set.
+
+### Backup knobs (`.env`)
+
+The weekly flow is two stages: the **Appdata Backup plugin** writes the archive to `/mnt/user/backups/appdata/` (Sunday 4:00), then the **`media_stack_backup`** User Script runs `scripts/backup-appdata.sh` (Sunday 5:00), which verifies a recent archive exists, records a SHA-256 checksum, copies offsite, and prunes — logging to `/var/log/homeserver/backup.log`. Three optional `.env` values steer it (script defaults apply if unset):
+
+| Knob | Default | What it does |
+|------|---------|--------------|
+| `BACKUP_REMOTE` | empty (**currently unset** — local-only) | rclone target for the newest appdata archive; each run copies the archive's directory to `$BACKUP_REMOTE/<timestamp>`. Empty means the offsite copy is skipped and logged as such. |
+| `BACKUP_NEXTCLOUD_REMOTE` | empty | rclone target for `/mnt/user/nextcloud` user files (plus the weekly `pg_dump` to `$BACKUP_NEXTCLOUD_REMOTE/db`). This is the **only** copy of the user files — the Appdata Backup plugin never sees them. The script runs this leg first and never exits early on its account, so a failed plugin backup can't silently take the personal-file copy down with it (and vice versa). |
+| `BACKUP_LOCAL_RETENTION_DAYS` | `14` | Local archives (and their checksums) older than this are pruned at the end of each run. |
+
+Both remote knobs require `rclone` on the host; if a remote is set but rclone is missing, the script warns and skips rather than failing the run.
 
 ---
 
@@ -141,7 +156,7 @@ NVENC/NVDEC acceleration requires an active Plex Pass subscription. Without it, 
 
 ### Single parity
 
-The array uses single parity (one 16 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
+The array uses single parity (one 6 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
 ### 32 GB RAM — and memory ceilings now sum to 30.75 GB of it
 

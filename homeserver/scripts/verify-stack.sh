@@ -401,7 +401,7 @@ if docker inspect nextcloud >/dev/null 2>&1; then
     # can also land on the array, /mnt/cache/appdata/X and /mnt/user/appdata/X
     # stop being the same files, and a speedup becomes split-brain. This is
     # the check that catches it — it develops silently, months later.
-    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' \r"'"'")
     if [[ -z "$cachecfg" ]]; then
         warn "cannot read appdata share config — verify shareUseCache=only by hand"
     elif [[ "$cachecfg" == "only" ]]; then
@@ -578,6 +578,36 @@ if [[ -d /mnt/user/appdata/chess-coach/data ]]; then
         || bad "chess-coach/data owned by $cdo, expected nobody — coach's SQLite writes will fail"
 fi
 
+# Mover damage on the PHYSICAL disks. Unraid's mover recreates directory trees
+# on the array as ROOT when it migrates in-flight media off the cache, and the
+# shfs (FUSE) view masks it: /mnt/user/data/X can stat as nobody:users while
+# the copy on one /mnt/diskN underneath is root-owned — and a disk copy is
+# what the *arrs actually write through, so imports die with "permission
+# denied" while every /mnt/user path looks fine. (Bit this box 2026-08;
+# cleaned 2026-08-11.) So check the disks directly, never the FUSE view.
+# Directories are where the damage lands (the mover creates them as root; file
+# ownership survives the move), so it is dirs at bounded depth — the same
+# budget as the appdata check above — plus everything under complete/, which
+# at steady state is empty.
+if ! ls -d /mnt/disk[0-9]*/data >/dev/null 2>&1; then
+    warn "no /mnt/disk*/data mounted — physical-disk ownership not checked"
+else
+    mover_bad=$( { find /mnt/disk[0-9]*/data/media -maxdepth 3 -type d \
+                        \( ! -uid 99 -o ! -gid 100 \) 2>/dev/null
+                   find /mnt/disk[0-9]*/data/usenet/complete -maxdepth 4 \
+                        \( ! -uid 99 -o ! -gid 100 \) 2>/dev/null; } | sort -u)
+    if [[ -z "$mover_bad" ]]; then
+        ok "physical-disk media ownership clean (all 99:100 — no mover damage)"
+    else
+        mover_n=$(wc -l <<<"$mover_bad")
+        # Herestring loop, not a pipe: bad() must count in THIS shell.
+        while IFS= read -r p; do
+            bad "not 99:100 on-disk (mover damage — imports will EACCES): $p"
+        done <<<"$(head -10 <<<"$mover_bad")"
+        [[ $mover_n -gt 10 ]] && bad "+$((mover_n-10)) more paths under /mnt/disk*/data not owned by 99:100"
+    fi
+fi
+
 # -maxdepth 2 and all three extensions, matching backup-appdata.sh's own
 # search. The Appdata Backup plugin writes DATED SUBDIRECTORIES containing the
 # tarball, so a depth-1 `*.tar.gz` glob matched nothing on a real install: this
@@ -596,13 +626,66 @@ else
     warn "no appdata backup found in /mnt/user/backups/appdata/"
 fi
 
+# Hardlinking is only POSSIBLE while downloads and library live on ONE mount:
+# every media-path container must bind the whole share, /mnt/user/data, at
+# /data (Key Conventions). Split binds (…/usenet:/downloads + …/media:/media)
+# look identical in every app's UI and silently force each import to copy.
+# This is the capability half of the hardlink check; the evidence half is
+# below, behind --quick. Cheap and ungated — docker inspect answers from
+# memory, no media tree is touched.
+hl_split=""; hl_seen=0
+for c in sabnzbd radarr sonarr lidarr; do
+    docker inspect "$c" >/dev/null 2>&1 || continue
+    hl_seen=$((hl_seen+1))
+    src=$(docker inspect "$c" -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)
+    [[ "$src" == "/mnt/user/data" ]] || hl_split+="$c(${src:-no /data mount}) "
+done
+if [[ $hl_seen -eq 0 ]]; then
+    warn "no media containers deployed — hardlink capability not checked"
+elif [[ -z "$hl_split" ]]; then
+    ok "media containers mount /mnt/user/data whole at /data (hardlinks possible)"
+else
+    bad "split /data binds — these containers CANNOT hardlink, imports copy: $hl_split"
+fi
+
 if [[ $QUICK -eq 0 ]]; then
-    # Link count > 1 means the *arr import hardlinked instead of copying.
-    # If this breaks, the array silently fills at double rate.
-    linked=$(find /mnt/user/data/media -type f -links +1 2>/dev/null | head -1)
-    [[ -n "$linked" ]] \
-        && ok "hardlinks intact (found linked media)" \
-        || warn "no hardlinked media found — imports may be copying"
+    # Hardlink health, judged on evidence instead of absence.
+    #
+    # The old check warned whenever no link-count-2 media existed. But the
+    # *arrs remove completed downloads after import, so at steady state the
+    # library file is the ONLY directory entry left and every link count is
+    # legitimately 1 — the warning fired on every healthy run, forever, and a
+    # warning that always fires trains the reader to skim past the section.
+    #
+    # Copying leaves a different fingerprint. An import that hardlinks gives
+    # the completed file link count 2 until cleanup removes it; an import that
+    # COPIED leaves the completed file at link count 1 with a same-name,
+    # same-size twin in the library — the exact pairing dedupe-hardlinks.py
+    # repairs (and the same >8M size floor it uses, which also skips the
+    # .nfo/.par2 crumbs that legitimately never get imported). Only files past
+    # a grace period count — younger ones are simply downloads in flight — and
+    # the expensive library index is built only when there is something to
+    # pair against, so at steady state this stays one cheap find over an
+    # empty tree.
+    stale=$(find /mnt/user/data/usenet/complete -type f -links 1 -size +8M \
+                 -mmin +120 -printf '%s|%f\n' 2>/dev/null | sort -u)
+    if [[ -z "$stale" ]]; then
+        ok "hardlinks: steady state — nothing pending import past the 2h grace period"
+    else
+        libidx=$(find /mnt/user/data/media -type f -size +8M -printf '%s|%f\n' 2>/dev/null | sort -u)
+        copied=$(comm -12 <(printf '%s\n' "$stale") <(printf '%s\n' "$libidx"))
+        if [[ -n "$copied" ]]; then
+            ncop=$(wc -l <<<"$copied")
+            warn "$ncop completed file(s) were COPIED into the library, not hardlinked — check copyUsingHardlinks in the *arrs, then dedupe-hardlinks.py:"
+            while IFS='|' read -r _ f; do
+                printf '  \033[36m·\033[0m %s\n' "$f"
+            done <<<"$(head -5 <<<"$copied")"
+            [[ $ncop -gt 5 ]] && printf '  \033[36m·\033[0m +%d more\n' $((ncop-5))
+        else
+            nstale=$(wc -l <<<"$stale")
+            warn "$nstale file(s) in complete/ older than 2h with no library twin — imports may be stuck (check the *arr Activity queues)"
+        fi
+    fi
 
     # The kill-switch: SAB egresses through Mullvad or not at all.
     vpn_ip=$(docker exec gluetun wget -qO- -T 8 https://ipinfo.io/ip 2>/dev/null | tr -d '\r\n')

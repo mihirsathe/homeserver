@@ -8,7 +8,7 @@ Why things are the way they are. Read before changing something you haven't touc
 
 ### Unraid over TrueNAS / SnapRAID
 
-Mixed drive sizes (16 TB parity, 8 TB data) and the ability to add single drives without rebuilding. TrueNAS/ZFS requires matched VDEV sizes. Unraid's parity model is uniquely suited to this hardware.
+Freedom to mix drive sizes (parity just has to stay ≥ the largest data disk) and the ability to add single drives without rebuilding. TrueNAS/ZFS requires matched VDEV sizes. Unraid's parity model is uniquely suited to this hardware.
 
 ### BOSS card for boot
 
@@ -44,7 +44,7 @@ Actively developed, better UI, better category handling. NZBGet development has 
 
 ### SAB incomplete on cache-only share, complete on array
 
-`usenet-incomplete` is a cache-only Unraid share; `data/usenet/complete` lives on the array. Active downloads, par2 repair, and unrar thrash the incomplete dir — doing that on spinning 8 TB disks is 10–20× slower than SSD, and Unraid's `shareUseCache=yes` on the main data share only helps until mover moves things off. `shareUseCache=only` on the incomplete share guarantees mover never touches it.
+`usenet-incomplete` is a cache-only Unraid share; `data/usenet/complete` lives on the array. Active downloads, par2 repair, and unrar thrash the incomplete dir — doing that on spinning disks is 10–20× slower than SSD, and Unraid's `shareUseCache=yes` on the main data share only helps until mover moves things off. `shareUseCache=only` on the incomplete share guarantees mover never touches it.
 
 Completed files move cross-filesystem from SSD → array exactly once, then live alongside `data/media` (same array filesystem) where hardlinks from the *arr apps work normally. The only cost is one extra copy per download; the saving is the whole unpack/repair cycle.
 
@@ -347,9 +347,10 @@ file I/O is the wrong workload to optimise FUSE out of anyway.
 
 ### Nextcloud's user files get their own share, not a folder under `data`
 
-Every container in this stack mounts `/mnt/user/data` at `/data`, because that shared mount
-path is what makes hardlinks work between SAB's completed downloads and the *arr libraries.
-That includes `sabnzbd`, whose entire job is downloading from the internet. (`prowlarr` is
+Every container in this stack's *media* path mounts `/mnt/user/data` at `/data`, because that
+shared mount path is what makes hardlinks work between SAB's completed downloads and the *arr
+libraries — and the media path includes `sabnzbd`, whose entire job is downloading from the
+internet. The non-media tenants deliberately don't mount it. (`prowlarr` is
 equally internet-facing but mounts only `/config`, so it is not itself the exposure —
 `sabnzbd` alone is enough to make the point.)
 
@@ -440,7 +441,7 @@ place this stack asks more of a phone than Google Drive did.
 
 ### Single parity (for now)
 
-Four 8 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second 16 TB drive as Parity 2 when convenient.
+Four 6 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second drive of at least 6 TB as Parity 2 when convenient.
 
 ---
 
@@ -486,9 +487,9 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 
 | Upgrade | Benefit |
 |---------|---------|
-| Add Parity 2 (16 TB) | Survive 2 simultaneous drive failures |
+| Add Parity 2 (≥ 6 TB) | Survive 2 simultaneous drive failures |
 | Add RAM (e.g. 4× 32 GB → 128 GB) | Headroom under heavy concurrent load |
-| Fill MD1400 bays 6–12 | Up to 7 more drives (max 16 TB each, constrained by parity disk size) |
+| Fill MD1400 bays 6–12 | Up to 7 more drives (max 6 TB each while parity is 6 TB — parity must stay the largest disk) |
 
 ### Medium-term
 
