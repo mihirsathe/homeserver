@@ -401,7 +401,7 @@ if docker inspect nextcloud >/dev/null 2>&1; then
     # can also land on the array, /mnt/cache/appdata/X and /mnt/user/appdata/X
     # stop being the same files, and a speedup becomes split-brain. This is
     # the check that catches it — it develops silently, months later.
-    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' "'"'")
+    cachecfg=$(grep -h '^shareUseCache=' /boot/config/shares/appdata.cfg 2>/dev/null | cut -d= -f2 | tr -d ' \r"'"'")
     if [[ -z "$cachecfg" ]]; then
         warn "cannot read appdata share config — verify shareUseCache=only by hand"
     elif [[ "$cachecfg" == "only" ]]; then
