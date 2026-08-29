@@ -88,8 +88,14 @@ tailscale status
 # View logs for a specific container
 docker compose logs -f radarr
 
-# Are hardlinks working? (link count > 1 = hardlinks exist)
-ls -la /mnt/user/data/media/movies/ | head -10
+# Are hardlinks working? Only judgeable while usenet/complete has files —
+# removeCompletedDownloads deletes the paired copy after every import, so at
+# steady state nlink=1 everywhere is HEALTHY. Judge on the disks, not /mnt/user.
+find /mnt/cache/data/media /mnt/disk[0-9]*/data/media -type f -links +1 2>/dev/null | head -5
+
+# Root-owned media paths left by the mover (imports fail with Permission
+# denied, series re-download repeatedly — see troubleshooting.md)
+find /mnt/disk[0-9]*/data/media /mnt/cache/data/media \( -type d -o -type f \) ! -user nobody -ls 2>/dev/null
 
 # Check disk usage
 df -h /mnt/user/data /mnt/user/appdata

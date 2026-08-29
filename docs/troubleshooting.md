@@ -242,6 +242,55 @@ Cause is always one of two things:
 
 **Also verify at the app level:** Radarr/Sonarr → Settings → Media Management → "Use Hardlinks instead of Copy" must be on. `bootstrap.py` sets this (`copyUsingHardlinks: true`). If off, toggle it and re-import an existing file to prove it stuck.
 
+> Don't judge hardlink health by scanning the library for link counts > 1 at an
+> arbitrary moment: `removeCompletedDownloads` deletes the completed copy right
+> after every import, so at steady state every media file is legitimately back
+> to nlink=1. Link counts only mean something while `usenet/complete` still has
+> files — `verify-stack.sh` gates its check on exactly that.
+
+---
+
+## Imports fail with Permission denied / a series re-downloads repeatedly
+
+**Symptom**: Sonarr/Radarr Activity → Queue fills with "Import blocked" items,
+History shows `UnauthorizedAccessException`, and/or a show re-downloads whole
+seasons it already has — the same episodes, repeatedly, with nothing landing in
+the library.
+
+**Cause**: the Unraid mover runs as root, and when it relocates a cache→array
+import it creates missing parent directories on the target disk **as root**
+(seen as `root:root 700` season dirs and `root:root 777` movie dirs on
+2026-08-11 — six dirs, 16 "missing" episodes, ~60 GB re-downloaded). The *arrs
+run as 99:100 and cannot traverse or write a root-owned dir; behind a `700`
+dir Sonarr also stops *seeing* the episodes, which is what triggers the
+re-download loop.
+
+**Check on the physical disks, never through `/mnt/user`** — shfs merges the
+per-disk instances of a directory and answers a stat from whichever disk it
+reaches first, so the FUSE view can show `nobody:users 775` while the instance
+on one disk is `root:root 700`:
+
+```bash
+find /mnt/disk[0-9]*/data/media /mnt/cache/data/media \( -type d -o -type f \) ! -user nobody -ls 2>/dev/null
+```
+
+**Fix** — chown/chmod exactly what the find printed, nothing wider:
+
+```bash
+chown -R nobody:users '/mnt/disk3/data/media/tv/<show>/Season 3'
+```
+
+```bash
+chmod 775 '/mnt/disk3/data/media/tv/<show>/Season 3'
+```
+
+Then Series → Rescan in Sonarr (Movie → Refresh in Radarr). The blocked queue
+drains on its own — items already on disk import in place, no re-download.
+
+`verify-stack.sh` fails red on both signals of this state: root-owned paths in
+the media tree (checked per physical disk and on the cache) and warns on queue
+items pinned at `importBlocked`/`importPending`.
+
 ---
 
 ## Plex isn't using hardware transcoding

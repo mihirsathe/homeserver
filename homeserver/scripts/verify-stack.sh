@@ -552,6 +552,12 @@ for d in /mnt/user/appdata/*/; do
         # are correct rather than broken. `docker inspect plex` shows an empty
         # .Config.User, which is the tell.
         */plex/) continue ;;
+        # Host tooling, not container appdata: the gh binary and its auth
+        # config (a GitHub PAT) live here so they survive reboots, and are
+        # root-owned 0700 ON PURPOSE — nobody:users would hand the credential
+        # to anything running 99:100. Added 2026-08-29 with the restore_tools
+        # boot script.
+        */tools/) continue ;;
     esac
     # Directories only, three levels deep. A correctly-owned parent can hide a
     # root-owned child — exactly how Bazarr was found crash-looping behind s6
@@ -592,10 +598,16 @@ fi
 if ! ls -d /mnt/disk[0-9]*/data >/dev/null 2>&1; then
     warn "no /mnt/disk*/data mounted — physical-disk ownership not checked"
 else
-    mover_bad=$( { find /mnt/disk[0-9]*/data/media -maxdepth 3 -type d \
+    # /mnt/cache/data is included: the data share is cache:yes, so a fresh
+    # import and its parents live on the cache until the mover runs — damage
+    # (or a bad download-client umask) is visible there first. Full depth and
+    # files too, not just dirs: measured ~20ms over the whole library, and the
+    # 2026-08-11 incident fixtures included a root-owned FILE.
+    mover_bad=$( { find /mnt/disk[0-9]*/data/media /mnt/cache/data/media \
+                        \( -type d -o -type f \) \
                         \( ! -uid 99 -o ! -gid 100 \) 2>/dev/null
-                   find /mnt/disk[0-9]*/data/usenet/complete -maxdepth 4 \
-                        \( ! -uid 99 -o ! -gid 100 \) 2>/dev/null; } | sort -u)
+                   find /mnt/disk[0-9]*/data/usenet/complete /mnt/cache/data/usenet/complete \
+                        -maxdepth 4 \( ! -uid 99 -o ! -gid 100 \) 2>/dev/null; } | sort -u)
     if [[ -z "$mover_bad" ]]; then
         ok "physical-disk media ownership clean (all 99:100 — no mover damage)"
     else
@@ -607,6 +619,77 @@ else
         [[ $mover_n -gt 10 ]] && bad "+$((mover_n-10)) more paths under /mnt/disk*/data not owned by 99:100"
     fi
 fi
+
+# Import health, read from the *arrs' own queues rather than inferred from
+# filesystem side effects. Items pinned at trackedDownloadState importBlocked
+# (or importPending that survives re-runs) are downloads the *arr has finished
+# but cannot land — the 2026-08-11 incident held 16 of them, every one
+# UnauthorizedAccessException against a root-owned season dir, invisible to
+# every filesystem check then in this file.
+check_stuck_imports() {
+    local name=$1 port=$2 ver=$3 key json report
+    key=$(akey "$(echo "$name" | tr '[:lower:]' '[:upper:]')_API_KEY")
+    if [[ -z "$key" ]]; then
+        warn "$name: no API key in $(basename "$ENV_FILE") — cannot check import queue"
+        return
+    fi
+    json=$(curl -fsS --max-time 8 -H "X-Api-Key: $key" \
+        "http://127.0.0.1:$port/api/$ver/queue?page=1&pageSize=200" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+        warn "$name: could not read queue (not deployed?)"
+        return
+    fi
+    # Quoted heredoc + env vars rather than python3 -c '...': the classifier
+    # contains both quote characters, and inlining lets the shell eat them
+    # silently — you get a mangled report with no hint why.
+    report=$(SQ_JSON="$json" SQ_NAME="$name" python3 - <<'PYQ'
+import json, os
+from collections import Counter
+
+name = os.environ["SQ_NAME"]
+# Not "anything unusual": downloading/importing/imported are healthy motion,
+# and failed grabs are the *arr's own retry loop to manage. These two states
+# are specifically "the download finished and the import cannot proceed".
+STUCK = ("importBlocked", "importPending")
+try:
+    q = json.loads(os.environ["SQ_JSON"])
+except Exception:
+    print(f"WARN|{name}: queue response was not JSON — cannot judge imports")
+    raise SystemExit
+
+recs = q.get("records", []) if isinstance(q, dict) else (q if isinstance(q, list) else [])
+stuck = [r for r in recs if r.get("trackedDownloadState") in STUCK]
+if not stuck:
+    print(f"OK|{name}: no stuck imports ({len(recs)} queue item(s) tracked)")
+    raise SystemExit
+
+counts = Counter(r.get("trackedDownloadState") for r in stuck)
+breakdown = ", ".join(f"{n} {state}" for state, n in counts.most_common())
+first = stuck[0]
+msgs = [m for s in first.get("statusMessages") or [] for m in s.get("messages") or []]
+detail = (msgs[0] if msgs else "") or first.get("errorMessage") or ""
+title = (first.get("title") or "?")[:45]
+print(f"WARN|{name}: {len(stuck)} queue item(s) stuck at import ({breakdown}) — "
+      f"e.g. '{title}'{': ' + detail[:80] if detail else ''}")
+if counts.get("importBlocked"):
+    print(f"WARN|{name}: importBlocked never clears itself — check the media "
+          "ownership check above first, then Activity -> Queue in the UI")
+else:
+    print(f"WARN|{name}: importPending during an active import is normal — "
+          "re-run in a few minutes; persisting means stuck")
+PYQ
+)
+    while IFS='|' read -r verdict msg; do
+        case "$verdict" in
+            OK)   ok   "$msg" ;;
+            BAD)  bad  "$msg" ;;
+            WARN) warn "$msg" ;;
+        esac
+    done <<< "$report"
+}
+check_stuck_imports radarr 7878 v3
+check_stuck_imports sonarr 8989 v3
+check_stuck_imports lidarr 8686 v1
 
 # -maxdepth 2 and all three extensions, matching backup-appdata.sh's own
 # search. The Appdata Backup plugin writes DATED SUBDIRECTORIES containing the
