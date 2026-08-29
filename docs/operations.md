@@ -33,6 +33,18 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 > The Nextcloud rows are aspirational — the cloud plane is not yet deployed (2026-08); those items activate when it is.
 
+### Backup knobs (`.env`)
+
+The weekly flow is two stages: the **Appdata Backup plugin** writes the archive to `/mnt/user/backups/appdata/` (Sunday 4:00), then the **`media_stack_backup`** User Script runs `scripts/backup-appdata.sh` (Sunday 5:00), which verifies a recent archive exists, records a SHA-256 checksum, copies offsite, and prunes — logging to `/var/log/homeserver/backup.log`. Three optional `.env` values steer it (script defaults apply if unset):
+
+| Knob | Default | What it does |
+|------|---------|--------------|
+| `BACKUP_REMOTE` | empty (**currently unset** — local-only) | rclone target for the newest appdata archive; each run copies the archive's directory to `$BACKUP_REMOTE/<timestamp>`. Empty means the offsite copy is skipped and logged as such. |
+| `BACKUP_NEXTCLOUD_REMOTE` | empty | rclone target for `/mnt/user/nextcloud` user files (plus the weekly `pg_dump` to `$BACKUP_NEXTCLOUD_REMOTE/db`). This is the **only** copy of the user files — the Appdata Backup plugin never sees them. The script runs this leg first and never exits early on its account, so a failed plugin backup can't silently take the personal-file copy down with it (and vice versa). |
+| `BACKUP_LOCAL_RETENTION_DAYS` | `14` | Local archives (and their checksums) older than this are pruned at the end of each run. |
+
+Both remote knobs require `rclone` on the host; if a remote is set but rclone is missing, the script warns and skips rather than failing the run.
+
 ---
 
 ## Diagnostics

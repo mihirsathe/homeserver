@@ -37,7 +37,7 @@ The plan is eight sequential phases ordered by dependency and impact. Each phase
 
 ### What exists today
 
-Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software stack is fully containerized in Docker Compose: Radarr, Sonarr, Lidarr, SABnzbd, Prowlarr, Bazarr, Plex (GPU transcode via RTX 3050), Seerr. External access: one router port-forward (TCP 32400 → Plex); all admin plane reachable only through Tailscale. Dual Xeon Gold 6146, 32GB ECC RAM, 24TB usable array (single parity), 480GB SSD cache pool (BTRFS RAID1). Rebuildable from scratch in under an hour.
+Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software stack is fully containerized in Docker Compose — 15 containers across four peer tenants (media is the oldest, not the privileged one): media automation (Plex with GPU transcode via RTX 3050, Seerr, Tautulli, Radarr, Sonarr, Lidarr, Bazarr, Profilarr, Prowlarr, SABnzbd — with SAB + Prowlarr egressing through Gluetun's Mullvad WireGuard tunnel and kill-switch), local AI (Ollama on the shared RTX 3050, capped by a static VRAM reservation so Plex always has room), personal finance (Actual Budget + actual-ai LLM categorization), and a chess webapp (coach). External access: one router port-forward (TCP 32400 → Plex); every other UI is a per-service Tailscale Service (`svc:<name>`) with its own MagicDNS name and HTTPS certificate — no reverse proxy. Dual Xeon Gold 6146, 32GB ECC RAM, 24TB usable array (single parity), 480GB SSD cache pool (BTRFS RAID1). Rebuildable from scratch in under an hour.
 
 ### Strengths
 

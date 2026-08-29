@@ -347,9 +347,10 @@ file I/O is the wrong workload to optimise FUSE out of anyway.
 
 ### Nextcloud's user files get their own share, not a folder under `data`
 
-Every container in this stack mounts `/mnt/user/data` at `/data`, because that shared mount
-path is what makes hardlinks work between SAB's completed downloads and the *arr libraries.
-That includes `sabnzbd`, whose entire job is downloading from the internet. (`prowlarr` is
+Every container in this stack's *media* path mounts `/mnt/user/data` at `/data`, because that
+shared mount path is what makes hardlinks work between SAB's completed downloads and the *arr
+libraries — and the media path includes `sabnzbd`, whose entire job is downloading from the
+internet. The non-media tenants deliberately don't mount it. (`prowlarr` is
 equally internet-facing but mounts only `/config`, so it is not itself the exposure —
 `sabnzbd` alone is enough to make the point.)
 

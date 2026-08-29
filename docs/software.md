@@ -223,7 +223,7 @@ If the app has an admin UI, publish it with `tailscale serve --service=svc:<name
         └── music/                    ← Lidarr final library
 ```
 
-All containers mount `/mnt/user/data` at `/data` inside the container. This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
+Every container in the *media* path mounts `/mnt/user/data` at `/data` inside the container (the non-media tenants deliberately don't — `actual_server` and `coach` rebind `/data` to their own appdata, and Prowlarr mounts only `/config`). This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
 
 `usenet-incomplete/` is a separate cache-only share, bind-mounted into SAB at `/incomplete`. Active downloads, par2 repair, and unrar all hammer this path, so it lives on SSD where those operations are 10–20× faster than on spinning disks. `shareUseCache=only` means mover never migrates these files to the array. When a download completes, SAB moves the assembled file from `/incomplete` (SSD) to `/data/usenet/complete/` (array) — a one-time cross-filesystem copy. From there, hardlinks to `/data/media/` work normally.
 
@@ -272,8 +272,9 @@ the same files by two paths, not two copies, and mover never touches them. Both
 `generate-configs.py` and `verify-stack.sh` assert that share setting, because flipping it
 turns a speedup into split-brain.
 
-**Its user files are not under `/mnt/user/data`.** Every container in the stack mounts
-that at `/data`, including SABnzbd and Prowlarr — the two that talk to the internet.
+**Its user files are not under `/mnt/user/data`.** Every container in the *media* path
+mounts that at `/data`, including SABnzbd — the internet-facing downloader (Prowlarr,
+equally internet-facing, mounts only `/config`).
 Personal documents get their own share, mounted only into the two Nextcloud containers.
 Nextcloud needs no hardlinks to the media library, so it loses nothing.
 

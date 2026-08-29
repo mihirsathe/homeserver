@@ -1306,6 +1306,11 @@ cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker build coach
 ```
 
+*[Post-run note, 2026-08: this box runs Docker in **directory mode** on the
+cache pool — there is no `docker.img` vDisk, so the vDisk sizing and
+recreate-to-grow advice below does not apply here. The headroom check itself
+(`df -h /var/lib/docker`) is still valid; the ceiling is just the cache pool.]*
+
 **Check `docker.img` headroom first — this build needs roughly 10 GB free and
 the Unraid default vDisk is only 20 GB:**
 

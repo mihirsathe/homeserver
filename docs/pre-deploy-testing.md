@@ -337,7 +337,7 @@ curl -s http://127.0.0.1:11434/api/ps        # empty immediately
 
 ## 7 · Hardlink behaviour across `/data`
 
-The whole reason every container mounts `/mnt/user/data` at `/data`: SAB's completed download and Radarr's imported file need to occupy the same disk blocks. Verify directly:
+The whole reason every container in the media path mounts `/mnt/user/data` at `/data`: SAB's completed download and Radarr's imported file need to occupy the same disk blocks. Verify directly:
 
 ```bash
 # Drop a file in usenet/complete/

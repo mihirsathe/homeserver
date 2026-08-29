@@ -51,7 +51,7 @@ The X710 10GbE SFP+ ports on the daughter card are installed but unused; they be
 | GPU | Yeston RTX 3050 LP 6G | Ampere GA107 · Riser 2 (CPU2 slot) |
 | Storage controller | PERC H730P Mini | HBA/passthrough mode — individual drives visible to OS |
 | Network | X710 10GbE SFP+ + I350 1GbE | Daughter card, rear panel |
-| Remote management | iDRAC 9 | Dedicated management port, own IP on LAN |
+| Remote management | iDRAC 9 | Shared LOM (rides the LAN cable), own IP on LAN — dedicated port unused (verify) |
 | TPM | TPM 2.0 | Installed — enables Unraid TPM-based licensing |
 | Form factor | 1U rack | Dell sliding rails installed |
 | Power | 2× 1100W Platinum PSU | Both connected, redundant |

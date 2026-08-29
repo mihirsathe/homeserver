@@ -36,6 +36,19 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 ---
 
+## Seerr shows a request, but Radarr/Sonarr never sees it
+
+**Symptom**: the title sits "Approved" in Seerr indefinitely; nothing ever appears in the *arr's Activity → Queue.
+
+This is steps 1–3 of "A content request doesn't download" above, isolated:
+
+1. Seerr → Settings → Services → Radarr (or Sonarr) → **Test**. Red means the stored URL or API key is stale — an API-key rotation or a compose change breaks this link silently.
+2. Seerr → Issues tab — a push that failed (root folder missing, quality profile deleted) is reported there, not in the *arr.
+3. Re-run `python3 scripts/bootstrap.py` — it's idempotent and re-establishes the Seerr → Radarr/Sonarr connections with the current keys and container addresses.
+4. Remember the 4K rule: 4K requests always require manual approval by design, so "waiting" there is intended behavior, not a broken link.
+
+---
+
 ## `'doctype' is an unexpected token` on an *arr indexer
 
 **Symptom**: Sonarr/Radarr/Lidarr → Settings → Indexers → Test fails with
@@ -221,7 +234,7 @@ directly in that *arr instead.
 
 Cause is always one of two things:
 
-1. **Source and destination are on different mounts.** Hardlinks can't cross mountpoints. In this stack, both `usenet/` and `media/` live under `/mnt/user/data`, which all containers mount at `/data` — so this should never fail *unless* someone changed the compose mount structure.
+1. **Source and destination are on different mounts.** Hardlinks can't cross mountpoints. In this stack, both `usenet/` and `media/` live under `/mnt/user/data`, which every container in the media path mounts at `/data` — so this should never fail *unless* someone changed the compose mount structure.
    - Verify: `docker exec radarr stat -f /data/usenet/complete/movies /data/media/movies` — `Block size` and `Total blocks` fields should match.
 
 2. **Hardlinks tunable is disabled in Unraid.** Global Share Settings → Tunable (support Hard Links) must be enabled. `setup-unraid.sh` sets this automatically via `shareHardLinks=yes` in `/boot/config/share.cfg`, but a UI toggle or an Unraid upgrade can undo it.
@@ -270,6 +283,14 @@ docker image prune -f
 ls -lah /mnt/user/usenet-incomplete/
 # (manually remove anything you're sure is stuck)
 ```
+
+---
+
+## A drive shows disabled/red, or the parity check reports errors
+
+**Symptom**: Unraid dashboard shows a drive disabled (red ✕) or emulated, or a parity check finishes with sync errors.
+
+Not a Docker problem — don't touch the stack. Go straight to [disaster-recovery.md#single-array-drive-failure](disaster-recovery.md#single-array-drive-failure) (data disk) or [disaster-recovery.md#parity-drive-failure](disaster-recovery.md#parity-drive-failure) (parity disk) for the replacement and rebuild procedure. Two things worth knowing while you get there: the array keeps serving reads while degraded (parity reconstructs on the fly), so media playing fine does **not** mean nothing is wrong — and until the rebuild completes, a second failure is unrecoverable, so avoid heavy writes.
 
 ---
 
@@ -441,6 +462,25 @@ docker exec <container> curl -fsS http://ollama:11434/api/tags
 ```
 
 Use `http://ollama:11434` — not `localhost:11434` (that's the consumer's own loopback), and not the host LAN IP (nothing is bound there).
+
+---
+
+## Actual Budget unreachable, or errors about `SharedArrayBuffer`
+
+**Symptom**: `https://actual.<tailnet>.ts.net/` doesn't load — or it loads and the web client dies with `SharedArrayBufferMissing` / a Secure Context complaint.
+
+Two different failures:
+
+1. **Unreachable** — ordinary ingress, nothing Actual-specific. Work the "Admin UIs unreachable over Tailscale" tree above with `svc:actual` and backend `127.0.0.1:5006`.
+2. **Loads but errors** — Actual requires a Secure Context; plain HTTP only works from `localhost`. Check order (HTTPS URL, serve config, tailnet HTTPS certs, COOP/COEP headers) is in [disaster-recovery.md#actual-loads-but-the-web-client-errors-sharedarraybuffermissing](disaster-recovery.md#actual-loads-but-the-web-client-errors-sharedarraybuffermissing). Short version: nothing in this stack sits in front of Actual to break its own headers — if you added a proxy, that's the suspect.
+
+---
+
+## Nextcloud shows "This server is in maintenance mode"
+
+**Symptom**: every Nextcloud page shows the maintenance banner. `docker ps` still shows the container healthy — `status.php` deliberately answers 200 during maintenance.
+
+Almost always a `backup-appdata.sh` run that was killed before its `trap` fired. The one-command fix (`occ maintenance:mode --off`) and the follow-up checks — why it died, whether the database dump is truncated — are in [disaster-recovery.md#nextcloud-is-stuck-in-maintenance-mode](disaster-recovery.md#nextcloud-is-stuck-in-maintenance-mode).
 
 ---
 

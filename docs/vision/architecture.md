@@ -31,7 +31,7 @@ Configure **split-horizon DNS** so LAN clients resolve local hostnames (e.g., `p
 | Tier | Media | Location | Role |
 |------|-------|----------|------|
 | Hot / Cache | 2× 480GB SSD (BTRFS RAID1) | R640 bays 1–2 | Docker configs, databases, transcode scratch |
-| Warm / Array | 4× 8TB + 1× 16TB parity (expandable to 10+2) | MD1400 | Media, downloads, cameras, file storage |
+| Warm / Array | 4× 6TB + 1× 6TB parity today (expandable to 10+2 with 16TB-class drives) | MD1400 | Media, downloads, cameras, file storage |
 | NVMe / Proxmox | 256GB–1TB NVMe per mini PC | Proxmox nodes | HA VM storage, Home Assistant database |
 | Cold / Backup | 8TB external USB | R640 USB 3.0 | Weekly config + data backup |
 | Offsite / Cloud | Backblaze B2 (rclone, encrypted) | Cloud | Irreplaceable data: photos, documents, configs |

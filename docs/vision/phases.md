@@ -36,7 +36,7 @@ Configure Unraid's notification system for: drive errors, SMART warnings, parity
 
 > **Status:** Basic deployment is done. The tailnet exists, the server advertises `tag:server`, admin devices are tagged `tag:admin`, and `tailscale up --ssh` is live (see [deployment.md](../deployment.md#3a--tailscale)). The items below are the hardening work still outstanding.
 
-- Tailscale ACLs: tighten `tag:admin → tag:server` to the specific admin ports (7878, 8989, 8686, 9696, 8080, 5055, 6767, 8181, 80/443 for Unraid UI). Deny everything else.
+- Tailscale ACLs: ingress moved to per-service Tailscale Services (`svc:<name>`, HTTPS on 443) — backends bind to loopback only, so there are no raw admin ports on the tailnet to scope any more. Tighten grants so `tag:admin` is the only tag that can reach each `svc:*` (plus 80/443 on the host itself for the Unraid UI and Tailscale SSH). Deny everything else.
 - Enforce SSO + device posture check; require MagicDNS + HTTPS certs for any browser-facing admin UI
 - Short key-expiry for admin devices (30–90 days); indefinite for the server node
 - Quarterly audit of machines + ACLs in the Tailscale admin console

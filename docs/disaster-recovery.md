@@ -20,7 +20,7 @@ Before reaching for any of the procedures below, confirm the failure mode:
 2. Stop the array (Main → Stop). Containers must come down first if any are writing to the array — check with `docker compose ps`, expect `restart: unless-stopped` to bring them back after.
 3. Physically replace the disk. Label it with its bay number before pulling so you don't swap the wrong slot.
 4. Start the array → Unraid offers to rebuild onto the new disk from parity.
-5. Rebuild runs at ~100 MB/s → roughly **8 hours per TB** for an 8 TB drive (~64 h). Array remains usable during rebuild; I/O is slower because every read reconstructs from parity.
+5. Rebuild takes roughly **10–14 h** for a 6 TB drive (the May 2026 full parity check took ~10 h). Array remains usable during rebuild; I/O is slower because every read reconstructs from parity.
 6. After rebuild completes, SMART-monitor the new drive for a week — infant mortality is real.
 
 **What you lose**: nothing, assuming no second drive fails during the rebuild window.
