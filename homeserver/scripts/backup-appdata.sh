@@ -12,8 +12,8 @@
 #   5. Log the outcome.
 #
 # Schedule via Unraid User Scripts:
-#   Settings → User Scripts → media_stack_backup → weekly (Sunday 4am, *after*
-#   the Appdata Backup plugin's own schedule).
+#   Settings → User Scripts → media_stack_backup → weekly (Sunday 5am, an hour
+#   *after* the Appdata Backup plugin's own 4am schedule).
 # =============================================================================
 
 set -euo pipefail

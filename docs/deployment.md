@@ -217,7 +217,7 @@ Note that Ollama has **no authentication** — anything on the `ai` network can 
 
 ### Nextcloud first-run
 
-> **Status (2026-08): not yet deployed on the live box.** The `cloud` plane is fully defined in Compose, but no `NEXTCLOUD_*` values are set in `.env`, the `nextcloud` share and `/mnt/cache/appdata/nextcloud*` directories have not been created, and `svc:nextcloud` is not published. Everything below documents the intended end-state, not the running system.
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 Nextcloud installs itself — there is no wizard. `generate-configs.py` generated the
 database, Redis and admin passwords into `generated.env`, and the container consumed them

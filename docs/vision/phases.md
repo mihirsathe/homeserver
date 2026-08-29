@@ -201,13 +201,12 @@ Storage: 500GB–2TB on the array for 30–90 day retention of event clips. Cont
 
 *Goal: Replace cloud subscriptions with self-hosted alternatives.*
 
-> **Status:** Nextcloud is **designed but not yet deployed** (2026-08). The four-container
-> closed `cloud` plane (PostgreSQL, Redis, files on their own share, published as
-> `svc:nextcloud`) is fully defined in Compose and documented, but has not been brought up
-> on the live box — no env values, shares, or Tailscale Service exist yet. See
-> [software.md](../software.md#personal-cloud) for the intended design and
+> **Status:** Nextcloud **deployed 2026-08-29**. Four containers on the closed `cloud`
+> plane (PostgreSQL, Redis, files on their own array-direct share), installed and healthy;
+> `svc:nextcloud` publication and the offsite backup target are the remaining steps. See
+> [software.md](../software.md#personal-cloud) for the design and
 > [decisions.md](../decisions.md) for why it is Nextcloud rather than OpenCloud, Seafile
-> or Nextcloud AIO. The rest of this phase is also still future work.
+> or Nextcloud AIO. The rest of this phase is still future work.
 
 ### 7.1 Service Catalog
 
@@ -229,7 +228,7 @@ Tailscale is already the admin plane in today's stack — not a Phase-7 addition
 
 ### 7.2 Key Services
 
-**Nextcloud**: to deploy with PostgreSQL + Redis, data on the array, reached over Tailscale as `svc:nextcloud` (designed and in Compose; not yet running). The 2–4 GB RAM budget held — the plane declares 4 GB of ceilings across four containers, which took the stack total to 30.75 GB of 32 GB and makes §1.2 (RAM to 128 GB) the next thing to do rather than a nice-to-have.
+**Nextcloud**: deployed 2026-08-29 with PostgreSQL + Redis, data on the array, to be reached over Tailscale as `svc:nextcloud` once the service is published. The 2–4 GB RAM budget held — the plane declares 4 GB of ceilings across four containers, which took the stack total to 30.75 GB of 32 GB and makes §1.2 (RAM to 128 GB) the next thing to do rather than a nice-to-have.
 
 **Immich**: store photo library on array, back up to Backblaze B2 — personal photos are irreplaceable. Can use the RTX 3050 for faster ML inference.
 

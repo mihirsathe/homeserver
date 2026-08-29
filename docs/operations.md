@@ -31,7 +31,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |
 | UPS self-test / battery health | Quarterly | `apcaccess status` for a quick read; `apctest` walks an interactive battery/calibration test |
 
-> The Nextcloud rows are aspirational — the cloud plane is not yet deployed (2026-08); those items activate when it is.
+> The Nextcloud maintenance rows are live as of 2026-08-29 (plane deployed); the quarterly offsite-verify row stays moot until `BACKUP_NEXTCLOUD_REMOTE` is set.
 
 ### Backup knobs (`.env`)
 
