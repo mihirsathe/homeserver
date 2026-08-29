@@ -87,9 +87,9 @@ Six bridge networks carve the stack into blast-radius zones so a compromised con
 | Network | Members | Purpose |
 |---------|---------|---------|
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (the gluetun kill-switch, `FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on`). |
-| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
-| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
-| `ai` | `ollama`, *(your AI-consuming containers)* | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
+| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr`, `seerr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
+| `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `coach` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
+| `ai` | `ollama`, `actual-ai`, `coach` | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 | `finance` | `actual_server`, `actual-ai` | Budgeting. `actual-ai` is dual-homed onto `ai` to reach Ollama; nothing else crosses in or out. |
 | `cloud` | `nextcloud`, `nextcloud-db`, `nextcloud-redis`, `nextcloud-cron` | Personal files. **Closed** — nothing else joins, and neither the database nor the cache publishes a port, so the only route to either is from inside this plane. Deliberately *not* dual-homed onto `ai`: Nextcloud is the largest attack surface on the box and anything on `ai` can delete every model. |
 
@@ -230,6 +230,8 @@ All containers mount `/mnt/user/data` at `/data` inside the container. This shar
 ---
 
 ## Personal Cloud
+
+> **Status (2026-08): not yet deployed on the live box.** The `cloud` plane is fully defined in Compose, but no `NEXTCLOUD_*` values are set in `.env`, the `nextcloud` share and `/mnt/cache/appdata/nextcloud*` directories have not been created, and `svc:nextcloud` is not published. Everything below documents the intended end-state, not the running system.
 
 Nextcloud replaces Google/iCloud Drive: file sync, calendar and contacts, reached at
 `https://nextcloud.<tailnet>.ts.net/` like every other service here. Four containers on a

@@ -37,7 +37,7 @@ The plan is eight sequential phases ordered by dependency and impact. Each phase
 
 ### What exists today
 
-Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software stack is fully containerized in Docker Compose: Radarr, Sonarr, Lidarr, SABnzbd, Prowlarr, Bazarr, Plex (GPU transcode via RTX 3050), Seerr. External access: one router port-forward (TCP 32400 → Plex); all admin plane reachable only through Tailscale. Dual Xeon Gold 6146, 32GB ECC RAM, 32TB usable array (single parity), 480GB SSD cache pool (BTRFS RAID1). Rebuildable from scratch in under an hour.
+Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software stack is fully containerized in Docker Compose: Radarr, Sonarr, Lidarr, SABnzbd, Prowlarr, Bazarr, Plex (GPU transcode via RTX 3050), Seerr. External access: one router port-forward (TCP 32400 → Plex); all admin plane reachable only through Tailscale. Dual Xeon Gold 6146, 32GB ECC RAM, 24TB usable array (single parity), 480GB SSD cache pool (BTRFS RAID1). Rebuildable from scratch in under an hour.
 
 ### Strengths
 

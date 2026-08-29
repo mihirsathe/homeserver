@@ -1129,7 +1129,7 @@ The real test of 3.8. When convenient:
 ```bash
 # Stop the array from the Unraid GUI and restart it, then:
 docker compose --env-file .env.docker ps      # everything back up, healthy
-curl -fsS http://radarr.lan/ping              # from the Mac
+curl -fsS https://radarr.tail9f0cb1.ts.net/ping   # from the Mac (the *.lan names are gone)
 ```
 
 ---

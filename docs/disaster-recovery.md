@@ -33,9 +33,9 @@ Before reaching for any of the procedures below, confirm the failure mode:
 
 Less impactful than a data disk failure — no data loss risk, just a window of no protection.
 
-1. Replace the disk physically (must be ≥ size of largest data disk; ours is 16 TB).
+1. Replace the disk physically (must be ≥ size of largest data disk; ours is 6 TB).
 2. Main → Unraid detects the missing parity → assign the new drive as Parity.
-3. Start the array → parity sync begins. ~30–45 h for 16 TB. Data is served normally during sync.
+3. Start the array → parity sync begins. ~10–14 h for 6 TB (the May 2026 full check took ~10 h). Data is served normally during sync.
 
 During the sync window, a data disk failure is unrecoverable. Try not to do heavy writes during this period.
 
@@ -161,6 +161,8 @@ Uncategorized transactions simply stay uncategorized, and you can categorize the
 in the meantime.
 
 ## Nextcloud data loss or corruption
+
+> **Status (2026-08): not yet deployed on the live box.** The `cloud` plane is fully defined in Compose, but no `NEXTCLOUD_*` values are set in `.env`, the `nextcloud` share and `/mnt/cache/appdata/nextcloud*` directories have not been created, and `svc:nextcloud` is not published. Everything below documents the intended end-state, not the running system.
 
 **The one entry in this document about data that cannot be re-sourced.** Media can be
 re-downloaded and the *arr config rebuilt; personal files cannot. Read

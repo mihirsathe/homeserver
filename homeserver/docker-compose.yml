@@ -37,16 +37,20 @@
 #   downloaders  — gluetun, sabnzbd, prowlarr. SAB and Prowlarr share
 #                  gluetun's netns so all their outbound traffic exits via
 #                  Mullvad with a kill-switch. Only gluetun publishes ports.
-#   frontend     — plex, seerr, tautulli, bazarr. Family-facing services.
-#   automation   — sonarr, radarr, lidarr. Dual-homed to frontend (for
-#                  seerr/bazarr/tautulli) and downloaders (to reach SAB and
-#                  Prowlarr via gluetun). Blocks a popped frontend container
-#                  from pivoting straight into the downloader plane.
+#   frontend     — plex, seerr, tautulli, bazarr, coach. Family-facing
+#                  services.
+#   automation   — sonarr, radarr, lidarr, bazarr, profilarr, seerr. The
+#                  *arrs are dual-homed onto downloaders (to reach SAB and
+#                  Prowlarr via gluetun) but NOT onto frontend, so a popped
+#                  frontend container cannot pivot straight into the
+#                  downloader plane.
 #   ai           — ollama plus anything on the stack that needs local
 #                  inference. Isolated from the media planes: nothing here
 #                  has a reason to reach the *arrs or the downloaders, and
 #                  Ollama has no auth of its own, so network membership is
 #                  the access control.
+#   finance      — actual_server and actual-ai. Budgeting; actual-ai is
+#                  dual-homed onto ai to reach Ollama. Nothing else joins.
 #   cloud        — nextcloud, its Postgres and its Redis. Personal files.
 #                  Closed: nothing else joins, and neither the database nor
 #                  the cache publishes a port, so the only way to either is

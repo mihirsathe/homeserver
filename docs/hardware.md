@@ -15,7 +15,7 @@
 | 11 | Vented blank | Thermal break above R640 |
 | 10 | Dell PowerEdge R640 | Sliding rails |
 | 9 | Vented blank | Thermal break between R640 and DAS |
-| 7–8 | Dell MD1400 DAS | 12-bay · 4×8TB data + 1×16TB parity |
+| 7–8 | Dell MD1400 DAS | 12-bay · 4×6TB data + 1×6TB parity |
 | 5–6 | Vented blanks | Reserved for second MD1400 (daisy-chain) |
 | 3–4 | UPS (2U) | APC Smart-UPS X SMX1500RM2U · 1500 VA / 1200 W · pure sine |
 | 1–2 | Vented blanks | Reserved for UPS battery expansion |
@@ -69,7 +69,7 @@ The X710 10GbE SFP+ ports on the daughter card are installed but unused; they be
 | Role | Unraid OS — ZFS mirror |
 | Slot | Dedicated BOSS slot (not a riser slot) |
 
-More reliable than a USB flash drive (cheap NAND, physical wear). RAID1-mirrored, survives one M.2 failure without downtime, and doesn't consume a riser slot.
+More reliable than a USB flash drive (cheap NAND, physical wear). ZFS-mirrored, survives one M.2 failure without downtime, and doesn't consume a riser slot.
 
 ---
 
@@ -101,11 +101,11 @@ Use iDRAC's storage view or the PERC's own interface to check internal SSD healt
 
 | Bay | Drive | Role | Usable |
 |-----|-------|------|--------|
-| MD1400 Bay 1 | 16 TB HDD | Parity | — |
-| MD1400 Bay 2 | 8 TB HDD | Data disk 1 | 8 TB |
-| MD1400 Bay 3 | 8 TB HDD | Data disk 2 | 8 TB |
-| MD1400 Bay 4 | 8 TB HDD | Data disk 3 | 8 TB |
-| MD1400 Bay 5 | 8 TB HDD | Data disk 4 | 8 TB |
+| MD1400 Bay 1 | 6 TB HDD | Parity | — |
+| MD1400 Bay 2 | 6 TB HDD | Data disk 1 | 6 TB |
+| MD1400 Bay 3 | 6 TB HDD | Data disk 2 | 6 TB |
+| MD1400 Bay 4 | 6 TB HDD | Data disk 3 | 6 TB |
+| MD1400 Bay 5 | 6 TB HDD | Data disk 4 | 6 TB |
 | MD1400 Bays 6–12 | Empty | Available | up to 7 more drives |
 | R640 Bays 3–10 | Empty | Available | internal SSD/NVMe |
 | R640 Bay 1 | 480 GB SSD | Cache pool 1 | — |
@@ -113,9 +113,9 @@ Use iDRAC's storage view or the PERC's own interface to check internal SSD healt
 | BOSS slot 1 | 240 GB M.2 | Boot mirror | — |
 | BOSS slot 2 | 240 GB M.2 | Boot mirror | — |
 
-**Total usable array: 32 TB** (single parity, 4×8 TB)
+**Total usable array: 24 TB** (single parity, 4×6 TB)
 
-**Expansion headroom:** 7 more drives in the MD1400. Parity disk must always be the largest disk — adding a drive larger than 16 TB without first upgrading parity leaves the new drive unprotected. Full upgrade path (dual parity, daisy-chained second MD1400, etc.) lives in [decisions.md#expansion-paths](decisions.md#expansion-paths).
+**Expansion headroom:** 7 more drives in the MD1400. Parity disk must always be the largest disk — adding a drive larger than 6 TB without first upgrading parity leaves the new drive unprotected. Full upgrade path (dual parity, daisy-chained second MD1400, etc.) lives in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
 ---
 

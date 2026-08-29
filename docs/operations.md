@@ -18,17 +18,20 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 | Task | Frequency | How |
 |------|-----------|-----|
-| Container image updates | Monthly (1st, 3am) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
+| Container image updates | Monthly (2nd, 3am — the 1st belongs to the parity check) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
 | Nextcloud / Postgres major upgrade | Deliberate, never scheduled | See [Nextcloud major upgrades](#nextcloud-major-upgrades) below |
 | Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
-| Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin |
+| Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin; `media_stack_backup` verifies + offsites it at 5am |
+| Mover (cache → array) | Hourly, on the hour | Unraid built-in schedule — the reason `usenet-incomplete` must stay `cache=only` |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
 | Prune unused Ollama models | Quarterly | `docker exec ollama ollama list`, then `ollama rm <model>` — model blobs sit on the 480 GB cache pool |
 | SMART check (cache SSDs) | Quarterly | iDRAC storage view or PERC UI (SMART not available via Unraid) |
 | SMART check (MD1400 drives) | Automatic | Unraid dashboard alerts — verify alerts are configured |
 | UPS self-test / battery health | Quarterly | `apcaccess status` for a quick read; `apctest` walks an interactive battery/calibration test |
+
+> The Nextcloud rows are aspirational — the cloud plane is not yet deployed (2026-08); those items activate when it is.
 
 ---
 
@@ -141,7 +144,7 @@ NVENC/NVDEC acceleration requires an active Plex Pass subscription. Without it, 
 
 ### Single parity
 
-The array uses single parity (one 16 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
+The array uses single parity (one 6 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
 ### 32 GB RAM — and memory ceilings now sum to 30.75 GB of it
 

@@ -82,11 +82,11 @@ How physical drives map to Unraid's logical shares.
 ```mermaid
 flowchart LR
     subgraph md["MD1400 DAS — 12 bays"]
-        P["Parity · 16 TB"]
-        D1["Data · 8 TB"]
-        D2["Data · 8 TB"]
-        D3["Data · 8 TB"]
-        D4["Data · 8 TB"]
+        P["Parity · 6 TB"]
+        D1["Data · 6 TB"]
+        D2["Data · 6 TB"]
+        D3["Data · 6 TB"]
+        D4["Data · 6 TB"]
         E["7 bays empty"]
     end
     subgraph r640["R640 internal — 8 bays"]
@@ -100,7 +100,7 @@ flowchart LR
     D3 --> ARR
     D4 --> ARR
     P -.->|"parity<br/>protects"| ARR
-    ARR["Unraid array<br/>32 TB usable"] --> DATA[("/mnt/user/data/")]
+    ARR["Unraid array<br/>24 TB usable"] --> DATA[("/mnt/user/data/")]
 
     C1 --> POOL
     C2 --> POOL
