@@ -474,14 +474,25 @@ services:
 
   # ---------------------------------------------------------------------------
   # SEERR — family request portal + Plex Watchlist auto-request
-  # settings.json pre-generated, Plex + arr connections via bootstrap.py
+  #
+  # NOT pre-seeded, and NOT wired by the scripts (this comment used to claim
+  # both): generate-configs.py only creates the appdata dir, bootstrap.py only
+  # waits for :5055. First-run is Seerr's own UI flow — Plex sign-in can't be
+  # scripted — and the Radarr/Sonarr connections are entered there by hand,
+  # which makes them the one cross-service link nothing regenerates. *arr-side
+  # drift therefore strands Seerr silently: when the ingress rework stripped
+  # the *arrs' UrlBases, Seerr kept calling /radarr, the *arr answered any
+  # unknown path with its SPA page as HTTP 200, and every request failed with
+  # `radarrTags.find is not a function` while every healthcheck stayed green.
+  # In Seerr's *arr settings the Base URL field stays EMPTY (the *arrs serve
+  # at root); verify-stack.sh's "Seerr wiring" section asserts the live link.
   #
   # No public exposure — reachable only via Tailscale to the Unraid host's
   # LAN IP at :5055. Family never visits a Seerr URL; they add titles to
   # their Plex Watchlist and Seerr auto-requests within ~5–15 min.
   #
   # No `depends_on:` — Seerr connects to Plex/arr lazily via HTTP at request
-  # time, not at container start. bootstrap.py waits per-service before wiring.
+  # time, not at container start. bootstrap.py waits per-service itself.
   #
   # UID note: Seerr's image runs as the `node` user (UID 1000) by default and
   # doesn't read PUID/PGID, but Docker's `user:` override works fine per

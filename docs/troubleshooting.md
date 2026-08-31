@@ -18,8 +18,7 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 3. **Did Radarr/Sonarr see the request?**
    - Open Radarr/Sonarr → Activity → Queue. If nothing there, Seerr didn't push it.
-   - Check Seerr's connection to Radarr: Settings → Services → Radarr → Test. A green checkmark means the API key is correct.
-   - Re-run `python3 scripts/bootstrap.py` — it's idempotent and re-establishes the Seerr → Radarr link.
+   - Check Seerr's connection to Radarr: Settings → Services → Radarr → Test. If it's red, see "Seerr shows a request, but Radarr/Sonarr never sees it" below — the fix is in Seerr's UI; no script manages this link.
 
 4. **Is the *arr searching?**
    - Radarr → Movies → click the movie → Manual Search. If "No results", Prowlarr isn't returning anything.
@@ -38,14 +37,23 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 ## Seerr shows a request, but Radarr/Sonarr never sees it
 
-**Symptom**: the title sits "Approved" in Seerr indefinitely; nothing ever appears in the *arr's Activity → Queue.
+**Symptom**: the title sits "Approved" in Seerr indefinitely, or flips straight to "Failed" — either way nothing appears in the *arr's Activity → Queue. The same breakage also empties the quality-profile dropdowns in Seerr → Settings → Services, so profiles you set up via Profilarr "disappear" from Seerr.
 
-This is steps 1–3 of "A content request doesn't download" above, isolated:
+If `docker logs seerr` shows
 
-1. Seerr → Settings → Services → Radarr (or Sonarr) → **Test**. Red means the stored URL or API key is stale — an API-key rotation or a compose change breaks this link silently.
-2. Seerr → Issues tab — a push that failed (root folder missing, quality profile deleted) is reported there, not in the *arr.
-3. Re-run `python3 scripts/bootstrap.py` — it's idempotent and re-establishes the Seerr → Radarr/Sonarr connections with the current keys and container addresses.
-4. Remember the 4K rule: 4K requests always require manual approval by design, so "waiting" there is intended behavior, not a broken link.
+```
+Failed to send movie request to Radarr due to connection or configuration error ... "errorMessage":"radarrTags.find is not a function"
+```
+
+that is not a tags problem. It is Seerr choking on an HTML page where it expected a JSON array — the whole connection is bad, and profiles, root folders and tags are all coming back as the *arr's web page.
+
+**These connections are hand-entered in Seerr's UI and no script touches them.** `bootstrap.py` wires Prowlarr↔*arr and *arr↔SAB; Seerr's Services config lives in its own `settings.json`, so it is the one link that survives every script re-run — correct or not. (This section used to say re-running `bootstrap.py` re-establishes it. It never did.)
+
+1. `bash scripts/verify-stack.sh` — the **Seerr wiring** section makes Seerr itself fetch each server's quality profiles and names what's wrong.
+2. Seerr → Settings → Services → Radarr/Sonarr → **Test**. Red with a correct hostname and key usually means a stale **Base URL**: `/radarr` and `/sonarr` predate the Tailscale Services migration — the same leftover as the `'doctype'` indexer failure below, in Seerr's copy of the config. The *arrs serve at root now and answer any unknown path with their SPA page as **HTTP 200**, so nothing errors until Seerr tries to parse the HTML as JSON. **Blank the Base URL field**, save, re-Test.
+3. Test green but submits still fail → Seerr → Issues tab, and confirm the chosen quality profile still exists in the *arr — deleting/re-creating a profile there strands the id Seerr stored (verify-stack checks this too).
+4. After fixing: failed requests don't resend themselves. Seerr → Requests → filter **Failed** → **Retry** each.
+5. Remember the 4K rule: 4K requests always require manual approval by design, so "waiting" there is intended behavior, not a broken link.
 
 ---
 

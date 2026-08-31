@@ -274,7 +274,8 @@ API keys live in `generated.env` and are embedded in the per-service config file
 1. Remove the key from `generated.env` (e.g. delete the `RADARR_API_KEY=` line).
 2. `python3 scripts/generate-configs.py` — re-rolls it.
 3. `docker compose up -d` — the service reads the new key from its regenerated config.xml on restart.
-4. `python3 scripts/bootstrap.py` — reconnects Prowlarr/Seerr/Bazarr/Tautulli with the new key.
+4. `python3 scripts/bootstrap.py` — reconnects Prowlarr's app links with the new key. (Bazarr and Tautulli were already covered by step 2 — their generated config files embed the keys.)
+5. **Seerr, by hand** — no script touches its config: paste the new *arr key into Seerr → Settings → Services → Radarr/Sonarr → Test, then `bash scripts/verify-stack.sh` — its **Seerr wiring** section proves the link end-to-end. Skipping this strands Seerr on the old key: every request fails while all healthchecks stay green.
 
 ### Mullvad WireGuard key
 Rotate if the key is suspected-compromised, or periodically as hygiene.
