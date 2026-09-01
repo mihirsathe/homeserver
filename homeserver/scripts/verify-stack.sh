@@ -275,6 +275,110 @@ except Exception: pass' 2>/dev/null)
 fi
 
 # ---------------------------------------------------------------------------
+sec "Seerr wiring"
+
+# Seerr's Radarr/Sonarr connections are entered in its UI and live in its own
+# settings.json — the one cross-service link in this stack that no script
+# generates or reconciles, so *arr-side changes strand it silently. The
+# UrlBase strip did exactly that: Seerr kept calling /radarr, the *arr
+# answered with its SPA page as HTTP 200 (not a 404 — the frontend catch-all
+# serves index.html for any unknown path), and every request died with
+# `radarrTags.find is not a function` while containers, ports and healthchecks
+# all stayed green. Seerr's own Test button does go red on this (HTML breaks
+# its JSON parse) — but only when someone presses it.
+#
+# So ask Seerr itself rather than probing the *arrs: /api/v1/service/<app>/<id>
+# makes Seerr fetch that server's quality profiles through its stored
+# hostname/port/baseUrl/key — the same hop a request submission uses. Then
+# assert the stored default profile ids still exist server-side: a profile
+# deleted or re-created in the *arr keeps Test green but fails every submit.
+SEERR_SETTINGS="/mnt/user/appdata/seerr/settings.json"
+if ! docker inspect seerr >/dev/null 2>&1; then
+    warn "seerr not deployed — request wiring not checked"
+elif [[ ! -r "$SEERR_SETTINGS" ]]; then
+    warn "seerr deployed but no readable settings.json — first-run setup not done?"
+else
+    # app|serverId|name|storedBaseUrl|defaultProfileIds — one line per server.
+    seerr_servers=$(python3 - "$SEERR_SETTINGS" <<'PY' 2>/dev/null
+import json, sys
+try:
+    s = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+for app in ("radarr", "sonarr"):
+    for srv in s.get(app) or []:
+        ids = [srv.get("activeProfileId")]
+        if app == "sonarr":
+            ids.append(srv.get("activeAnimeProfileId"))
+        idlist = ",".join(str(i) for i in dict.fromkeys(ids) if i is not None)
+        print(f'{app}|{srv.get("id")}|{srv.get("name") or app}|{srv.get("baseUrl") or ""}|{idlist}')
+PY
+)
+    SEERR_KEY=$(python3 - "$SEERR_SETTINGS" <<'PY' 2>/dev/null
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("main", {}).get("apiKey", ""))
+except Exception:
+    pass
+PY
+)
+    if [[ -z "$seerr_servers" ]]; then
+        warn "seerr has no radarr/sonarr connections configured — Watchlist requests have nowhere to go"
+    elif [[ -z "$SEERR_KEY" ]]; then
+        warn "could not read seerr's api key from settings.json — wiring not checked"
+    else
+        while IFS='|' read -r app sid sname sbase sprofiles; do
+            [[ -z "$app" ]] && continue
+            resp=$(curl -fsS --max-time 10 -H "X-Api-Key: $SEERR_KEY" \
+                "http://127.0.0.1:5055/api/v1/service/$app/$sid" 2>/dev/null)
+            # Same quoted-heredoc/env-input pattern as the indexer classifier,
+            # for the same reason: inlining JSON into -c '...' lets the shell
+            # eat quotes silently.
+            report=$(SW_RESP="$resp" SW_APP="$app" SW_NAME="$sname" \
+                     SW_BASE="$sbase" SW_WANT="$sprofiles" python3 - <<'PY'
+import json, os
+
+app, name = os.environ["SW_APP"], os.environ["SW_NAME"]
+base, want = os.environ["SW_BASE"], os.environ["SW_WANT"]
+# A stored base URL is the prime suspect: the *arrs serve at root, so any
+# prefix is a pre-Tailscale-Services leftover and gets exactly the HTML-as-200
+# failure described above.
+hint = (f" — stored Base URL '{base}' predates the UrlBase strip; blank it in "
+        "Seerr → Settings → Services" if base
+        else " — hostname/port/key stale? Seerr → Settings → Services → Test")
+try:
+    profiles = json.loads(os.environ["SW_RESP"]).get("profiles") or []
+except Exception:
+    profiles = None
+if profiles is None:
+    print(f"BAD|seerr cannot fetch quality profiles from {name}{hint}")
+elif not profiles:
+    print(f"BAD|seerr reaches {name} but sees ZERO quality profiles{hint}")
+else:
+    have = {str(p.get("id")) for p in profiles}
+    missing = [w for w in want.split(",") if w and w not in have]
+    if missing:
+        print(f"BAD|{name}: seerr's default profile id(s) {','.join(missing)} "
+              f"no longer exist in {app} (deleted/re-created?) — submits will "
+              "fail; re-pick in Seerr → Settings → Services")
+    else:
+        print(f"OK|seerr sees {len(profiles)} quality profiles from {name}; "
+              "its defaults exist")
+PY
+)
+            # Herestring, not a pipe: counters must increment in this shell.
+            while IFS='|' read -r verdict msg; do
+                case "$verdict" in
+                    OK)   ok   "$msg" ;;
+                    BAD)  bad  "$msg" ;;
+                    WARN) warn "$msg" ;;
+                esac
+            done <<< "$report"
+        done <<< "$seerr_servers"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 sec "Ingress"
 
 if ! command -v tailscale >/dev/null 2>&1; then

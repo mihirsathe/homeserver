@@ -169,7 +169,10 @@ Waits for all services, wires the stack together via API, and creates Plex libra
 
 **Hardware transcoding requires an active Plex Pass subscription.** `bootstrap.py` turns NVENC/NVDEC on via Plex's `/:/prefs` API, but Plex ignores the setting at playback without a Pass account. If you see CPU transcoding after bootstrap despite the RTX 3050 being visible (`docker exec plex nvidia-smi`), check in this order: (1) `bootstrap.py` printed `✓ Plex: applied N server preferences`, (2) Settings → Transcoder shows hardware acceleration ticked, (3) the account has Plex Pass. Before this was fixed the answer was almost always (1) — the preferences were set by environment variables the image ignores.
 
-Finally, open **Seerr** at `https://seerr.<tailnet>.ts.net/`, sign in with your Plex account, and for every family member: Settings → Users → edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
+Finally, open **Seerr** at `https://seerr.<tailnet>.ts.net/`, sign in with your Plex account, and finish its first-run flow by hand — Seerr is the one service `bootstrap.py` does not wire:
+
+- **Settings → Services**: add Radarr (hostname `radarr`, port `7878`) and Sonarr (hostname `sonarr`, port `8989`) with their API keys from `.env.docker`, and leave **Base URL empty** — the *arrs serve at root. A wrong Base URL is the quiet failure here: the *arrs answer any unknown path with their web page as HTTP 200, so it stays invisible until a request fails. `verify-stack.sh` (**Seerr wiring**) proves the finished link.
+- **Settings → Users**: for every family member, edit user → grant **Auto-Request**. That's what turns a Plex Watchlist addition into an automatic Radarr/Sonarr request. (This one is per-Plex-user and has no API equivalent.)
 
 Tautulli's first-run wizard is pre-seeded by `bootstrap.py` — just open `https://tautulli.<tailnet>.ts.net/` and it's already bound to the Plex server with full history access.
 
