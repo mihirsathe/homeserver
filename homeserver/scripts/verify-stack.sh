@@ -646,6 +646,14 @@ for d in /mnt/user/appdata/*/; do
         # the whole tree left the one path that can actually break unchecked, so
         # it is asserted explicitly below instead.
         */chess-coach/) continue ;;
+        # claudecoach (the training coach — its own repo and compose, NOT the
+        # `coach` chess webapp above) is developed in place on the host, and
+        # host sessions run as root: .venv, .pytest_cache and their siblings
+        # are recreated root-owned by every dev run, so flagging them is
+        # permanent noise and chowning them lasts until the next `uv run
+        # pytest`. The dirs its 99:100 container actually writes are asserted
+        # explicitly below instead.
+        */claudecoach/) continue ;;
         # The Nextcloud plane is legitimately NOT nobody:users — its images drop
         # to www-data and postgres themselves. Asserted positively in the Cloud
         # plane section, because "not nobody" is correct for these but "anything
@@ -656,6 +664,13 @@ for d in /mnt/user/appdata/*/; do
         # are correct rather than broken. `docker inspect plex` shows an empty
         # .Config.User, which is the tell.
         */plex/) continue ;;
+        # Root's persisted host tooling, not container appdata: Unraid's rootfs
+        # is RAM, so the restore_tools boot script relinks /usr/local/bin/gh
+        # and /root/.config/gh from here. gh-config carries a live GitHub PAT,
+        # which makes root-and-0700 the protection rather than the damage —
+        # asserted in exactly that direction below, because here it is BECOMING
+        # nobody:users that would be the incident.
+        */tools/) continue ;;
     esac
     # Directories only, three levels deep. A correctly-owned parent can hide a
     # root-owned child — exactly how Bazarr was found crash-looping behind s6
@@ -680,6 +695,31 @@ if [[ -d /mnt/user/appdata/chess-coach/data ]]; then
     [[ "$cdo" == "nobody" ]] \
         && ok "chess-coach/data owned by nobody (coach runs as 99:100)" \
         || bad "chess-coach/data owned by $cdo, expected nobody — coach's SQLite writes will fail"
+fi
+
+# Same shape for claudecoach: its tree is skipped above (root-owned dev
+# artifacts are its steady state), but the container runs as 99:100 — USER is
+# baked into its Dockerfile — and every agent run writes the plan/ workspace
+# and the db/ SQLite store through its /data binds. Root ownership on either
+# is the real breakage the sweep exists to catch, so assert them explicitly.
+for ccd in db plan; do
+    [[ -d "/mnt/user/appdata/claudecoach/$ccd" ]] || continue
+    cco=$(stat -c %U "/mnt/user/appdata/claudecoach/$ccd" 2>/dev/null)
+    [[ "$cco" == "nobody" ]] \
+        && ok "claudecoach/$ccd owned by nobody (claudecoach runs as 99:100)" \
+        || bad "claudecoach/$ccd owned by $cco, expected nobody — claudecoach's writes will fail"
+done
+
+# tools/gh-config, asserted in the OPPOSITE direction from everything else:
+# it holds root's gh CLI auth, and hosts.yml in it is a live GitHub PAT, so
+# root-owned 0700 is the correct state. A Tools -> New Permissions run would
+# flip it to nobody:users with open modes; gh itself keeps working afterwards,
+# so without this line the token going share-readable would surface nowhere.
+if [[ -d /mnt/user/appdata/tools/gh-config ]]; then
+    gco=$(stat -c '%U %a' /mnt/user/appdata/tools/gh-config 2>/dev/null)
+    [[ "$gco" == "root 700" ]] \
+        && ok "tools/gh-config is root:0700 (gh PAT not share-readable)" \
+        || bad "tools/gh-config is '$gco', expected 'root 700' — the gh PAT may be readable via the appdata share"
 fi
 
 # Mover damage on the PHYSICAL disks. Unraid's mover recreates directory trees
