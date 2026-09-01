@@ -106,7 +106,7 @@ Worst case: multiple drive failures without dual parity, catastrophic controller
 Media data — if no offsite copy — is gone. For this stack, the library is large and re-rippable, so the disaster plan is:
 
 1. Parity + data: accept the loss, rebuild the array with fresh drives.
-2. Appdata: restore from the most recent archive. If local backups are also gone, pull from `BACKUP_REMOTE` via `rclone copy ...`.
+2. Appdata: restore from the most recent archive. If local backups are also gone, pull from `BACKUP_REMOTE` — the objects are Glacier Deep Archive, so **thaw first** (`rclone backend restore "$BACKUP_REMOTE" -o priority=Standard -o lifetime=7`, ready in ~12h; `Bulk` is cheaper at ~48h), then `rclone copy ...`. Start the thaw before rebuilding the array — the ~12h runs concurrently with the hardware work.
 3. Re-run the deployment flow in [deployment.md](deployment.md). `generate-configs.py` is idempotent; API keys in the restored `generated.env` are preserved.
 4. Plex library: re-scan the (rebuilt) media dirs. Watch history + collections come back via the restored Plex appdata.
 
@@ -206,11 +206,30 @@ designed for.
 
 ### User-file restore
 
+The remote is Glacier Deep Archive: objects are **not readable until thawed**, and
+there is no expedited tier — `Standard` is ready in ~12h, `Bulk` in ~48h. Kick the
+thaw off the moment you know you need a restore; everything else can happen while
+you wait.
+
 ```bash
+# 1. Thaw (lifetime = days the thawed copy stays readable — leave slack for a slow pull)
+rclone backend restore "$BACKUP_NEXTCLOUD_REMOTE" -o priority=Standard -o lifetime=7
+
+# 2. Re-run until objects stop reporting an in-progress restore
+rclone backend restore-status "$BACKUP_NEXTCLOUD_REMOTE"
+
+# 3. Only then:
 rclone copy "$BACKUP_NEXTCLOUD_REMOTE" /mnt/user/nextcloud --progress
 chown -R 33:33 /mnt/user/nextcloud          # www-data, NOT nobody:users
 docker exec -u www-data nextcloud php occ files:scan --all
 ```
+
+For a **single accidentally-deleted file** — the common case — thaw and copy just
+its object path instead of the whole prefix; same commands, and you're not paying
+retrieval on the whole library. `rclone copy` attempting an unthawed object fails
+with `InvalidObjectState`; that means step 1 or 2 was skipped, not that the backup
+is damaged. The database dumps under `$BACKUP_NEXTCLOUD_REMOTE/db` are Deep Archive
+too — if the local dumps are gone, thaw those first, they gate everything else.
 
 **`33:33`, not `nobody:users`.** Nextcloud runs as `www-data`; a reflexive
 `chown -R nobody:users` here is the same mistake as running Unraid's New Permissions tool,
