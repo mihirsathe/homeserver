@@ -117,7 +117,7 @@ ls -l ../docker-stack.png ../external-access.png
 
 Open both PNGs. Confirm:
 
-- **docker-stack.png**: Viewer → Seerr → *arr cluster → Prowlarr / SABnzbd → Gluetun → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All product logos render (plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, gluetun, bazarr, tautulli; Seerr, Profilarr + Usenet may fall back to a generic icon).
+- **docker-stack.png**: Viewer → Seerr → *arr cluster → Prowlarr / SABnzbd → Gluetun → (dashed) Usenet. `/data/usenet` → `/data/media` hardlink arrow. Plex → Viewer stream arrow. All product logos render (plex, radarr, sonarr, prowlarr, sabnzbd, gluetun, bazarr, tautulli; Seerr, Profilarr + Usenet may fall back to a generic icon).
 - **external-access.png**: single open port (TCP 32400 → Plex) on the router. Tailscale mesh reaches `tag:server` with all admin UIs behind it. Gluetun has a dashed outbound arrow to Mullvad; SAB and Prowlarr share Gluetun's netns. Home WAN IP is explicitly annotated as published to `plex.tv` for direct-connect.
 
 If the mingrammer output has layout weirdness, tweak `ranksep`/`nodesep` in the graph_attr dict at the top of each script.
@@ -183,7 +183,7 @@ Then generate the config files:
 python3 scripts/generate-configs.py
 ```
 
-**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `lidarr/`, `seerr/`, `profilarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
+**Exit criteria** — `/mnt/user/appdata/` subdirs populated (`sabnzbd/`, `prowlarr/`, `radarr/`, `sonarr/`, `seerr/`, `profilarr/`, `tautulli/`, `bazarr/`, `gluetun/`), `generated.env` exists. `/mnt/user/data/` and `/mnt/user/usenet-incomplete/` are present.
 
 ---
 
@@ -206,7 +206,6 @@ curl -fsS http://localhost:8080/api?mode=version    # SAB
 curl -fsS http://localhost:9696/ping                # Prowlarr
 curl -fsS http://localhost:7878/ping                # Radarr
 curl -fsS http://localhost:8989/ping                # Sonarr
-curl -fsS http://localhost:8686/ping                # Lidarr
 curl -fsS http://localhost:5055/api/v1/status | jq .
 curl -fsS http://localhost:8181/status
 curl -fsS http://localhost:6767/                    # Bazarr
@@ -217,7 +216,7 @@ curl -fsS http://localhost:32400/identity | head -c 200
 Step 6.5):
 
 ```bash
-for svc in radarr sonarr lidarr prowlarr sab seerr bazarr tautulli profilarr; do
+for svc in radarr sonarr prowlarr sab seerr bazarr tautulli profilarr; do
   printf "%-12s " "$svc"
   curl -fsS -o /dev/null -w "%{http_code}\n" "https://${svc}.<tailnet>.ts.net/"
 done

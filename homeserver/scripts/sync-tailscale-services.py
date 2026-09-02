@@ -70,7 +70,6 @@ ENV_FILES = [STACK_DIR / ".env", STACK_DIR / "generated.env"]
 SERVICES: dict[str, int] = {
     "radarr":    7878,
     "sonarr":    8989,
-    "lidarr":    8686,
     "prowlarr":  9696,   # via gluetun
     "sab":       8080,   # via gluetun
     "bazarr":    6767,

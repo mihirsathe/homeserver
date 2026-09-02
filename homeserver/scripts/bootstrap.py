@@ -15,8 +15,7 @@ Usage:
 What it does:
   Radarr   — root folder, SABnzbd download client, hardlinks enabled
   Sonarr   — same
-  Lidarr   — same
-  Prowlarr — NZBGeek + NZBPlanet indexers, connects all three *arr apps, syncs
+  Prowlarr — NZBGeek + NZBPlanet indexers, connects both *arr apps, syncs
   Plex     — creates Movies / TV Shows / Music libraries, triggers scan
 """
 
@@ -262,43 +261,17 @@ def configure_arr(label: str, base: str, key: str, root_folder: str,
     category_field = {
         "Radarr": "movieCategory",
         "Sonarr": "tvCategory",
-        "Lidarr": "musicCategory",
     }[label]
 
-    # Lidarr 2.x is still on the v1 API; Radarr v5 / Sonarr v4 are on v3.
-    # The wait_for() check uses sub-500 = "ready", so a 404 on the wrong
-    # version still passes the up-check — but real config calls 404 here.
-    api_ver = "v1" if label == "Lidarr" else "v3"
+    # Radarr v5 / Sonarr v4 are both on the v3 API.
+    api_ver = "v3"
 
-    # Root folder. Lidarr's POST /rootfolder rejects bare {"path": ...} —
-    # it requires a name, default quality + metadata profile IDs, and
-    # default monitor options (these get applied to artists added under
-    # this root folder). Radarr/Sonarr only need {"path": ...}.
+    # Root folder. Radarr/Sonarr only need {"path": ...}.
     existing_roots = arr_get(base, key, f"/api/{api_ver}/rootfolder")
     if any(f["path"] == root_folder for f in existing_roots):
         print(f"  ✓ {label}: root folder already set")
     else:
-        if label == "Lidarr":
-            qprofs = arr_get(base, key, f"/api/{api_ver}/qualityprofile")
-            mprofs = arr_get(base, key, f"/api/{api_ver}/metadataprofile")
-            # Prefer 'Standard' if Lidarr's stock profiles are present;
-            # fall back to the first available so a customised install
-            # (someone deleted Standard) still works.
-            qid = next((p["id"] for p in qprofs if p["name"] == "Standard"),
-                       qprofs[0]["id"])
-            mid = next((p["id"] for p in mprofs if p["name"] == "Standard"),
-                       mprofs[0]["id"])
-            payload = {
-                "name": "Music",
-                "path": root_folder,
-                "defaultQualityProfileId": qid,
-                "defaultMetadataProfileId": mid,
-                "defaultMonitorOption": "all",
-                "defaultNewItemMonitorOption": "all",
-                "defaultTags": [],
-            }
-        else:
-            payload = {"path": root_folder}
+        payload = {"path": root_folder}
         arr_post(base, key, f"/api/{api_ver}/rootfolder", payload)
         print(f"  ✓ {label}: root folder → {root_folder}")
 
@@ -415,11 +388,10 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
         except Exception as e:
             print(f"  ⚠ Prowlarr: failed to add {name}: {e}")
 
-    # Newznab category IDs: 2000s = Movies, 5000s = TV, 3000s = Audio.
+    # Newznab category IDs: 2000s = Movies, 5000s = TV.
     sync_categories = {
         "Radarr": [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060],
         "Sonarr": [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080],
-        "Lidarr": [3000, 3010, 3020, 3030, 3040],
     }
 
     def add_app(name: str, app_url: str, app_key: str, impl: str, contract: str) -> None:
@@ -497,8 +469,6 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
             require(env, "RADARR_API_KEY"),   "Radarr", "RadarrSettings")
     add_app("Sonarr", "http://sonarr:8989",
             require(env, "SONARR_API_KEY"),   "Sonarr", "SonarrSettings")
-    add_app("Lidarr", "http://lidarr:8686",
-            require(env, "LIDARR_API_KEY"),   "Lidarr", "LidarrSettings")
 
     # Force a re-push of every indexer definition into every connected app.
     #
@@ -511,7 +481,7 @@ def configure_prowlarr(base: str, key: str, env: dict) -> None:
     # raised, nothing checked r.status_code, and the script printed
     # "✓ indexer sync triggered" every time. The one piece of reconciliation
     # bootstrap.py does not perform itself — the indexer definitions Prowlarr
-    # pushes into Radarr/Sonarr/Lidarr — has therefore never actually run.
+    # pushes into Radarr/Sonarr — has therefore never actually run.
     #
     # forceSync is the part that matters, not merely the fact of a sync.
     # arr_put on an application above already raises ProviderUpdatedEvent,
@@ -594,9 +564,9 @@ def check_synced_indexers(services: dict) -> None:
     except Exception as e:
         print(f"  ⚠ could not read Prowlarr's app connections: {e}")
 
-    for name in ("radarr", "sonarr", "lidarr"):
+    for name in ("radarr", "sonarr"):
         base, key = services[name]
-        api_ver = "v1" if name == "lidarr" else "v3"
+        api_ver = "v3"
         try:
             indexers = arr_get(base, key, f"/api/{api_ver}/indexer")
         except Exception as e:
@@ -855,7 +825,6 @@ def main() -> None:
     SERVICES = {
         "radarr":   ("http://localhost:7878",   require(env, "RADARR_API_KEY")),
         "sonarr":   ("http://localhost:8989",   require(env, "SONARR_API_KEY")),
-        "lidarr":   ("http://localhost:8686",   require(env, "LIDARR_API_KEY")),
         "prowlarr": ("http://localhost:9696",   require(env, "PROWLARR_API_KEY")),
     }
 
@@ -875,10 +844,6 @@ def main() -> None:
     url, key = SERVICES["sonarr"]
     configure_arr("Sonarr", url, key, "/data/media/tv", "tv", sabnzbd_key,
                   extra_mm={"createEmptySeriesFolders": False})
-
-    print("\n=== Lidarr ===\n")
-    url, key = SERVICES["lidarr"]
-    configure_arr("Lidarr", url, key, "/data/media/music", "music", sabnzbd_key)
 
     print("\n=== Prowlarr ===\n")
     url, key = SERVICES["prowlarr"]
@@ -935,7 +900,6 @@ def main() -> None:
     print("  Prowlarr:  https://prowlarr.<tailnet>.ts.net")
     print("  Radarr:    https://radarr.<tailnet>.ts.net")
     print("  Sonarr:    https://sonarr.<tailnet>.ts.net")
-    print("  Lidarr:    https://lidarr.<tailnet>.ts.net")
     print("  Bazarr:    https://bazarr.<tailnet>.ts.net")
     print("  Tautulli:  https://tautulli.<tailnet>.ts.net")
     print("  Profilarr: https://profilarr.<tailnet>.ts.net")

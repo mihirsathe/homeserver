@@ -302,7 +302,6 @@ the whole point of the change, so do not move on until you see it.
 |---------|---------|
 | `svc:radarr` | `127.0.0.1:7878` |
 | `svc:sonarr` | `127.0.0.1:8989` |
-| `svc:lidarr` | `127.0.0.1:8686` |
 | `svc:prowlarr` | `127.0.0.1:9696` (via gluetun) |
 | `svc:sab` | `127.0.0.1:8080` (via gluetun) |
 | `svc:bazarr` | `127.0.0.1:6767` |

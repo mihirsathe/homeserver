@@ -890,7 +890,7 @@ def main() -> None:
     # Step 2: Generate any missing machine values → generated.env
     api_key_fields = [
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
-        "LIDARR_API_KEY", "PROWLARR_API_KEY", "TAUTULLI_API_KEY",
+        "PROWLARR_API_KEY", "TAUTULLI_API_KEY",
     ]
     # Passwords, not API keys. token_urlsafe rather than uuid4().hex because
     # one of these (the admin password) gets typed by a human, and because a
@@ -963,7 +963,7 @@ def main() -> None:
         "PLEX_LAN_IP", "PLEX_LAN_SUBNET",
         "VPN_PRIVATE_KEY", "VPN_ADDRESS", "VPN_CITY",
         "SABNZBD_API_KEY", "RADARR_API_KEY", "SONARR_API_KEY",
-        "LIDARR_API_KEY", "PROWLARR_API_KEY",
+        "PROWLARR_API_KEY",
         "USENET_HOST", "USENET_USER", "USENET_PASS",
         "NZBGEEK_API_KEY", "NZBPLANET_API_KEY",
         # Generated above, but required here rather than guarded in compose
@@ -1007,7 +1007,6 @@ def main() -> None:
     write_sabnzbd(env)
     write_arr_config("radarr",   7878, env["RADARR_API_KEY"])
     write_arr_config("sonarr",   8989, env["SONARR_API_KEY"])
-    write_arr_config("lidarr",   8686, env["LIDARR_API_KEY"])
     write_arr_config("prowlarr", 9696, env["PROWLARR_API_KEY"])
     ensure_seerr_appdata()
     ensure_profilarr_appdata()
