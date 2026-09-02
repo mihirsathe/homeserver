@@ -656,6 +656,12 @@ for d in /mnt/user/appdata/*/; do
         # are correct rather than broken. `docker inspect plex` shows an empty
         # .Config.User, which is the tell.
         */plex/) continue ;;
+        # tools holds the gh CLI binary and gh-config/hosts.yml (GitHub token); re-linked into
+        # the RAM rootfs at boot by restore_tools User Script, so must remain root-owned.
+        */tools/) continue ;;
+        # claudecoach is a separate project; repo/.venv, repo/.hypothesis, repo/.pytest_cache are
+        # root-owned from uv run pytest as root on the host, but the container runs as 99:100.
+        */claudecoach/) continue ;;
     esac
     # Directories only, three levels deep. A correctly-owned parent can hide a
     # root-owned child — exactly how Bazarr was found crash-looping behind s6
