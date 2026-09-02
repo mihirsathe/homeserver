@@ -66,7 +66,6 @@ GUI must never sit behind anything containerised.
 | prowlarr | `hotio/prowlarr` | `svc:prowlarr` | (in gluetun's netns) | Indexer manager |
 | radarr | `hotio/radarr` | `svc:radarr` | 7878 (loopback) | Movie automation |
 | sonarr | `hotio/sonarr` | `svc:sonarr` | 8989 (loopback) | TV automation |
-| lidarr | `hotio/lidarr` | `svc:lidarr` | 8686 (loopback) | Music automation |
 | plex | `plexinc/pms-docker` | — (direct on `:32400`) | 32400 (PUBLIC) | Media server + GPU transcode (only public service; fronted by nothing) |
 | seerr | `ghcr.io/seerr-team/seerr` | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
 | bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
@@ -86,8 +85,8 @@ Six bridge networks carve the stack into blast-radius zones so a compromised con
 
 | Network | Members | Purpose |
 |---------|---------|---------|
-| `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (the gluetun kill-switch, `FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on`). |
-| `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr`, `seerr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
+| `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (the gluetun kill-switch, `FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on`). |
+| `automation` | `radarr`, `sonarr`, `bazarr`, `profilarr`, `seerr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `coach` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
 | `ai` | `ollama`, `actual-ai`, `coach` | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 | `finance` | `actual_server`, `actual-ai` | Budgeting. `actual-ai` is dual-homed onto `ai` to reach Ollama; nothing else crosses in or out. |
@@ -196,7 +195,6 @@ If the app has an admin UI, publish it with `tailscale serve --service=svc:<name
 │   ├── sabnzbd/
 │   ├── radarr/
 │   ├── sonarr/
-│   ├── lidarr/
 │   ├── prowlarr/
 │   ├── gluetun/
 │   ├── seerr/
@@ -220,7 +218,7 @@ If the app has an admin UI, publish it with `tailscale serve --service=svc:<name
     └── media/
         ├── movies/                   ← Radarr final library (what Plex sees)
         ├── tv/                       ← Sonarr final library
-        └── music/                    ← Lidarr final library
+        └── music/                    ← empty; Lidarr removed 2026-09-01, see decisions.md
 ```
 
 Every container in the *media* path mounts `/mnt/user/data` at `/data` inside the container (the non-media tenants deliberately don't — `actual_server` and `coach` rebind `/data` to their own appdata, and Prowlarr mounts only `/config`). This shared mount path is what makes hardlinks work — SABnzbd's completed download (in `/data/usenet/complete/`) and Radarr's imported file (in `/data/media/`) occupy the same disk blocks, making every import an instant rename instead of a copy. Both sides are on the array, same filesystem — hardlinks cross directories, not filesystems.
@@ -384,7 +382,7 @@ Managed in Prowlarr, auto-synced to all apps.
 ```
 Plex Watchlist addition (family)
     → Seerr (polls Plex every 5 min, auto-submits request)
-    → Radarr / Sonarr / Lidarr
+    → Radarr / Sonarr
     → Prowlarr (searches all indexers, via Gluetun)
     → SABnzbd (downloads NZB over Mullvad VPN on port 563)
     → Radarr / Sonarr hardlinks file to media library

@@ -39,7 +39,7 @@
 #                  Mullvad with a kill-switch. Only gluetun publishes ports.
 #   frontend     — plex, seerr, tautulli, bazarr, coach. Family-facing
 #                  services.
-#   automation   — sonarr, radarr, lidarr, bazarr, profilarr, seerr. The
+#   automation   — sonarr, radarr, bazarr, profilarr, seerr. The
 #                  *arrs are dual-homed onto downloaders (to reach SAB and
 #                  Prowlarr via gluetun) but NOT onto frontend, so a popped
 #                  frontend container cannot pivot straight into the
@@ -377,42 +377,6 @@ services:
           memory: 1G
 
   # ---------------------------------------------------------------------------
-  # LIDARR
-  # ---------------------------------------------------------------------------
-  lidarr:
-    image: ghcr.io/hotio/lidarr:release
-    container_name: lidarr
-    networks:
-      - automation
-      - downloaders
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - UMASK=002
-      - TZ=${TZ}
-    volumes:
-      - /mnt/user/appdata/lidarr:/config
-      - ${STACK_DIR}/configs/lidarr/config.xml:/config/config.xml
-      - /mnt/user/data:/data
-    ports:
-      # Loopback only. Backend for svc:lidarr and the host debug path.
-      - "127.0.0.1:8686:8686"
-    restart: unless-stopped
-    depends_on:
-      sabnzbd:  { condition: service_healthy }
-      prowlarr: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8686/ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-
-  # ---------------------------------------------------------------------------
   # PLEX — RTX 3050 NVENC transcoding
   # Requires Nvidia-Driver + nvidia-container-toolkit plugins, both rebooted.
   # Server preferences (NVENC on, Relay off, DLNA off, scheduled tasks) are set
@@ -508,7 +472,7 @@ services:
     user: "${PUID}:${PGID}"
     networks:
       - frontend
-      # Dual-homed onto automation so seerr can resolve radarr/sonarr/lidarr
+      # Dual-homed onto automation so seerr can resolve radarr/sonarr
       # by container name (they live only on automation+downloaders, not
       # frontend). Without this, Seerr's *arr server config has to use the
       # host LAN IP and bounce through the published port — works, but

@@ -59,7 +59,7 @@ that is not a tags problem. It is Seerr choking on an HTML page where it expecte
 
 ## `'doctype' is an unexpected token` on an *arr indexer
 
-**Symptom**: Sonarr/Radarr/Lidarr → Settings → Indexers → Test fails with
+**Symptom**: Sonarr/Radarr → Settings → Indexers → Test fails with
 
 ```
 Unable to connect to indexer: 'doctype' is an unexpected token.
@@ -82,12 +82,12 @@ Note **Prowlarr's own indexer Test stays green** the whole time. That tests
 Prowlarr → indexer. The broken hop is *arr → Prowlarr, which nothing tests
 until you hit this.
 
-### Which of the three is it
+### Which of the two is it
 
 Run on the host, from `/mnt/user/appdata/homeserver/homeserver`:
 
 ```bash
-# 1. What URL is the *arr actually calling? (sonarr shown; 7878/v3 radarr, 8686/v1 lidarr)
+# 1. What URL is the *arr actually calling? (sonarr shown; 7878/v3 radarr)
 SKEY=$(grep ^SONARR_API_KEY .env.docker | cut -d= -f2)
 curl -s -H "X-Api-Key: $SKEY" http://localhost:8989/api/v3/indexer \
   | python3 -c 'import json,sys
@@ -179,7 +179,7 @@ PY
 
 ## Prowlarr keeps resetting an *arr's indexer categories
 
-**Symptom**: you set an indexer's categories in Sonarr (or Radarr/Lidarr), and
+**Symptom**: you set an indexer's categories in Sonarr (or Radarr), and
 some time later they are back to a narrower set — often a single top-level
 category. It looks like Prowlarr is "unchecking the TV category".
 
@@ -213,8 +213,7 @@ def walk(cs):
         yield c["id"]
         yield from walk(c.get("subCategories"))
 WANT={"Sonarr":{5000,5010,5020,5030,5040,5045,5050,5060,5070,5080},
-      "Radarr":{2000,2010,2020,2030,2040,2045,2050,2060},
-      "Lidarr":{3000,3010,3020,3030,3040}}
+      "Radarr":{2000,2010,2020,2030,2040,2045,2050,2060}}
 for i in json.load(sys.stdin):
     ids={c for c in walk((i.get("capabilities") or {}).get("categories")) if c<100000}
     print(i["name"], "advertises:", sorted(ids))

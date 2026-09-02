@@ -439,6 +439,22 @@ would be convenient.
 The sync clients needing Tailscale running is the accepted counterpart, and it is the one
 place this stack asks more of a phone than Google Drive did.
 
+### Lidarr removed (2026-09-01)
+
+Deployed since July 2026 with zero artists and an empty `/mnt/user/data/media/music`, Lidarr
+still polled the stack's single Usenet indexer (NZBGeek, via Prowlarr) every 15 minutes —
+consuming roughly a third of the daily API budget while all three *arrs logged "API Request
+Limit reached" every day. An idle service that was actively starving the two that had work to
+do is not a wash, it is a net cost, so it came out: the compose service, its `svc:lidarr`
+Tailscale Service row, its `verify-stack.sh` checks, and its `bootstrap.py`/
+`generate-configs.py` wiring.
+
+`/mnt/user/data/media/music` and the SABnzbd `music` category are left in place — harmless,
+and cheaper to keep than to argue about. Re-adding Lidarr later is a compose service block +
+one `SERVICES` row in `sync-tailscale-services.py` + the corresponding `bootstrap.py`/
+`generate-configs.py` wiring away; see the git history around this entry's commit for the
+exact diff to reverse.
+
 ### Single parity (for now)
 
 Four 6 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second drive of at least 6 TB as Parity 2 when convenient.

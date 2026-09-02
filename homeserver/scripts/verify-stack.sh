@@ -71,7 +71,7 @@ fi
 # ---------------------------------------------------------------------------
 sec "Containers"
 
-EXPECTED="gluetun sabnzbd prowlarr radarr sonarr lidarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach nextcloud nextcloud-db nextcloud-redis nextcloud-cron"
+EXPECTED="gluetun sabnzbd prowlarr radarr sonarr bazarr plex seerr tautulli profilarr ollama actual_server actual-ai coach nextcloud nextcloud-db nextcloud-redis nextcloud-cron"
 for c in $EXPECTED; do
     state=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)
     if [[ -z "$state" ]]; then
@@ -118,7 +118,7 @@ check_port() {
         *)         bad "$name :$port -> $code" ;;
     esac
 }
-check_port radarr 7878; check_port sonarr 8989; check_port lidarr 8686
+check_port radarr 7878; check_port sonarr 8989
 check_port prowlarr 9696; check_port sab 8080; check_port bazarr 6767
 check_port seerr 5055; check_port tautulli 8181; check_port profilarr 6868
 check_port actual 5006; check_port coach 8000; check_port nextcloud 8081
@@ -246,7 +246,6 @@ PY
 
 check_indexers radarr 7878 v3
 check_indexers sonarr 8989 v3
-check_indexers lidarr 8686 v1
 
 # End-to-end proof on one indexer: issue the exact caps request an *arr makes,
 # through Prowlarr's newznab route, and confirm XML comes back rather than a
@@ -413,7 +412,7 @@ else
         if grep -q 'svc:' <<<"$serve_json"; then
             # The CLI does surface service proxies here, so per-service state
             # is meaningful.
-            for s in radarr sonarr lidarr prowlarr sab bazarr seerr tautulli profilarr actual coach nextcloud; do
+            for s in radarr sonarr prowlarr sab bazarr seerr tautulli profilarr actual coach nextcloud; do
                 if grep -q "svc:$s" <<<"$serve_json"; then
                     ok "svc:$s advertised by this host"
                 else
@@ -738,7 +737,7 @@ fi
 # below, behind --quick. Cheap and ungated — docker inspect answers from
 # memory, no media tree is touched.
 hl_split=""; hl_seen=0
-for c in sabnzbd radarr sonarr lidarr; do
+for c in sabnzbd radarr sonarr; do
     docker inspect "$c" >/dev/null 2>&1 || continue
     hl_seen=$((hl_seen+1))
     src=$(docker inspect "$c" -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)

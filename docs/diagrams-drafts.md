@@ -44,7 +44,7 @@ Structure: Remote Plex client → Home router (TCP 32400 port-forward, blue) →
 
 Both mingrammer diagrams load icons from `docs/assets/diagrams/icons/`. Graphviz accepts SVG and PNG interchangeably. Sources:
 
-- [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png) — plex, radarr, sonarr, lidarr, prowlarr, sabnzbd, tautulli (all PNG)
+- [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png) — plex, radarr, sonarr, prowlarr, sabnzbd, tautulli (all PNG)
 - [seerr-team/seerr logo_full.svg](https://github.com/seerr-team/seerr/blob/develop/public/logo_full.svg) — seerr (SVG)
 - Wikimedia Commons — [Tailscale-Logo-Black.svg](https://commons.wikimedia.org/wiki/File:Tailscale-Logo-Black.svg), [Mullvad_logo.svg](https://commons.wikimedia.org/wiki/File:Mullvad_logo.svg) (SVG)
 
@@ -121,7 +121,6 @@ flowchart LR
         direction TB
         radarr["Radarr"]
         sonarr["Sonarr"]
-        lidarr["Lidarr"]
     end
     prow["Prowlarr"]
     sab["SABnzbd"]

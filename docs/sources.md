@@ -17,7 +17,6 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | prowlarr | `ghcr.io/hotio/prowlarr` | `:release` | GitHub Container Registry | hotio |
 | radarr | `ghcr.io/hotio/radarr` | `:release` | GitHub Container Registry | hotio |
 | sonarr | `ghcr.io/hotio/sonarr` | `:release` | GitHub Container Registry | hotio |
-| lidarr | `ghcr.io/hotio/lidarr` | `:release` | GitHub Container Registry | hotio |
 | plex | `plexinc/pms-docker` | `:public` | Docker Hub | Plex Inc. (official) |
 | seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |

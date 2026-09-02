@@ -14,7 +14,7 @@ Setup once:
 
 Icons:
     docs/assets/diagrams/icons/ contains:
-        plex.png radarr.png sonarr.png lidarr.png prowlarr.png sabnzbd.png
+        plex.png radarr.png sonarr.png prowlarr.png sabnzbd.png
             (from homarr-labs/dashboard-icons)
         seerr.svg mullvad.svg   (seerr-team/seerr + Wikimedia Commons)
     Graphviz renders SVG and PNG interchangeably.
@@ -100,8 +100,7 @@ with Diagram(
         with Cluster("*arr Automation", graph_attr=cluster_attr):
             radarr = Custom("Radarr", ico("radarr"))
             sonarr = Custom("Sonarr", ico("sonarr"))
-            lidarr = Custom("Lidarr", ico("lidarr"))
-            arr = [radarr, sonarr, lidarr]
+            arr = [radarr, sonarr]
 
         with Cluster("Shared /data Volume", graph_attr=cluster_attr):
             incoming = Storage("/data/usenet")
