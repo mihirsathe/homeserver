@@ -17,6 +17,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting
 | [Operations](operations.md) | Maintenance schedule, diagnostics commands, known limitations |
 | [Sources](sources.md) | Every image, plugin, package, and driver — where it comes from |
 | [Decisions](decisions.md) | Why things are the way they are, and expansion paths |
+| [Audit 2026-09-01](audit-2026-09-01.md) | Full audit findings: backups, access control, script bugs, docs drift |
 | [Vision](vision/index.md) | Long-term infrastructure roadmap — 8 phases from media server to full home platform |
 
 ---

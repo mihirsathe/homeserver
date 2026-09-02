@@ -20,6 +20,7 @@ And a `cloud` plane: Nextcloud (files, calendar, contacts) with PostgreSQL and R
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, Tailscale/Gluetun outages |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |
 | [docs/decisions.md](docs/decisions.md) | Why things are the way they are + expansion paths |
+| [docs/audit-2026-09-01.md](docs/audit-2026-09-01.md) | Full audit findings: backups, access control, script bugs, docs drift |
 
 ---
 
