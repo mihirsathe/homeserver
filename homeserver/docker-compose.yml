@@ -269,7 +269,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          # 6G for 4G article cache (cache_limit in sabnzbd.ini) + par2 repair and
+          # unrar operations overhead. On 2026-07-24 SAB's python3 was OOM-killed at 2G
+          # resident with a 4G article cache — headroom above cache_limit is essential.
+          # This is a hard limit, not a reservation.
+          memory: 6G
 
   # ---------------------------------------------------------------------------
   # PROWLARR — inside gluetun's netns
