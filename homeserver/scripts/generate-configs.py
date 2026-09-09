@@ -28,6 +28,7 @@ Uses only stdlib — no pip dependencies.
 import argparse
 import ipaddress
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -718,9 +719,19 @@ def ensure_nextcloud_appdata():
 
     # User files. On the array via the user share, because they must span it —
     # and because bulk file I/O is the wrong workload to worry about FUSE for.
-    data = Path("/mnt/user/nextcloud")
+    #
+    # The data dir is a SUBDIRECTORY of the share, never the share root:
+    # emhttpd chmods every share root to 0777 nobody:users at array start and
+    # Nextcloud refuses to serve a world-readable data dir. It must be
+    # www-data (33) and 0770, and Nextcloud can't fix that itself.
+    data = Path("/mnt/user/nextcloud/data")
     data.mkdir(parents=True, exist_ok=True)
-    print(f"  ✓ {data}/ (Nextcloud user files — NOT covered by Appdata Backup)")
+    try:
+        os.chown(data, 33, 33)
+        data.chmod(0o770)
+    except PermissionError:
+        print(f"      note: could not chown {data} to 33:33 / 0770 — do it as root before first start")
+    print(f"  ✓ {data}/ (Nextcloud user files, www-data 0770 — NOT covered by Appdata Backup)")
 
     if cache_only is None:
         print("      note: could not read /boot/config/shares/appdata.cfg to confirm")

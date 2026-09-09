@@ -47,7 +47,7 @@ The X710 10GbE SFP+ ports on the daughter card are installed but unused; they be
 | Component | Spec | Notes |
 |-----------|------|-------|
 | CPU | 2× Intel Xeon Gold 6146 | 12c/24t each · 3.2–4.2 GHz · no iGPU |
-| RAM | 32 GB DDR4 ECC RDIMM | 6-channel · expandable to 768 GB across 24 DIMM slots |
+| RAM | 192 GB DDR4-2133 ECC RDIMM (12 × 16 GB, Micron 36ASF2G72PZ) | 12 of 24 DIMM slots · upgraded from 32 GB on 2026-09-08 · expandable to 768 GB |
 | GPU | Yeston RTX 3050 LP 6G | Ampere GA107 · Riser 2 (CPU2 slot) |
 | Storage controller | PERC H730P Mini | HBA/passthrough mode — individual drives visible to OS |
 | Network | X710 10GbE SFP+ + I350 1GbE | Daughter card, rear panel |
@@ -56,7 +56,7 @@ The X710 10GbE SFP+ ports on the daughter card are installed but unused; they be
 | Form factor | 1U rack | Dell sliding rails installed |
 | Power | 2× 1100W Platinum PSU | Both connected, redundant |
 
-**RAM is the current constraint.** At 32 GB, heavy simultaneous workloads (many active transcodes + downloads + metadata scanning) can feel tight. Adding RAM is the single highest-ROI upgrade.
+**RAM stopped being the constraint on 2026-09-08** (32 GB → 192 GB). Container memory ceilings were raised to match the same day — see [operations.md](operations.md#192-gb-ram-since-2026-09-08--ceilings-sum-to-about-93-gb-of-it).
 
 ---
 

@@ -16,6 +16,8 @@ Cost: ~$250–300 (Exos, Ultrastar, or IronWolf Pro). **Single highest-value inv
 
 ### 1.2 Upgrade RAM to 128GB
 
+> **Done 2026-09-08** — 12 × 16 GB DDR4-2133 ECC RDIMM = 192 GB (a different, cheaper DIMM mix than planned below; 12 slots still free).
+
 Optimal config for the R640 dual Xeon Gold 6146: 4× 32GB DDR4-2666 ECC RDIMMs (two per socket, populating the first two channels). Leaves 20 slots free for future expansion. Used server-pull DDR4 ECC RDIMMs: ~$25–40/stick, so 128GB total ≈ $100–160.
 
 Headroom gained: Plex metadata operations, concurrent transcoding, SABnzbd par2 repair, future containers.

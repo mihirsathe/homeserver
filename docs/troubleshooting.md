@@ -562,7 +562,7 @@ browser cache before looking anywhere else.
 ## Files are on disk but Nextcloud doesn't show them
 
 Nextcloud keeps a file index in its database. Anything written into
-`/mnt/user/nextcloud` without going through Nextcloud — an rclone restore, a manual copy,
+`/mnt/user/nextcloud/data` without going through Nextcloud — an rclone restore, a manual copy,
 a `mv` — is invisible until the index catches up.
 
 ```bash
@@ -592,7 +592,8 @@ Fix:
 ```bash
 cd /mnt/user/appdata/homeserver/homeserver
 docker compose --env-file .env.docker stop nextcloud nextcloud-cron nextcloud-db
-chown -R 33:33 /mnt/cache/appdata/nextcloud /mnt/user/nextcloud
+chown -R 33:33 /mnt/cache/appdata/nextcloud /mnt/user/nextcloud/data
+chmod 0770 /mnt/user/nextcloud/data   # emhttpd resets the share ROOT to 0777 at array start; the data dir must not be the root
 chown -R 70:70 /mnt/cache/appdata/nextcloud-db/*/docker
 docker compose --env-file .env.docker up -d nextcloud-db nextcloud nextcloud-redis nextcloud-cron
 ```

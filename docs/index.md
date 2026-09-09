@@ -25,7 +25,7 @@ Usenet → SABnzbd → Radarr/Sonarr/Lidarr → Plex, with Seerr auto-requesting
 
 | Component | Detail |
 |-----------|--------|
-| Compute | Dell PowerEdge R640 · 2× Xeon Gold 6146 · 32 GB ECC RAM |
+| Compute | Dell PowerEdge R640 · 2× Xeon Gold 6146 · 192 GB ECC RAM |
 | GPU | Yeston RTX 3050 LP 6G · 12 concurrent NVENC sessions · shared with Ollama, Plex has priority |
 | Storage | Dell MD1400 DAS · 24 TB usable (4×6 TB + 6 TB parity) |
 | OS | Unraid Pro (lifetime) · BOSS card boot |

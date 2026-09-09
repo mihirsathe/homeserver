@@ -605,16 +605,34 @@ if docker inspect nextcloud >/dev/null 2>&1; then
     # of inodes — through the shfs FUSE layer, so it is gated behind --quick
     # along with the hardlink and VPN-egress checks. This script is only useful
     # if it stays cheap enough to actually re-run.
-    if [[ -d /mnt/user/nextcloud ]]; then
+    # The data dir is a SUBDIRECTORY of the share, never the share root:
+    # emhttpd chmods every share root to 0777 nobody:users at array start and
+    # Nextcloud then refuses to serve (503) a data dir it cannot chmod back.
+    # That took the service down on the first reboot after deploy (2026-09-08).
+    nc_data=/mnt/user/nextcloud/data
+    if [[ -d "$nc_data" ]]; then
+        nc_own=$(stat -c '%u:%a' "$nc_data" 2>/dev/null)
+        [[ "$nc_own" == "33:770" ]] \
+            && ok "nextcloud data dir is www-data 0770" \
+            || bad "nextcloud data dir is uid:mode $nc_own — must be 33:770 or Nextcloud serves 503 (see CLAUDE.md)"
+        # The share is cache=no, so anything on the pool is stranded: the mover
+        # never touches it and it has no parity.
+        if [[ -e /mnt/cache/nextcloud ]]; then
+            bad "nextcloud user files present on the cache pool (/mnt/cache/nextcloud) — cache=no share, no parity, mover will never move them"
+        else
+            ok "nextcloud user files are on the array only"
+        fi
         if grep -qsE '^BACKUP_NEXTCLOUD_REMOTE=[^"'\''[:space:]]' "$STACK_DIR/.env"; then
             ok "nextcloud user files have an offsite target configured"
         else
             warn "nextcloud user files have NO offsite backup (BACKUP_NEXTCLOUD_REMOTE unset) — nothing else covers them"
         fi
         if [[ $QUICK -eq 0 ]]; then
-            ncsize=$(du -sh /mnt/user/nextcloud 2>/dev/null | cut -f1)
+            ncsize=$(du -sh "$nc_data" 2>/dev/null | cut -f1)
             [[ -n "$ncsize" ]] && ok "nextcloud user files: $ncsize"
         fi
+    else
+        bad "nextcloud data dir $nc_data missing — the data dir must be a subdirectory of the share, not its root"
     fi
 
     latest_dump=$(ls -t /mnt/cache/appdata/nextcloud-dump/*.sql.gz 2>/dev/null | head -1)

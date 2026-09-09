@@ -207,8 +207,9 @@ designed for.
 ### User-file restore
 
 ```bash
-rclone copy "$BACKUP_NEXTCLOUD_REMOTE" /mnt/user/nextcloud --progress
-chown -R 33:33 /mnt/user/nextcloud          # www-data, NOT nobody:users
+rclone copy "$BACKUP_NEXTCLOUD_REMOTE" /mnt/user/nextcloud/data --progress
+chown -R 33:33 /mnt/user/nextcloud/data     # www-data, NOT nobody:users
+chmod 0770 /mnt/user/nextcloud/data         # or Nextcloud serves 503 (see CLAUDE.md)
 docker exec -u www-data nextcloud php occ files:scan --all
 ```
 

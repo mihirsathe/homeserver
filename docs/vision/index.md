@@ -54,7 +54,7 @@ Dell PowerEdge R640 running Unraid Pro, connected to an MD1400 DAS. The software
 | No off-system backup — single catastrophic event = total data loss | **Critical** | 1 |
 | Consumer-grade networking — no VLANs, no PoE, no segmentation | High | 2 |
 | Single parity — one drive failure during rebuild = total array loss | High | 1 |
-| 32GB RAM — constrained under concurrent transcodes + downloads | Medium | 1 |
+| ~~32GB RAM — constrained under concurrent transcodes + downloads~~ Resolved 2026-09-08: 192 GB | — | 1 |
 | No home automation, cameras, or structured wiring | — | 5–6 |
 
 UPS is in place (APC Smart-UPS X SMX1500RM2U + apcupsd) — the cache-pool-corruption risk from power loss is mitigated. Sizing headroom for the full future rack is still a Phase-3 item.

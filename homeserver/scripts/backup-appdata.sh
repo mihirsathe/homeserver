@@ -70,7 +70,7 @@ fi
 #      referencing files that were never copied) is what the ordering avoids.
 # ---------------------------------------------------------------------------
 NC_DUMP_DIR="/mnt/cache/appdata/nextcloud-dump"
-NC_DATA_DIR="/mnt/user/nextcloud"
+NC_DATA_DIR="/mnt/user/nextcloud/data"   # the data SUBDIR, not the share root — see CLAUDE.md
 
 # Explicit path, matching update-stack.sh and restore-appdata.sh. This script
 # runs as the weekly `media_stack_backup` User Script, and Unraid's PATH in a

@@ -261,8 +261,8 @@ writing our own.
 
 **OpenCloud** (the Apache-2.0 ownCloud Infinite Scale fork, by the original oCIS
 engineers) — the most interesting alternative by a distance. Go, single binary, **no
-database at all**, far lower memory, which matters on a box whose ceilings now sum to
-30.75 GB of 32. It loses on storage model, and specifically on Unraid.
+database at all**, far lower memory, which mattered when this was decided on a 32 GB box
+whose ceilings summed to 30.75 GB (RAM went to 192 GB on 2026-09-08). It loses on storage model, and specifically on Unraid.
 
 Its default `decomposedfs` stores files in a technical layout that is not browsable on
 disk. The `posixfs` driver fixes that, but relies on **extended attributes and inotify** —
@@ -342,7 +342,7 @@ That is why the condition is asserted in two places rather than trusted:
 `verify-stack.sh` re-checks it on every run. It is exactly the class of thing that changes
 silently a year later.
 
-The user-file share stays on `/mnt/user/nextcloud` — it has to span the array, and bulk
+The user-file share stays on `/mnt/user/nextcloud` (data dir `/mnt/user/nextcloud/data`, a subdirectory — see CLAUDE.md for why) — it has to span the array, and bulk
 file I/O is the wrong workload to optimise FUSE out of anyway.
 
 ### Nextcloud's user files get their own share, not a folder under `data`
@@ -488,7 +488,7 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 | Upgrade | Benefit |
 |---------|---------|
 | Add Parity 2 (≥ 6 TB) | Survive 2 simultaneous drive failures |
-| Add RAM (e.g. 4× 32 GB → 128 GB) | Headroom under heavy concurrent load |
+| ~~Add RAM (e.g. 4× 32 GB → 128 GB)~~ **Done 2026-09-08: 192 GB** | Headroom under heavy concurrent load |
 | Fill MD1400 bays 6–12 | Up to 7 more drives (max 6 TB each while parity is 6 TB — parity must stay the largest disk) |
 
 ### Medium-term
@@ -505,7 +505,7 @@ Vented blanks between the R640 and MD1400, and above the R640. The R640 intakes 
 |---------|---------|-------|
 | GPU upgrade to RTX 4000 series | AV1 encode + more VRAM for 6+ 4K streams, and enough headroom that Ollama and Plex stop competing for VRAM at all | Must be LP form factor. At 12–16 GB the VRAM reservation stops binding at all and Ollama could hold a 7–8B model full-time |
 | Plex-aware GPU preemption for Ollama | Immediate VRAM eviction when a transcode starts, instead of waiting out `keep_alive` | Only worth it if concurrent 4K HDR transcodes become common — see "Local AI on the transcode GPU" above for the design that was built and set aside |
-| RAM to 128 GB+ | Comfortable headroom for everything | DDR4 RDIMM, verify DIMM config for 6146 dual-socket |
+| ~~RAM to 128 GB+~~ **Done 2026-09-08: 192 GB** (12 × 16 GB DDR4-2133 ECC RDIMM) | Comfortable headroom for everything | 12 slots still free |
 | Second MD1400 | 12 more drive bays via daisy-chain | LSI 9300-8e supports it; drops into U5–6 |
 | Managed switch + 10G LAN | Saturate X710 SFP+; dedicated networking rack; VLAN segregation | Candidate: **Ubiquiti USW-Pro-Max-16** (12×1GbE + 4×2.5GbE + 2×10G SFP+, fanless, UniFi-managed) — SFP+ #1 → R640 X710, SFP+ #2 → uplink to networking rack. Alternatives considered: USW-Enterprise-8-PoE (bundled PoE is wasted here), MikroTik CRS310-8G+2S+IN ($50 cheaper but loses UniFi integration), USW-Flex-2.5G-8 (only one SFP+, can't do both 10G server and 10G uplink simultaneously). |
 

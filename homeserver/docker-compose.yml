@@ -269,11 +269,12 @@ services:
     deploy:
       resources:
         limits:
-          # 6G for 4G article cache (cache_limit in sabnzbd.ini) + par2 repair and
-          # unrar operations overhead. On 2026-07-24 SAB's python3 was OOM-killed at 2G
-          # resident with a 4G article cache — headroom above cache_limit is essential.
-          # This is a hard limit, not a reservation.
-          memory: 6G
+          # 12G for an 8G article cache (cache_limit in configs/sabnzbd/sabnzbd.ini)
+          # + par2 repair and unrar overhead. On 2026-07-24 SAB's python3 was
+          # OOM-killed at 2G resident with a 4G article cache — headroom above
+          # cache_limit is essential. Cache and ceiling both doubled 2026-09-08
+          # with the 192 GB RAM upgrade. This is a hard limit, not a reservation.
+          memory: 12G
 
   # ---------------------------------------------------------------------------
   # PROWLARR — inside gluetun's netns
@@ -342,7 +343,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
 
   # ---------------------------------------------------------------------------
   # SONARR
@@ -378,7 +379,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
 
   # ---------------------------------------------------------------------------
   # LIDARR
@@ -414,7 +415,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
 
   # ---------------------------------------------------------------------------
   # PLEX — RTX 3050 NVENC transcoding
@@ -474,7 +475,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          # Concurrent transcodes + metadata scans. Raised 8G -> 16G with the
+          # 192 GB RAM upgrade (2026-09-08).
+          memory: 16G
 
   # ---------------------------------------------------------------------------
   # SEERR — family request portal + Plex Watchlist auto-request
@@ -539,7 +542,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
 
   # ---------------------------------------------------------------------------
   # TAUTULLI — Plex analytics, stream history, user activity, newsletters
@@ -572,7 +575,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
 
   # ---------------------------------------------------------------------------
   # PROFILARR — web UI for managing quality profiles + custom formats in
@@ -613,7 +616,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # BAZARR — subtitle automation
@@ -649,7 +652,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
 
   # ---------------------------------------------------------------------------
   # OLLAMA — local LLM inference, second-priority tenant of the RTX 3050
@@ -765,11 +768,12 @@ services:
           # load due to host memory pressure ... system_total=4.0 GiB", the
           # fully malloc'd weights plus runtime blew the ceiling, and the
           # container was OOM-killed mid-inference (qwen3:4b, 3.9 GB loaded).
-          # 8G fits weights + KV cache + CUDA runtime for ~4 GB models with
-          # mmap intact. Stack-wide ceilings now sum slightly past the box's
-          # 31 GB, but they are limits, not reservations — and this one only
-          # fills while a model is resident, which KEEP_ALIVE bounds to bursts.
-          memory: 8G
+          # 8G fit weights + KV cache + CUDA runtime for ~4 GB models with
+          # mmap intact. Raised to 32G on 2026-09-08 (192 GB RAM upgrade): every
+          # pulled model can stay mmap'd and a CPU spill when the 6 GB GPU is
+          # contested no longer hits the ceiling. Limit, not reservation — it
+          # only fills while a model is resident, which KEEP_ALIVE bounds.
+          memory: 32G
 
   # --- Adding a local-AI consumer ---------------------------------------------
   # Join the `ai` network and point at Ollama. It serves an OpenAI-compatible
@@ -843,10 +847,10 @@ services:
       - TZ=${TZ}
       - CHESS_COACH_DATA_DIR=/data
       # Big-box engine tuning (config.toml defaults suit laptop dev). The
-      # 6146s have 24c/48t across two sockets; 16 threads + 4G hash leaves
-      # plenty for plex transcodes and the arr stack.
+      # 6146s have 24c/48t across two sockets; 16 threads + 8G hash (4G until
+      # the 2026-09-08 RAM upgrade) leaves plenty for plex and the arr stack.
       - CHESS_COACH_ENGINE_THREADS=16
-      - CHESS_COACH_ENGINE_HASH_MB=4096
+      - CHESS_COACH_ENGINE_HASH_MB=8192
       - CHESS_COACH_SCAN_MOVETIME_MS=250
       - CHESS_COACH_DEEP_MOVETIME_MS=3000
       # Pinned, not configurable. The only inference backend is the in-stack
@@ -880,8 +884,8 @@ services:
     deploy:
       resources:
         limits:
-          # 4G engine hash + python/web overhead.
-          memory: 6G
+          # 8G engine hash + python/web overhead (6G at 4G hash before 2026-09-08).
+          memory: 12G
 
   # ---------------------------------------------------------------------------
   # ACTUAL BUDGET — envelope / zero-based budgeting sync server
@@ -998,15 +1002,21 @@ services:
       # dryRun logs proposed changes without touching the budget. Leave it on
       # for the first several runs — SETUP.md covers going live.
       #
-      # classifyOnStartup lets you trigger a run on demand with
-      # `docker compose restart actual-ai` rather than waiting for the cron.
-      #
       # Deliberately ABSENT:
+      #   classifyOnStartup          — at array boot the Docker daemon restarts
+      #                                actual_server and actual-ai in the same
+      #                                second under their restart policy, which
+      #                                ignores depends_on, so the startup run
+      #                                always failed ("Authentication failed:
+      #                                network-failure") and tripped
+      #                                verify-stack.sh after every reboot.
+      #                                The 4-hourly cron is the only trigger;
+      #                                for an on-demand run, use the cron.
       #   freeWebSearch              — would send merchant names to DuckDuckGo.
       #                                Dropped: the whole plane is egress-free.
       #   syncAccountsBeforeClassify — drives bank-sync connectors this setup
       #                                does not use. Would be a no-op.
-      - FEATURES=["dryRun", "classifyOnStartup"]
+      - FEATURES=["dryRun"]
 
       # Written into transaction notes so you can filter in Actual.
       # Searching #actual-ai-miss gives you your rules backlog.
@@ -1091,6 +1101,9 @@ services:
   # ---------------------------------------------------------------------------
   nextcloud-db:
     image: postgres:18-alpine
+    # Tuned for the 4G ceiling below (2026-09-08). The image defaults
+    # (shared_buffers=128MB) were sized for the old 1G limit.
+    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "effective_cache_size=3GB", "-c", "work_mem=16MB"]
     container_name: nextcloud-db
     networks:
       - cloud
@@ -1135,7 +1148,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 4G
 
   # ---------------------------------------------------------------------------
   # NEXTCLOUD-REDIS — transactional file locking + cache
@@ -1180,7 +1193,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # NEXTCLOUD — the app
@@ -1246,12 +1259,18 @@ services:
       # NEXTCLOUD_DATA_DIR override is needed — and deliberately NOT at /data,
       # which in every other container in this file means the media share.
       #
+      # The host side is a SUBDIRECTORY of the share, never the share root:
+      # emhttpd chmods every share root to 0777 nobody:users at every array
+      # start, Nextcloud refuses to serve a world-readable data dir (503), and
+      # www-data cannot chmod a directory it does not own. Found on the first
+      # reboot after deploy (2026-09-08). verify-stack.sh asserts 33:770.
+      #
       # Previews land under here (data/appdata_<instanceid>/preview), which is
       # the one thing in Nextcloud that grows without bound. On the array is
       # exactly where that belongs — slower to generate, but it keeps it off
       # the 480 GB cache pool. Cache-pool fill is the most common real
       # incident on this box (docs/disaster-recovery.md).
-      - /mnt/user/nextcloud:/var/www/html/data
+      - /mnt/user/nextcloud/data:/var/www/html/data
     ports:
       # Loopback only, same as every other backend here: this is both the
       # svc:nextcloud serve target and the host debug path.
@@ -1276,7 +1295,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          # PHP workers at PHP_MEMORY_LIMIT=512M each. 2G -> 4G on 2026-09-08.
+          memory: 4G
 
   # ---------------------------------------------------------------------------
   # NEXTCLOUD-CRON — background jobs
@@ -1310,7 +1330,7 @@ services:
       <<: *nextcloud-env
     volumes:
       - /mnt/cache/appdata/nextcloud:/var/www/html
-      - /mnt/user/nextcloud:/var/www/html/data
+      - /mnt/user/nextcloud/data:/var/www/html/data
     restart: unless-stopped
     deploy:
       resources:
