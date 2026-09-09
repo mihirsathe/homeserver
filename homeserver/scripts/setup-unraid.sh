@@ -177,22 +177,33 @@ mkdir -p "$SHARES_DIR"
 
 # data share — where all media and usenet downloads live
 # Primary: array (spinning HDDs), Cache: yes (writes go to SSD first, mover runs nightly)
+# All values are quoted: Unraid's mover sources cfg files with bash, and unquoted values
+# with special characters (parentheses, semicolons) cause syntax errors that cascade to subsequent shares.
 DATA_SHARE="$SHARES_DIR/data.cfg"
 if [[ -f "$DATA_SHARE" ]]; then
     ok "  data share config already exists"
 else
     cat > "$DATA_SHARE" << 'EOF'
-shareComment=
-shareAllocator=highwater
-shareSplitLevel=0
-shareInclude=
-shareExclude=
-shareUseCache=yes
-shareCachePool=cache
-shareCOW=auto
-shareMinFreeSize=50000
-shareNameOrig=data
-shareFloor=5%
+shareComment="media and usenet downloads"
+shareInclude=""
+shareExclude=""
+shareUseCache="yes"
+shareCachePool="cache"
+shareCachePool2=""
+shareCOW="auto"
+shareAllocator="highwater"
+shareSplitLevel="0"
+shareFloor="5%"
+shareExport="-"
+shareCaseSensitive="auto"
+shareSecurity="private"
+shareReadList=""
+shareWriteList=""
+shareVolsizelimit=""
+shareExportNFS="-"
+shareExportNFSFsid="0"
+shareSecurityNFS="public"
+shareHostListNFS=""
 EOF
     ok "  data share config written"
 fi
@@ -206,15 +217,26 @@ if [[ -f "$APPDATA_SHARE" ]]; then
     ok "  appdata share: verified cache=only"
 else
     cat > "$APPDATA_SHARE" << 'EOF'
-shareComment=Docker application data
-shareAllocator=highwater
-shareSplitLevel=1
-shareInclude=
-shareExclude=
-shareUseCache=only
-shareCachePool=cache
-shareCOW=auto
-shareNameOrig=appdata
+shareComment="application data"
+shareInclude=""
+shareExclude=""
+shareUseCache="only"
+shareCachePool="cache"
+shareCachePool2=""
+shareCOW="auto"
+shareAllocator="highwater"
+shareSplitLevel="1"
+shareFloor="0"
+shareExport="-"
+shareCaseSensitive="auto"
+shareSecurity="private"
+shareReadList=""
+shareWriteList=""
+shareVolsizelimit=""
+shareExportNFS="-"
+shareExportNFSFsid="0"
+shareSecurityNFS="public"
+shareHostListNFS=""
 EOF
     ok "  appdata share config written"
 fi
@@ -228,15 +250,26 @@ if [[ -f "$INCOMPLETE_SHARE" ]]; then
     ok "  usenet-incomplete share: verified cache=only"
 else
     cat > "$INCOMPLETE_SHARE" << 'EOF'
-shareComment=SABnzbd incomplete downloads (cache-only, never migrates to array)
-shareAllocator=highwater
-shareSplitLevel=0
-shareInclude=
-shareExclude=
-shareUseCache=only
-shareCachePool=cache
-shareCOW=auto
-shareNameOrig=usenet-incomplete
+shareComment="SABnzbd incomplete downloads"
+shareInclude=""
+shareExclude=""
+shareUseCache="only"
+shareCachePool="cache"
+shareCachePool2=""
+shareCOW="auto"
+shareAllocator="highwater"
+shareSplitLevel="0"
+shareFloor="0"
+shareExport="-"
+shareCaseSensitive="auto"
+shareSecurity="private"
+shareReadList=""
+shareWriteList=""
+shareVolsizelimit=""
+shareExportNFS="-"
+shareExportNFSFsid="0"
+shareSecurityNFS="public"
+shareHostListNFS=""
 EOF
     ok "  usenet-incomplete share config written"
 fi
@@ -264,15 +297,26 @@ if [[ -f "$NEXTCLOUD_SHARE" ]]; then
     ok "  nextcloud share config already exists"
 else
     cat > "$NEXTCLOUD_SHARE" << 'EOF'
-shareComment=Nextcloud user files (array-direct; not covered by Appdata Backup)
-shareAllocator=highwater
-shareSplitLevel=0
-shareInclude=
-shareExclude=
-shareUseCache=no
-shareCOW=auto
-shareExport=-
-shareNameOrig=nextcloud
+shareComment="Nextcloud user files"
+shareInclude=""
+shareExclude=""
+shareUseCache="no"
+shareCachePool="cache"
+shareCachePool2=""
+shareCOW="auto"
+shareAllocator="highwater"
+shareSplitLevel="0"
+shareFloor="0"
+shareExport="-"
+shareCaseSensitive="auto"
+shareSecurity="private"
+shareReadList=""
+shareWriteList=""
+shareVolsizelimit=""
+shareExportNFS="-"
+shareExportNFSFsid="0"
+shareSecurityNFS="public"
+shareHostListNFS=""
 EOF
     ok "  nextcloud share config written"
 fi
