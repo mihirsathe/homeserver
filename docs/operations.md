@@ -158,15 +158,14 @@ NVENC/NVDEC acceleration requires an active Plex Pass subscription. Without it, 
 
 The array uses single parity (one 6 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
-### 32 GB RAM — and memory ceilings now sum to 30.75 GB of it
+### 32 GB RAM — and memory ceilings now sum to 38.75 GB of it
 
 At current RAM, heavy simultaneous workloads (many active transcodes + downloads + metadata scanning) can feel constrained. The Xeon Gold 6146 dual-socket platform supports up to 768 GB (24× DIMM slots). Adding RAM is the single highest-ROI upgrade.
 
 The Nextcloud plane took the stack's declared `deploy.resources.limits.memory` total from
-26.75 GB to **30.75 GB**. Ceilings are limits, not reservations, and every tenant here is
-bursty or schedulable — nothing reserves what it declares — but this is tighter than the
-31.25 GB that was previously flagged as having no headroom for error, so it is written down
-rather than absorbed silently.
+26.75 GB to 34.75 GB; SABnzbd memory ceiling increase (2G → 6G for 4G article cache + par2/unrar headroom) raises it to **38.75 GB**. Ceilings are limits, not reservations, and every tenant here is
+bursty or schedulable — nothing reserves what it declares — but this is significantly over the
+31.25 GB that was previously flagged as having no headroom for error.
 
 Escalation ladder if the box starts swapping or the OOM killer appears in `dmesg`, cheapest
 first:
