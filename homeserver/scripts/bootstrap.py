@@ -798,7 +798,11 @@ def configure_tautulli(plex, token: str) -> None:
     cfg.set("PMS", "pms_ssl",        "0")
     cfg.set("PMS", "pms_is_cloud",   "0")
     cfg.set("PMS", "pms_is_remote",  "0")
-    cfg.set("PMS", "pms_url_manual", "0")
+    # Manual URL: with pms_url_manual=0 Tautulli asks plex.tv for a connection
+    # and picks the LAN address, which only works via a NAT hairpin from the
+    # frontend bridge. The container DNS name always works.
+    cfg.set("PMS", "pms_url_manual", "1")
+    cfg.set("PMS", "pms_url",        "http://plex:32400")
     cfg.set("PMS", "pms_identifier", plex.machineIdentifier)
     cfg.set("PMS", "pms_name",       plex.friendlyName)
     cfg.set("PMS", "pms_token",      token)

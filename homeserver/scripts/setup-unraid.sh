@@ -343,7 +343,7 @@ if [[ ! -d /mnt/user ]]; then
     echo "  # Nextcloud. Created but NOT chowned — the containers own their"
     echo "  # ownership (www-data 33, postgres 70). See docs/decisions.md."
     echo "  mkdir -p /mnt/cache/appdata/nextcloud /mnt/cache/appdata/nextcloud-db /mnt/cache/appdata/nextcloud-dump"
-    echo "  mkdir -p /mnt/user/nextcloud"
+    echo "  mkdir -p /mnt/user/nextcloud/data && chown 33:33 /mnt/user/nextcloud/data && chmod 0770 /mnt/user/nextcloud/data"
     echo ""
 else
     mkdir -p /mnt/user/data/{usenet/complete/{tv,movies,music},media/{tv,movies,music}}
@@ -396,7 +396,12 @@ else
         warn "    mkdir -p /mnt/cache/appdata/{nextcloud,nextcloud-db,nextcloud-dump}"
     fi
     # User files live on the array via the user share — they have to span it.
-    mkdir -p /mnt/user/nextcloud
+    # The data dir is a SUBDIRECTORY of the share: emhttpd chmods every share
+    # root to 0777 nobody:users at array start, and Nextcloud refuses (503) a
+    # world-readable data dir it cannot chmod back. Owned by www-data, 0770.
+    mkdir -p /mnt/user/nextcloud/data
+    chown 33:33 /mnt/user/nextcloud/data
+    chmod 0770 /mnt/user/nextcloud/data
 
     chown -R nobody:users /mnt/user/data/ /mnt/user/usenet-incomplete
     chown -R nobody:users /mnt/user/appdata/plex-transcode

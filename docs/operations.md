@@ -40,7 +40,7 @@ The weekly flow is two stages: the **Appdata Backup plugin** writes the archive 
 | Knob | Default | What it does |
 |------|---------|--------------|
 | `BACKUP_REMOTE` | empty (**currently unset** — local-only) | rclone target for the newest appdata archive; each run copies the archive's directory to `$BACKUP_REMOTE/<timestamp>`. Empty means the offsite copy is skipped and logged as such. |
-| `BACKUP_NEXTCLOUD_REMOTE` | empty | rclone target for `/mnt/user/nextcloud` user files (plus the weekly `pg_dump` to `$BACKUP_NEXTCLOUD_REMOTE/db`). This is the **only** copy of the user files — the Appdata Backup plugin never sees them. The script runs this leg first and never exits early on its account, so a failed plugin backup can't silently take the personal-file copy down with it (and vice versa). |
+| `BACKUP_NEXTCLOUD_REMOTE` | empty | rclone target for `/mnt/user/nextcloud/data` user files (plus the weekly `pg_dump` to `$BACKUP_NEXTCLOUD_REMOTE/db`). This is the **only** copy of the user files — the Appdata Backup plugin never sees them. The script runs this leg first and never exits early on its account, so a failed plugin backup can't silently take the personal-file copy down with it (and vice versa). |
 | `BACKUP_LOCAL_RETENTION_DAYS` | `14` | Local archives (and their checksums) older than this are pruned at the end of each run. |
 
 Both remote knobs require `rclone` on the host; if a remote is set but rclone is missing, the script warns and skips rather than failing the run.
@@ -106,15 +106,15 @@ docker exec -u www-data nextcloud php occ config:system:get trusted_domains
 docker exec -u www-data nextcloud php occ config:app:get core lastcron
 
 # Files on disk that Nextcloud doesn't know about — the fix after any
-# out-of-band write into /mnt/user/nextcloud
+# out-of-band write into /mnt/user/nextcloud/data
 docker exec -u www-data nextcloud php occ files:scan --all
 
 # Stuck in maintenance mode (a backup run that died before its trap fired)
 docker exec -u www-data nextcloud php occ maintenance:mode --off
 
 # How much the user files and the previews are eating
-du -sh /mnt/user/nextcloud
-du -sh /mnt/user/nextcloud/appdata_*/preview 2>/dev/null
+du -sh /mnt/user/nextcloud/data
+du -sh /mnt/user/nextcloud/data/appdata_*/preview 2>/dev/null
 
 # Database size and liveness
 docker exec nextcloud-db psql -U nextcloud -d nextcloud -c "\l+ nextcloud"
@@ -158,24 +158,23 @@ NVENC/NVDEC acceleration requires an active Plex Pass subscription. Without it, 
 
 The array uses single parity (one 6 TB disk). Protects against one drive failure at a time. Two simultaneous failures, or a failure during a parity rebuild, means data loss. Upgrade path is documented once in [decisions.md#expansion-paths](decisions.md#expansion-paths).
 
-### 32 GB RAM — and memory ceilings now sum to 38.75 GB of it
+### 192 GB RAM (since 2026-09-08) — ceilings sum to about 93 GB of it
 
-At current RAM, heavy simultaneous workloads (many active transcodes + downloads + metadata scanning) can feel constrained. The Xeon Gold 6146 dual-socket platform supports up to 768 GB (24× DIMM slots). Adding RAM is the single highest-ROI upgrade.
+The box went from 32 GB to 192 GB (12 × 16 GB DDR4-2133 ECC RDIMM, half the slots) on
+2026-09-08, and every container ceiling was raised the same day: Plex 16G, SABnzbd 12G (with
+an 8G article cache), Ollama 32G, chess coach 12G (8G engine hash), Nextcloud 4G, its Postgres
+4G (`shared_buffers=1GB`), the *arrs and Bazarr 2G, Seerr and Tautulli 1G. The declared
+`deploy.resources.limits.memory` total is now roughly 93 GB against 187 GiB usable. Ceilings
+are limits, not reservations — nothing reserves what it declares — so the sum is a sanity
+figure, not a budget. The old escalation ladder (trim Plex, trim Nextcloud, buy RAM) is
+retired: if the OOM killer shows up in `dmesg` now, that container's ceiling is wrong, not
+the box.
 
-The Nextcloud plane took the stack's declared `deploy.resources.limits.memory` total from
-26.75 GB to 34.75 GB; SABnzbd memory ceiling increase (2G → 6G for 4G article cache + par2/unrar headroom) raises it to **38.75 GB**. Ceilings are limits, not reservations, and every tenant here is
-bursty or schedulable — nothing reserves what it declares — but this is significantly over the
-31.25 GB that was previously flagged as having no headroom for error.
-
-Escalation ladder if the box starts swapping or the OOM killer appears in `dmesg`, cheapest
-first:
-
-1. **Plex 8G → 6G.** Far above its realistic peak (a few hundred MB per transcode session
-   plus database cache). The least load-bearing 2 GB on the box, by the same reasoning that
-   already took Ollama from 8G to 4G.
-2. **Nextcloud 2G → 1.5G and cron 768M → 512M.** Costs preview-generation throughput.
-3. **RAM to 128 GB.** [vision/phases.md](vision/phases.md) §1.2 — 4× 32 GB DDR4-2666 ECC
-   RDIMM, roughly $100–160 used, and the answer that makes this table stop mattering.
+One host knob matters *because* RAM is large: `vm.dirty_ratio` / `vm.dirty_background_ratio`
+are percentages (20 / 10), so the kernel will now hold tens of GB of dirty pages before it
+forces writeback — the classic cause of multi-second stalls on array writes. Set
+`vm.dirty_background_bytes` / `vm.dirty_bytes` (1 GiB / 4 GiB is the usual Unraid advice) via
+the Tips and Tweaks plugin or `/boot/config/go`. **Not yet applied.**
 
 ### Nextcloud sync needs Tailscale running on the device
 
@@ -186,7 +185,7 @@ provider with this box. [decisions.md](decisions.md) records what would change t
 
 ### Nextcloud previews live on the array, not the cache pool
 
-Preview generation reads and writes `/mnt/user/nextcloud/appdata_*/preview`, which is on
+Preview generation reads and writes `/mnt/user/nextcloud/data/appdata_*/preview`, which is on
 spinning disks, so first-time thumbnailing of a large photo import is slow. This is
 deliberate: previews are the one thing in a Nextcloud data directory that grows without
 bound, and cache-pool fill is the most common real incident on this stack. They are also
