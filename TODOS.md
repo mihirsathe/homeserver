@@ -7,13 +7,14 @@ credential, a decision, or time to pass. Delete lines as they land.
 
 ## Needs a credential (Mihir)
 
-- [ ] **`BACKUP_REMOTE`** — rclone remote (B2 or similar) for the weekly
-      appdata offsite leg. `rclone config` on the box, set the value in
-      `homeserver/.env`. The Sunday 5:00 `media_stack_backup` script picks it
-      up automatically; verify the first offsite copy the following Monday.
-- [ ] **`BACKUP_NEXTCLOUD_REMOTE`** — same, for Nextcloud user files. This is
-      the ONLY backup those files get. **Hard rule: no real files into
-      Nextcloud until this is set** (deployment.md says the same).
+- [ ] **`BACKUP_REMOTE`** — decided 2026-08-29: AWS S3 Glacier Deep Archive.
+      Follow `docs/aws-backup-setup.md` (bucket + IAM user + rclone remote),
+      set the value in `homeserver/.env`. The Sunday 5:00 `media_stack_backup`
+      script picks it up automatically; verify the first offsite copy the
+      following Monday.
+- [ ] **`BACKUP_NEXTCLOUD_REMOTE`** — same bucket, `nextcloud/` prefix (same
+      guide). This is the ONLY backup those files get. **Hard rule: no real
+      files into Nextcloud until this is set** (deployment.md says the same).
 - [ ] **`LICHESS_TOKEN`** — chess-coach runs without Lichess access. Mint a
       token, add to `homeserver/.env`, `docker compose up -d coach`.
 

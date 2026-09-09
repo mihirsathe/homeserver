@@ -17,6 +17,7 @@ And a `cloud` plane: Nextcloud (files, calendar, contacts) with PostgreSQL and R
 | [docs/deployment.md](docs/deployment.md) | Step-by-step deployment and scheduled maintenance setup |
 | [docs/upgrade-2026-07.md](docs/upgrade-2026-07.md) | The live run: catch-up to `master`, ingress move to Tailscale Services, and landing all four tenants in one sitting — with gates and rollback |
 | [docs/operations.md](docs/operations.md) | Maintenance schedule, diagnostics, monitoring, secret rotation |
+| [docs/aws-backup-setup.md](docs/aws-backup-setup.md) | Offsite backup target: S3 Glacier Deep Archive bucket, no-delete IAM user, rclone remote, thaw-first restore reality |
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | Recovery procedures: drive loss, appdata corruption, cache fill, Tailscale/Gluetun outages |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-driven decision tree for the common breakages |
 | [docs/decisions.md](docs/decisions.md) | Why things are the way they are + expansion paths |
