@@ -37,8 +37,7 @@ credential, a decision, or time to pass. Delete lines as they land.
 
 ## Merge queue
 
-- [ ] **homeserver PR #30** — audit docs alignment + verify-stack rework +
-      P2 cleanup + Nextcloud deploy flips + this file.
+- [x] **homeserver PR #30** — merged 2026-08-29.
 - [ ] **claudecoach PR #1** — Docker README fix, Slack `app.action(None)`
       fix, ai-network compose change. The running container was built FROM
       this branch; merging changes nothing on the box.
@@ -48,6 +47,7 @@ credential, a decision, or time to pass. Delete lines as they land.
 ## Nextcloud go-live (in order)
 
 - [ ] Padlock test from an admin device: `https://nextcloud.tail9f0cb1.ts.net/`
+      (`svc:nextcloud` is advertised; Nextcloud's `overwritehost` matches)
 - [ ] Log in (`admin` / `grep ^NEXTCLOUD_ADMIN_PASSWORD= generated.env`),
       change or record the password.
 - [ ] Administration → Overview: expect the four greens listed in
@@ -59,25 +59,23 @@ credential, a decision, or time to pass. Delete lines as they land.
 
 - [ ] Conversational E2E: say `plan 7` in `#coachchat` — listener should
       answer (it is connected and stable since the action-matcher fix).
-- [ ] Shadow night 1 fires 2026-08-29 21:00. Next morning check:
-      `docker exec claudecoach coach health` shows `last_run` ok; a
-      `[SHADOW]` workout in Garmin Connect; an event on the `Lifting`
-      calendar; Slack summary with buttons in `#coachchat`.
-- [ ] Seven consecutive clean shadow nights → then the RUNBOOK "Going live"
-      cutover (owner's call; never unset `COACH_SHADOW_MODE` before that).
+- ~~Shadow night 1 / seven clean shadow nights before cutover~~ — **decision
+      2026-09-08:** claudecoach runs live (`COACH_SHADOW_MODE=0`,
+      `COACH_GARMIN__WRITEBACK=false`) and that is intended. The shadow-night
+      gate is retired; the RUNBOOK "Going live" checklist still applies for
+      the remaining device work below.
 - [ ] Remaining live-device work: CCFIX workouts, course-write smoke test
       (the gate ships closed until then).
 
 ## Watch for (time passes)
 
-- [ ] **Sep 1, 03:00** — first scheduled parity check in ~4 months. Expect a
-      result notification (GUI; Slack too if `normal` flipped). 0 errors.
-- [ ] **Sunday** — first full scheduled backup cycle: plugin 04:00, verify
-      script 05:00. Check `/mnt/user/backups/appdata/` for a fresh `ab_*`
-      dir and `/var/log/homeserver/backup.log` for a clean verify pass.
-- [ ] **Next reboot** — `restore_tools` User Script should re-link `gh` and
-      its auth config and re-run `gh auth setup-git`. Verify `gh auth status`
-      afterwards.
+- [x] **Sep 1, 03:00** parity check — done: 0 errors, 10h08m
+      (`/boot/config/parity-checks.log`).
+- [x] **Sunday** backup cycle — done: `ab_20260906_040001` present and
+      `.checksums` written at 05:00 on 2026-09-06.
+- [x] **Next reboot** — the 2026-09-08 reboot (RAM upgrade) re-linked `gh`;
+      `gh auth status` is logged in. (That reboot also exposed the Nextcloud
+      data-dir bug, fixed in PR #40.)
 
 ## Hygiene (low, eventually)
 

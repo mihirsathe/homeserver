@@ -143,8 +143,9 @@ part that actually hurts to lose.
 Actual needs a Secure Context. Check, in order:
 
 1. Are you on `https://actual.<tailnet>.ts.net`? Plain HTTP only works from `localhost`.
-2. Is serve still configured? `tailscale serve status` should show the proxy to
-   `127.0.0.1:5006`. If empty: `tailscale serve --service=svc:actual --bg 127.0.0.1:5006`.
+2. Is serve still configured? `tailscale serve status --json` should list `svc:actual`
+   with the proxy to `127.0.0.1:5006` (plain `serve status` prints "No serve config"
+   for services on Tailscale 1.96). If empty: `tailscale serve --service=svc:actual --bg 127.0.0.1:5006`.
 3. Are HTTPS Certificates still enabled for the tailnet (admin console -> DNS)?
 4. Is anything adding COOP/COEP headers in front of Actual? Duplicated
    `Cross-Origin-Embedder-Policy` is itself fatal — Actual sets these itself.
@@ -162,7 +163,7 @@ in the meantime.
 
 ## Nextcloud data loss or corruption
 
-> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. `svc:nextcloud` is published and Nextcloud is reachable at `https://nextcloud.<tailnet>.ts.net/`. Remaining: `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 **The one entry in this document about data that cannot be re-sourced.** Media can be
 re-downloaded and the *arr config rebuilt; personal files cannot. Read
@@ -293,7 +294,7 @@ tailnet, or an advertisement is inactive.
 
 ```bash
 tailscale status                # host still on the tailnet?
-tailscale serve status          # which services are advertised and active?
+tailscale serve status --json   # which services are advertised and active? (plain `status` prints "No serve config" on 1.96)
 ```
 
 **Fallback path (works regardless of any service state)** — every backend

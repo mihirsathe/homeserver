@@ -124,11 +124,13 @@ docker exec nextcloud-db psql -U nextcloud -d nextcloud -c "\l+ nextcloud"
 
 ## Known Limitations
 
-### SMART unavailable for cache pool SSDs
+### SMART on the cache pool SSDs works (it was documented as unavailable)
 
-The PERC H730P in HBA mode does not pass SMART data through to Unraid. The two 480 GB SSDs in R640 bays 1–2 show "SMART unavailable" in the Unraid dashboard. Drives in the MD1400 via the LSI 9300-8e have full SMART.
-
-Workaround: use iDRAC's storage view or the PERC's own interface to check internal SSD health quarterly.
+The PERC H730P in HBA mode *does* pass SMART through for the two 480 GB SATA SSDs in
+bays 1–2 (`/dev/sdh`, `/dev/sdi`, btrfs RAID1 pool): `smartctl -H -A /dev/sdh` returns
+PASSED with temperature and the `Media_Wearout_Indicator` attribute, and the Unraid
+dashboard shows them. Verified 2026-09-08 — the earlier "SMART unavailable" note was wrong.
+What the PERC cannot do is spin down the SAS array drives (see the audit doc).
 
 ### Fan noise with third-party GPU
 
@@ -253,7 +255,7 @@ No dedicated metrics stack — the goal is low operational cost, not an observab
 | Stream activity / client issues | Tautulli | Tautulli → Settings → Notification Agents — email, Discord, Telegram, etc. |
 | Ollama model store growth | `du -sh /mnt/user/appdata/ollama` | Counts against the same cache-pool threshold as everything else in appdata; the 75% warning covers it |
 
-**Unraid notification agent**: CA Notification Agent plugin gives email / Pushover / Discord delivery of Unraid events. Configure it once and the SMART/parity/cache alerts above route through it.
+**Unraid notification agent**: there is no separate plugin — Unraid's built-in agents (Settings → Notifications) deliver events, and this box uses the built-in **Slack** agent (`#dellbox-alerts`, via the DellBox Slack app webhook). Warnings and alerts route through it; `normal` events (parity finished, array started) are GUI-only unless `normal="5"` is set under `[notify]` in `/boot/config/plugins/dynamix/dynamix.cfg`.
 
 **Practical threshold**: the cache pool filling is the single most common thing that breaks this stack. 480 GB SSDs fill faster than you'd expect once Plex's DB grows and a few weeks of downloads queue up. Set the warning at 75%.
 
