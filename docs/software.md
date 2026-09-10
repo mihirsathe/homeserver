@@ -26,6 +26,7 @@
 | Tailscale | Admin-plane mesh VPN — only path to *arr / SAB / Seerr / Unraid webUI |
 | GPU Statistics (`gpustat`) | RTX 3050 utilisation / VRAM / temperature on the dashboard |
 | Python 3 (`dwpython`) | Python runtime on the host — the repo's `.py` scripts (`generate-configs.py`, `bootstrap.py`, `sync-tailscale-services.py`, `dedupe-hardlinks.py`) run there |
+| SAS Spindown (doron) | Makes the spin-down delay actually work for the five SAS array drives. Unraid's own `sdspin` is `hdparm`-only and fails on SAS behind the PERC (exit 5), so before this plugin they spun 24/7. It replaces `sdspin` with a `sg_start`-based one (post-6.9 "emhttp hook" method). Installed 2026-09-09; verified with a manual `sdspin sde down` → status 2 |
 
 `docker compose` is built into Unraid — no plugin needed. The stack is brought up at array start by the `media_stack_up` User Script that `setup-unraid.sh` writes.
 

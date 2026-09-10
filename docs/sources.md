@@ -57,10 +57,13 @@ Installed via `installplg` in `setup-unraid.sh`. All but two come straight from 
 | Tailscale | [unraid/unraid-tailscale](https://github.com/unraid/unraid-tailscale) | Limetech (Unraid) |
 | User Scripts | [Squidly271/user.scripts](https://github.com/Squidly271/user.scripts) | Squidly271 (community) |
 | Appdata Backup | [Commifreak/unraid-appdata.backup](https://github.com/Commifreak/unraid-appdata.backup) | Commifreak (community) |
+| SAS Spindown | [doron1/unraid-sas-spindown](https://github.com/doron1/unraid-sas-spindown) | doron (community) |
 
 **User Scripts** remains on Squidly271's account (the author of CA, who handed that repo to Unraid in 2024 but has kept User Scripts under his own account). Still actively maintained as of mid-2025.
 
 **Appdata Backup** replaces the deprecated `ca.backup2` (deprecated at Unraid 6.12). Commifreak's fork is the forum-recommended successor.
+
+**SAS Spindown** (v2024.11.25, installed 2026-09-09) exists because Unraid's `sdspin` only knows `hdparm`, which cannot put SAS drives into standby — every array drive here is a SAS ST6000NM0034 behind the PERC H730P. The plugin swaps in an `sdspin` that uses `sg_start`/`sdparm` for drives it classifies as SAS (`/usr/local/emhttp/plugins/sas-spindown/drive_types`) and keeps `hdparm` for the rest. It re-installs from `/boot/config/plugins/sas-spindown.plg` on every boot like any other plugin.
 
 **No Docker Compose plugin.** Unraid ships `docker compose` in the base OS. `setup-unraid.sh` installs a User Script (`media_stack_up`) that runs `docker compose up -d` at array start — this is the role Compose Manager Plus would otherwise play, without the extra plugin dependency.
 

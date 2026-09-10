@@ -130,7 +130,7 @@ The PERC H730P in HBA mode *does* pass SMART through for the two 480 GB SATA SSD
 bays 1–2 (`/dev/sdh`, `/dev/sdi`, btrfs RAID1 pool): `smartctl -H -A /dev/sdh` returns
 PASSED with temperature and the `Media_Wearout_Indicator` attribute, and the Unraid
 dashboard shows them. Verified 2026-09-08 — the earlier "SMART unavailable" note was wrong.
-What the PERC cannot do is spin down the SAS array drives (see the audit doc).
+Spin-down of the SAS array drives is a separate matter: Unraid's `sdspin` is `hdparm`-only and fails on them, so the 30-minute spin-down delay did nothing until the **SAS Spindown** plugin (doron) was installed on 2026-09-09. If drives stay spun up again, check the plugin is still installed (`ls /boot/config/plugins/sas-spindown.plg`) and look for `SAS Assist` lines in the syslog.
 
 ### Fan noise with third-party GPU
 
