@@ -706,6 +706,14 @@ services:
     environment:
       - TZ=${TZ}
       - HOME=/ollama
+      # The CUDA driver JIT-compiles its kernels on every runner start and
+      # caches the result under $HOME/.nv — but /ollama is root-owned in the
+      # image and we run as nobody, so the cache was never written and every
+      # cold start recompiled for ~30 s with the GPU idle (measured 2026-09-09:
+      # 54 s to first token, 5 s with the cache). Point it into the writable
+      # bind instead. ~50 MB per model, regenerable, excluded from backup
+      # along with the models.
+      - CUDA_CACHE_PATH=/ollama/.ollama/nvcache
       # compute for CUDA, utility for nvidia-smi + library discovery. Plex asks
       # for compute,video; neither asks for `all` (which adds graphics/display
       # and is the broader surface CVE-2024-0132 abused).
