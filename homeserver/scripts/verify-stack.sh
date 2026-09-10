@@ -56,6 +56,22 @@ fi
 
 docker info >/dev/null 2>&1 && ok "docker responding" || bad "docker not responding"
 
+# Every plugin setup-unraid.sh installs must still be on flash — that is the
+# copy Unraid re-installs from at boot. A missing .plg is a plugin that will be
+# gone after the next reboot (or never came back after one). sas-spindown is
+# the one whose absence is silent: the SAS array drives just never spin down.
+missing_plg=()
+for plg in community.applications fix.common.problems appdata.backup user.scripts \
+           unassigned.devices nvidia-driver dynamix.file.integrity tailscale \
+           gpustat dwpython sas-spindown; do
+    [[ -f /boot/config/plugins/$plg.plg ]] || missing_plg+=("$plg")
+done
+if [[ ${#missing_plg[@]} -eq 0 ]]; then
+    ok "all 11 plugins from setup-unraid.sh present on flash"
+else
+    bad "plugins missing from /boot/config/plugins: ${missing_plg[*]} — see setup-unraid.sh Step 1"
+fi
+
 # docker.img is a fixed-size loop-mounted vDisk, entirely separate from the
 # array — appdata having hundreds of GB free tells you nothing about it. When
 # it fills, running containers' writes start failing with no obvious cause, and

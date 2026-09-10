@@ -64,6 +64,15 @@ declare -A PLUGINS=(
     ["Nvidia-Driver"]="nvidia-driver|https://raw.githubusercontent.com/unraid/unraid-nvidia-driver/master/nvidia-driver.plg"
     ["Dynamix File Integrity"]="dynamix.file.integrity|https://raw.githubusercontent.com/unraid/dynamix/master/unRAIDv6/dynamix.file.integrity.plg"
     ["Tailscale"]="tailscale|https://raw.githubusercontent.com/unraid/unraid-tailscale/main/plugin/tailscale.plg"
+    # GPU utilisation / VRAM / temperature on the dashboard.
+    ["GPU Statistics"]="gpustat|https://raw.githubusercontent.com/SimonFair/gpustat-unraid/master/gpustat.plg"
+    # Python 3 on the host: bootstrap.py, sync-tailscale-services.py and
+    # dedupe-hardlinks.py all run there, and Unraid ships no python.
+    ["Python 3"]="dwpython|https://raw.githubusercontent.com/dmacias72/python-unRAID/main/plugin/dwpython.plg"
+    # Unraid's own sdspin is hdparm-only and cannot put SAS drives into standby,
+    # so with SAS array drives behind the PERC the spin-down delay does nothing
+    # without this. Replaces sdspin with an sg_start-based one (2026-09-09).
+    ["SAS Spindown"]="sas-spindown|https://raw.githubusercontent.com/doron1/unraid-sas-spindown/master/sas-spindown.plg"
 )
 
 for name in "${!PLUGINS[@]}"; do
