@@ -220,7 +220,7 @@ Note that Ollama has **no authentication** — anything on the `ai` network can 
 
 ### Nextcloud first-run
 
-> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. `svc:nextcloud` is published and Nextcloud is reachable at `https://nextcloud.<tailnet>.ts.net/`. Remaining: `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 Nextcloud installs itself — there is no wizard. `generate-configs.py` generated the
 database, Redis and admin passwords into `generated.env`, and the container consumed them
@@ -272,6 +272,25 @@ Each admin UI becomes a Tailscale Service advertised by the host's tailscaled,
 pointing at the loopback port the container already publishes. Those loopback
 publishes are not debug leftovers — they are the serve backends.
 
+### The scripted way (preferred)
+
+`scripts/sync-tailscale-services.py` does the whole step: it creates every
+`svc:` in the tailnet through the API (`TS_API_KEY` + `TAILNET_NAME` in `.env`),
+advertises each one from this host with the right loopback backend, and
+approves the host for it. It is idempotent — rerun it after adding a service to
+the stack.
+
+```bash
+python3 scripts/sync-tailscale-services.py            # create + advertise + approve
+python3 scripts/sync-tailscale-services.py --dry-run  # show what it would do
+```
+
+Everything below is what the script does, spelled out — read it to understand
+the moving parts, or use it as the fallback when the API key is not to hand.
+Note that on Tailscale 1.96 plain `tailscale serve status` prints
+"No serve config" even with every service live; services only show under
+`tailscale serve status --json` (or `tailscale debug prefs` → `AdvertiseServices`).
+
 ### Define the services in the admin console first
 
 A Tailscale Service is an object that must exist in the tailnet before a host
@@ -289,7 +308,7 @@ The syntax is worth confirming on a single service before batching the rest:
 
 ```bash
 tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
-tailscale serve status
+tailscale serve status --json     # plain `status` prints "No serve config" for services on 1.96
 ```
 
 Then open `https://radarr.<tailnet>.ts.net/` from a tagged admin device. A

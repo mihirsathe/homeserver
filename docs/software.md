@@ -4,11 +4,11 @@
 
 | Item | Detail |
 |------|--------|
-| OS | Unraid Pro (lifetime license) |
+| OS | Unraid Pro **7.3.0-beta.2** (lifetime license) — on the beta channel as of 2026-09-08; the box holds non-re-sourceable data, so a stable channel is the open question |
 | License tier | Pro — unlimited attached devices |
 | Boot method | BOSS card (ZFS mirror, internal) |
 | License anchor | USB flash drive (permanent, rear port) |
-| Web UI | `http://mediaserver.local` or server IP |
+| Web UI | `http://10.0.0.123` on the LAN (hostname `DellBox`), or `dellbox.tail9f0cb1.ts.net` over Tailscale. Plain HTTP (`USE_SSL="no"`) |
 
 ---
 
@@ -24,6 +24,8 @@
 | Unassigned Devices | External drive mounting |
 | Dynamix File Integrity | File checksum / silent corruption detection |
 | Tailscale | Admin-plane mesh VPN — only path to *arr / SAB / Seerr / Unraid webUI |
+| GPU Statistics (`gpustat`) | RTX 3050 utilisation / VRAM / temperature on the dashboard |
+| Python 3 (`dwpython`) | Python runtime on the host — the repo's `.py` scripts (`generate-configs.py`, `bootstrap.py`, `sync-tailscale-services.py`, `dedupe-hardlinks.py`) run there |
 
 `docker compose` is built into Unraid — no plugin needed. The stack is brought up at array start by the `media_stack_up` User Script that `setup-unraid.sh` writes.
 
@@ -72,6 +74,7 @@ GUI must never sit behind anything containerised.
 | bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
 | tautulli | `hotio/tautulli` | `svc:tautulli` | 8181 (loopback) | Plex analytics, stream history, notifications |
 | actual_server | `actualbudget/actual-server` | `svc:actual` | 5006 (loopback) | Envelope/zero-based budgeting. Needs a Secure Context, which every service now has — see decisions.md |
+| coach | `homeserver-coach` (built locally from the `coach` service's build context) | `svc:coach` | 8000 (loopback) | Chess coach webapp. On `frontend` for its UI and `ai` for Ollama; rebinds `/data` to its own appdata, so it has no path to the media share |
 | actual-ai | `sakowicz/actual-ai` | — | (none) | Categorizes transactions Actual's rules engine missed, via the in-stack Ollama on the `ai` plane |
 | profilarr | `santiagosayshey/profilarr` | `svc:profilarr` | 6868 (loopback) | Quality-profile + custom-format manager for Radarr/Sonarr. GUI-driven, subscribes to curated databases (Dictionarry DB, TRaSH Guides), diff-preview before sync. |
 | ollama | `ollama/ollama` | — (no ingress by design) | 11434 (loopback) | Local LLM inference. Second-priority tenant of the RTX 3050; reachable only from the `ai` network and the host. |
@@ -89,7 +92,7 @@ Six bridge networks carve the stack into blast-radius zones so a compromised con
 | `downloaders` | `gluetun`, `sabnzbd` (netns), `prowlarr` (netns), `radarr`, `sonarr`, `lidarr` | VPN'd egress and the *arr apps that talk to SAB + Prowlarr. `sabnzbd` and `prowlarr` use `network_mode: "service:gluetun"` — they share Gluetun's network namespace, so their UIs are published by Gluetun and their outbound traffic dies if the tunnel drops (the gluetun kill-switch, `FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on`). |
 | `automation` | `radarr`, `sonarr`, `lidarr`, `bazarr`, `profilarr`, `seerr` | *arr ↔ Bazarr traffic + Profilarr's API-driven quality-profile sync to Radarr/Sonarr. Keeps internal automation off the downloaders plane. |
 | `frontend` | `plex`, `seerr`, `tautulli`, `bazarr`, `coach` | User-facing services. Plex and Seerr sit here; neither needs to see SAB/Prowlarr directly. |
-| `ai` | `ollama`, `actual-ai`, `coach` | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
+| `ai` | `ollama`, `actual-ai`, `coach`, `claudecoach` (from its own compose in `/mnt/user/appdata/claudecoach/repo`, joining by the network's fixed name) | Local inference. Isolated from the media planes — nothing here needs the *arrs or the downloaders, and since Ollama has no auth of its own, membership of this network *is* the access control. Ollama is deliberately given no Tailscale Service, which is why nothing on the tailnet can reach it. |
 | `finance` | `actual_server`, `actual-ai` | Budgeting. `actual-ai` is dual-homed onto `ai` to reach Ollama; nothing else crosses in or out. |
 | `cloud` | `nextcloud`, `nextcloud-db`, `nextcloud-redis`, `nextcloud-cron` | Personal files. **Closed** — nothing else joins, and neither the database nor the cache publishes a port, so the only route to either is from inside this plane. Deliberately *not* dual-homed onto `ai`: Nextcloud is the largest attack surface on the box and anything on `ai` can delete every model. |
 
@@ -231,7 +234,7 @@ Every container in the *media* path mounts `/mnt/user/data` at `/data` inside th
 
 ## Personal Cloud
 
-> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. Remaining: `svc:nextcloud` is not yet published (`scripts/sync-tailscale-services.py`), and `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
+> **Status (2026-08-29): deployed** — all four containers are up and Nextcloud reports installed (v33), with appdata correctly owned by uid 33/70. `svc:nextcloud` is published and Nextcloud is reachable at `https://nextcloud.<tailnet>.ts.net/`. Remaining: `BACKUP_NEXTCLOUD_REMOTE` is still unset — **do not put real files in until the offsite target exists.**
 
 Nextcloud replaces Google/iCloud Drive: file sync, calendar and contacts, reached at
 `https://nextcloud.<tailnet>.ts.net/` like every other service here. Four containers on a
@@ -349,7 +352,7 @@ The *arr stack, SABnzbd, Prowlarr, Seerr, Bazarr, Tautulli, Actual, the chess co
 Family uses the Plex app they already have:
 
 1. Search a title in Plex → tap "Add to Watchlist".
-2. Seerr polls Plex's Watchlist API every ~2 minutes.
+2. Seerr polls Plex's Watchlist API every 60 seconds (`plex-watchlist-sync`, schedule `*/60 * * * * *`).
 3. Matching Watchlist entries auto-submit as Radarr / Sonarr requests (admin grants the `AUTO_REQUEST` permission in Seerr per user).
 4. The title downloads and appears in the library.
 
@@ -377,7 +380,7 @@ Managed in Prowlarr, auto-synced to all apps.
 | Indexer | Cost | Notes |
 |---------|------|-------|
 | NZBGeek | ~$12/yr | Excellent API reliability, community-curated |
-| NZBPlanet | ~$10/yr | Large index, good API hit allowance |
+| NZBPlanet | ~$10/yr | **Parked** (decided 2026-08-29) — not configured in Prowlarr. A full `bootstrap.py` re-run would re-add it; delete it again after |
 
 ### Download Flow
 

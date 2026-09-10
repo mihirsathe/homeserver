@@ -9,7 +9,7 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 **Check in this order:**
 
 1. **Did the Watchlist add reach Seerr?**
-   - Seerr polls Plex Watchlist every ~2 minutes (`plex-watchlist-sync` job). Expect up to a 2-minute lag between a family member tapping "Add to Watchlist" and Seerr submitting a request.
+   - Seerr polls Plex Watchlist every 60 seconds (`plex-watchlist-sync` job, `*/60 * * * * *`). Expect up to a 1-minute lag between a family member tapping "Add to Watchlist" and Seerr submitting a request.
    - Seerr → Requests should show the title as "Pending" or "Approved". If it never appears, the user probably doesn't have the **Auto-Request** permission — Seerr → Settings → Users → edit user → grant Auto-Request.
 
 2. **Does Seerr show it as "Approved"?**
@@ -309,7 +309,7 @@ There is no DNS layer and no proxy layer to bisect any more — a service either
 resolves and serves, or its advertisement isn't active.
 
 ```bash
-tailscale serve status          # is svc:radarr advertised and active?
+tailscale serve status --json   # is svc:radarr advertised and active? (plain `status` prints "No serve config" on 1.96)
 tailscale status                # is this host still on the tailnet?
 curl -fsS http://127.0.0.1:7878/ping   # is the backend itself alive?
 ```
@@ -318,7 +318,7 @@ Work the three in that order; they isolate cleanly.
 
 1. **Backend dead** (`curl` to loopback fails) → the container is the problem,
    not ingress. `docker compose ps radarr` / `docker compose logs radarr`.
-2. **Backend fine, service not listed by `tailscale serve status`** → the
+2. **Backend fine, service not listed by `tailscale serve status --json`** → the
    advertisement was lost. Re-issue it:
    ```bash
    tailscale serve --service=svc:radarr --bg 127.0.0.1:7878
