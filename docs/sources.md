@@ -6,7 +6,7 @@ Every package, image, plugin, and driver used in this stack — where it comes f
 
 ## Docker Images
 
-All pulled at deploy time via `docker compose pull` and refreshed monthly by `update-stack.sh`. Most track their maintainer's stable rolling tag — hotio publishes `:release`, Plex publishes `:public`, the rest track `:latest`.
+All pulled at deploy time via `docker compose pull` and refreshed monthly by `update-stack.sh`. Most track their maintainer's stable rolling tag — hotio publishes `:release`, the rest track `:latest`. Plex tracks `:latest` too, and **not** upstream's `:public`: that tag ships no server binary (see the pms-docker note below).
 
 **The Nextcloud plane is the exception: its tags are major-pinned.** Nextcloud refuses to skip a major version and Postgres will not open a data directory from an older major, so both upgrades are stateful and one-way. Pinning means the unattended monthly pull can only ever fetch patch releases; major bumps are a deliberate step ([operations.md](operations.md#nextcloud-major-upgrades)).
 
@@ -18,7 +18,7 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | radarr | `ghcr.io/hotio/radarr` | `:release` | GitHub Container Registry | hotio |
 | sonarr | `ghcr.io/hotio/sonarr` | `:release` | GitHub Container Registry | hotio |
 | lidarr | `ghcr.io/hotio/lidarr` | `:release` | GitHub Container Registry | hotio |
-| plex | `plexinc/pms-docker` | `:public` | Docker Hub | Plex Inc. (official) |
+| plex | `plexinc/pms-docker` | `:latest` (+ `PLEX_UPDATE_CHANNEL=16`) | Docker Hub | Plex Inc. (official) |
 | seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
@@ -40,6 +40,8 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 **`ollama/ollama`** is the upstream official image, run unmodified — the GPU-sharing behaviour is entirely environment variables in `docker-compose.yml`, so there is no custom image or sidecar to keep patched.
 
 **plexinc/pms-docker** is the official Plex image, used instead of a hotio Plex image because it handles `PLEX_CLAIM`, `ADVERTISE_IP`/`ALLOWED_NETWORKS` and the nvidia runtime properly. It does **not** support a `PLEX_PREFERENCE_*` mechanism — that claim was wrong, and hardware-transcoding preferences are set by `bootstrap.py` over the `/:/prefs` API.
+
+Its tags do not mean what the other images' tags mean. `:latest` and the version-numbered tags have the server baked in. `:public`, `:beta` and `:plexpass` **contain no Plex binary** — the image's [installBinary.sh](https://github.com/plexinc/pms-docker/blob/master/root/installBinary.sh) skips the download for them and an init script ([50-plex-update](https://github.com/plexinc/pms-docker/blob/master/root/etc/cont-init.d/50-plex-update)) fetches the server from plex.tv on every container start, with no retry and a silent exit on failure. That init script runs on `:latest` too and may upgrade past the baked build, and on any tag other than `public` it defaults to channel 8 (Plex Pass beta) with the server's token — hence `PLEX_UPDATE_CHANNEL=16` in the compose file ([plex-common.sh](https://github.com/plexinc/pms-docker/blob/master/root/plex-common.sh)). The stack ran `:public` until 2026-09; the switch was made while investigating the iOS app's "Server is Outdated" and turned out to be hardening rather than the cause — that was Tautulli holding the server's token ([decisions.md](decisions.md#tautulli-gets-its-own-plex-token-never-the-servers)). The tag reasoning is in [decisions.md](decisions.md#plex-tracks-latest-not-public).
 
 ---
 

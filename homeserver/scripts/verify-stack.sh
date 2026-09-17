@@ -468,6 +468,185 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+sec "Plex version"
+
+# Two different questions, both invisible to every other check in this file.
+#
+# 1. What is the server actually running, and is it current? Plex is the one
+#    service whose version is NOT simply what its image ships:
+#    plexinc/pms-docker's init script (50-plex-update) runs at every container
+#    start and may install a newer server into the writable layer, and on the
+#    `public`/`beta` tags that fetch is the ONLY source of a server binary and
+#    fails silently (`curl -s`, no retry, `exit 0` on an empty answer).
+#
+# 2. What do the APPS think it is running? Plex apps do not ask the server;
+#    they read the account's resource list on plex.tv, and plex.tv keys that
+#    record by token. Anything that calls plex.tv with the SERVER's token and
+#    its own X-Plex-Product / X-Plex-Version headers rewrites the server's
+#    record with its own identity. That is exactly what happened here
+#    (2026-09): bootstrap.py had seeded Tautulli with the server's
+#    PlexOnlineToken, the record read productVersion="v2.18.1" (Tautulli's
+#    version; the device list even named it after Tautulli's container), and
+#    iOS refused a fully current
+#    1.43.4 server as "Server is Outdated" — while everything below stayed
+#    green. Question 1 was the first theory and was wrong; question 2 is the
+#    check that would have caught it in one line.
+if docker inspect plex >/dev/null 2>&1; then
+    pimg=$(docker inspect plex -f '{{.Config.Image}}' 2>/dev/null)
+    ptag="${pimg##*:}"
+    case "$ptag" in
+        public|beta|plexpass)
+            bad "plex runs $pimg — that tag ships NO server binary; the version depends on a silent boot-time fetch (compose says :latest)" ;;
+        latest)
+            ok "plex image is $pimg (server baked in; the monthly pull sets the floor)" ;;
+        *)
+            # A version-pinned tag is the documented rollback state, not a
+            # fault — but it also switches the boot-time check off and the
+            # monthly pull will never move it, so it must not be forgotten.
+            warn "plex image is $pimg — pinned; neither the boot check nor the monthly pull will update it" ;;
+    esac
+
+    # Any tag other than `public` defaults the boot-time check to channel 8
+    # (Plex Pass beta) and sends the server's token with it. This account has
+    # Plex Pass, so without the override the server would quietly start running
+    # beta builds after a restart.
+    if [[ "$ptag" != "public" ]]; then
+        pchan=$(docker exec plex printenv PLEX_UPDATE_CHANNEL 2>/dev/null | tr -dc '0-9')
+        [[ "$pchan" == "16" ]] \
+            && ok "plex boot-time update check pinned to the public channel (PLEX_UPDATE_CHANNEL=16)" \
+            || bad "PLEX_UPDATE_CHANNEL is '${pchan:-unset}' in the plex container — on a non-public tag the boot check follows the Plex Pass BETA channel"
+    fi
+
+    # Did the most recent start's update check fail? Scoped to the container's
+    # own StartedAt so an older boot's noise does not count against this one.
+    pstart=$(docker inspect plex -f '{{.State.StartedAt}}' 2>/dev/null)
+    if [[ -n "$pstart" ]] && docker logs plex --since "$pstart" 2>&1 \
+            | grep -qE 'Could not get update version|Failed to fetch update'; then
+        warn "plex's boot-time update check failed on the last start (plex.tv unreachable at array start?) — running the baked/previous build"
+    fi
+
+    # /identity is unauthenticated. NOT `grep -o version=` — the XML prolog
+    # carries version="1.0" first and wins.
+    ident=$(curl -fsS --max-time 5 http://127.0.0.1:32400/identity 2>/dev/null)
+    running=$(python3 -c 'import sys, xml.etree.ElementTree as ET
+try: print(ET.fromstring(sys.stdin.read()).get("version") or "")
+except Exception: pass' <<<"$ident" 2>/dev/null)
+    pmid=$(python3 -c 'import sys, xml.etree.ElementTree as ET
+try: print(ET.fromstring(sys.stdin.read()).get("machineIdentifier") or "")
+except Exception: pass' <<<"$ident" 2>/dev/null)
+    # The same query the image's own updater makes, on the public channel. The
+    # response carries the release date, which is what turns "behind" into a
+    # verdict rather than a permanent warning.
+    pubxml=$(curl -fsS --max-time 10 \
+        'https://plex.tv/downloads/details/5?build=linux-x86_64&channel=16&distro=debian' 2>/dev/null)
+    # Quoted heredoc, inputs via the environment — same reason as the indexer
+    # classifier above.
+    report=$(PV_RUN="$running" PV_XML="$pubxml" python3 - <<'PY'
+import os, re, datetime as dt
+import xml.etree.ElementTree as ET
+
+run = os.environ["PV_RUN"].strip()
+
+def vt(s):  # "1.43.4.10903-e5521bd8c" -> (1, 43, 4, 10903)
+    return tuple(int(x) for x in re.findall(r"\d+", s.split("-")[0]))
+
+if not run:
+    print("WARN|plex /identity not answering — running version unknown")
+    raise SystemExit
+try:
+    rel = ET.fromstring(os.environ["PV_XML"]).find("Release")
+    pub = rel.get("version")
+    created = rel.get("createdAt", "")
+    assert pub
+except Exception:
+    print(f"WARN|plex is running {run}; plex.tv unreachable — currency not judged")
+    raise SystemExit
+if vt(run) >= vt(pub):
+    print(f"OK|plex {run} is current with the public channel ({pub})")
+    raise SystemExit
+
+# Behind. Being a few weeks behind is normal here: upstream rebuilds `latest`
+# some weeks after a release and the pull is monthly (2nd, 3am), and the
+# boot-time check only runs when the container restarts. Two full cycles
+# behind means both paths have failed — that is the state the iOS app
+# rejects, and it deserves a FAIL rather than a warning nobody reads.
+try:
+    age = (dt.datetime.now(dt.timezone.utc)
+           - dt.datetime.strptime(created[:19], "%Y-%m-%d %H:%M:%S")
+                        .replace(tzinfo=dt.timezone.utc)).days
+except Exception:
+    age = None
+fix = ("`docker restart plex` retries the fetch now; the monthly pull is the "
+       "guaranteed path — see troubleshooting.md")
+if age is not None and age > 60:
+    print(f"BAD|plex {run} is BEHIND public {pub} (released {age}d ago — two "
+          f"monthly cycles missed; iOS will call it outdated). {fix}")
+else:
+    print(f"WARN|plex {run} is behind public {pub} (released "
+          f"{age if age is not None else '?'}d ago). {fix}")
+PY
+)
+    # Herestring, not a pipe: counters must increment in this shell.
+    while IFS='|' read -r verdict msg; do
+        case "$verdict" in
+            OK)   ok   "$msg" ;;
+            BAD)  bad  "$msg" ;;
+            WARN) warn "$msg" ;;
+        esac
+    done <<< "$report"
+
+    # Question 2: the record the apps read. A plain GET with the server's
+    # token — no X-Plex-Product/Version headers — does not touch the record
+    # (verified: lastSeenAt did not move across repeated reads), so this stays
+    # read-only. The token is used, never printed.
+    PLEX_PREFS="/mnt/user/appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml"
+    ptok=$(grep -o 'PlexOnlineToken="[^"]*"' "$PLEX_PREFS" 2>/dev/null | cut -d'"' -f2)
+    if [[ -z "$ptok" ]]; then
+        warn "no PlexOnlineToken in Preferences.xml (server not claimed?) — plex.tv record not checked"
+    elif [[ -z "$pmid" || -z "$running" ]]; then
+        warn "plex /identity not answering — plex.tv record not checked"
+    else
+        seen=$(curl -fsS --max-time 10 -H "X-Plex-Token: $ptok" \
+                    -H 'X-Plex-Client-Identifier: verify-stack-readonly' \
+                    'https://plex.tv/api/v2/resources' 2>/dev/null \
+               | PV_MID="$pmid" python3 -c 'import os, sys, xml.etree.ElementTree as ET
+try:
+    for r in ET.fromstring(sys.stdin.read()).iter("resource"):
+        if r.get("clientIdentifier") == os.environ["PV_MID"]:
+            print("|".join(str(r.get(k) or "") for k in ("productVersion", "product", "name"))); break
+except Exception: pass' 2>/dev/null)
+        IFS='|' read -r seen_ver seen_prod seen_name <<<"$seen"
+        if [[ -z "$seen_ver" ]]; then
+            warn "could not read this server's record from plex.tv — what the apps see is unknown"
+        elif [[ "$seen_ver" == "$running" ]]; then
+            ok "plex.tv lists this server as $seen_ver — matches what is running (apps see the truth)"
+        else
+            bad "plex.tv lists this server as '$seen_prod $seen_ver' named '$seen_name' — running $running. Something is calling plex.tv with the SERVER's token (Tautulli?); apps will say 'Server is Outdated'. See troubleshooting.md"
+        fi
+
+        # The one known writer of that record. Tautulli's config is the
+        # bind-mounted file in the stack dir; compare, never print.
+        TCFG="$STACK_DIR/configs/tautulli/config.ini"
+        if docker inspect tautulli >/dev/null 2>&1; then
+            if [[ ! -r "$TCFG" ]]; then
+                warn "tautulli deployed but $TCFG unreadable — token not compared"
+            else
+                ttok=$(grep -iE '^pms_token *=' "$TCFG" | head -1 | cut -d= -f2- | tr -d ' "\r')
+                if [[ -z "$ttok" ]]; then
+                    warn "tautulli has no Plex token — Tautulli → Settings → Plex Media Server → Fetch Token"
+                elif [[ "$ttok" == "$ptok" ]]; then
+                    bad "tautulli is running on the SERVER's own PlexOnlineToken — its plex.tv polls rewrite the server's record as Tautulli (iOS 'Server is Outdated'). Give it its own token: bootstrap.py, or Settings → Plex Media Server → Fetch Token"
+                else
+                    ok "tautulli has its own Plex token (not the server's)"
+                fi
+            fi
+        fi
+    fi
+else
+    warn "plex not deployed — version currency not checked"
+fi
+
+# ---------------------------------------------------------------------------
 sec "AI plane"
 
 if docker inspect ollama >/dev/null 2>&1; then

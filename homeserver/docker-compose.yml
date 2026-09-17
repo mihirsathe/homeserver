@@ -435,9 +435,37 @@ services:
   # ports for DLNA/GDM are deliberately NOT published — DLNA is off and
   # clients discover via Plex account, not broadcast. Closes CVE-2021-33959
   # UDP amplification.
+  #
+  # Tag is `:latest`, NOT `:public`. Upstream's `public` and `beta` tags ship
+  # NO Plex binary: installBinary.sh writes `version=public` into the image and
+  # skips the download. The server is then fetched by an init script
+  # (50-plex-update) on EVERY container start — one `curl -s` against plex.tv
+  # with no retry, no timeout, no `-f`, and a silent `exit 0` when it comes
+  # back empty. The version that runs is whatever the last SUCCESSFUL boot-time
+  # fetch left in the container's writable layer. So the monthly `compose pull`
+  # did nothing for Plex (there was nothing in the image to update), a fetch
+  # that fails at array start leaves the server on a stale build with only
+  # "Could not get update version" in the log, and the troubleshooting.md
+  # rollback (retag the previous image) would roll back to an Ubuntu base with
+  # no server in it.
+  #
+  # Hardening, not a fix: this was the first theory for the iOS app's "Server
+  # is Outdated" (2026-09) and it was WRONG — the server was fully current the
+  # whole time. The real cause was Tautulli running on the server's own token
+  # and rewriting the server's version record on plex.tv; see the tautulli
+  # service below and bootstrap.py's mint_tautulli_token. The tag change stays
+  # because the weakness above is real and the fix is cheap.
+  #
+  # `:latest` bakes the current public release into the image, so the monthly
+  # pull sets a floor for Plex the way it does for every other container, and
+  # a retagged old image is a real rollback. The init script still runs at
+  # start and may upgrade past the baked build when plex.tv answers; the
+  # channel override below keeps that on the public channel. verify-stack.sh
+  # asserts the tag, the channel, and that the running version is not behind
+  # what the public channel offers.
   # ---------------------------------------------------------------------------
   plex:
-    image: plexinc/pms-docker:public
+    image: plexinc/pms-docker:latest
     container_name: plex
     runtime: nvidia
     networks:
@@ -449,6 +477,12 @@ services:
       - PLEX_CLAIM=${PLEX_CLAIM}
       - ADVERTISE_IP=http://${PLEX_LAN_IP}:32400
       - ALLOWED_NETWORKS=${PLEX_LAN_SUBNET}
+      # 16 = public. On any tag other than `public` the image's boot-time update
+      # check defaults to channel 8 (Plex Pass beta) and sends the server's
+      # token with the request. This account has Plex Pass, so without this
+      # line switching to `:latest` would have quietly moved the server onto
+      # beta builds. Never remove without reading plex-common.sh upstream.
+      - PLEX_UPDATE_CHANNEL=16
       # Minimal NVIDIA capability surface. `all` grants compute+utility+
       # video+graphics+display — way more than Plex needs, and historical
       # nvidia-container-toolkit escapes (CVE-2024-0132) abused the broader
@@ -546,8 +580,18 @@ services:
 
   # ---------------------------------------------------------------------------
   # TAUTULLI — Plex analytics, stream history, user activity, newsletters
-  # config.ini is pre-seeded with the API key; the rest (Plex server
-  # connection, notifications) is completed via the wizard on first open.
+  # config.ini is pre-seeded with the API key and, by bootstrap.py, the Plex
+  # server connection; notifications are completed in the UI.
+  #
+  # Tautulli must run on a Plex token of ITS OWN — never the server's
+  # PlexOnlineToken. plex.tv keys device records by token, and Tautulli's
+  # plex.tv polls carry X-Plex-Product/X-Plex-Version headers describing
+  # Tautulli. On the server's token those headers rewrite the SERVER's record:
+  # plex.tv listed this server as version "v2.18.1" (and its device list named
+  # it after Tautulli's container), and iOS refused a fully current server as
+  # "Server is Outdated" (2026-09).
+  # bootstrap.py mints Tautulli its own token; verify-stack.sh compares the
+  # two and fails if they match.
   # ---------------------------------------------------------------------------
   tautulli:
     image: ghcr.io/hotio/tautulli:release

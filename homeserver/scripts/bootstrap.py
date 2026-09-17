@@ -757,6 +757,58 @@ def configure_plex(token: str, lan_ip: str):
 # ---------------------------------------------------------------------------
 # Configure Tautulli: skip its first-run wizard by pre-seeding PMS fields
 # ---------------------------------------------------------------------------
+def mint_tautulli_token(owner_token: str, client_id: str, device_name: str) -> Optional[str]:
+    """Mint a Plex token that belongs to TAUTULLI, not to the server.
+
+    Tautulli must never run on the server's own PlexOnlineToken. plex.tv keys
+    its device records by token, and every request Tautulli makes to plex.tv
+    carries X-Plex-Product / X-Plex-Version headers describing *Tautulli*.
+    With the server's token those headers rewrite the SERVER's record: on this
+    box it read productVersion="v2.18.1" (Tautulli's version) and was named
+    after Tautulli's container, and every Plex app that reads the account's
+    resource list — which is how apps learn a server's version; they do not
+    ask the server — decided a fully current 1.43.4 server was below its
+    minimum and refused it as "Server is Outdated" (iOS, 2026-09). The
+    server's own hourly publish only re-sends when something changed, so the
+    bad record stuck until the next daily publish, and Tautulli's 12-hour
+    refresh put it straight back. Tautulli's maintainer names token reuse as
+    the cause and the only fix (Tautulli/Tautulli#2723).
+
+    This is the PIN flow behind Tautulli's own "Fetch Token" button, with the
+    browser sign-in replaced by linking the PIN with the owner's token. The
+    result is a token bound to `client_id` — Tautulli's own device record on
+    plex.tv — so its headers can only ever describe itself. Returns None on
+    any failure; the caller then leaves the token blank and says which button
+    to press rather than falling back to the server's token.
+    """
+    hdrs = {
+        "Accept": "application/json",
+        "X-Plex-Product": "Tautulli",
+        "X-Plex-Version": "bootstrap",
+        "X-Plex-Client-Identifier": client_id,
+        "X-Plex-Device-Name": device_name,
+        "X-Plex-Platform": "Linux",
+    }
+    try:
+        r = requests.post("https://plex.tv/api/v2/pins?strong=true", headers=hdrs, timeout=15)
+        r.raise_for_status()
+        pin = r.json()
+        # The same call plex.tv/link makes once you are signed in there.
+        r = requests.put("https://plex.tv/api/v2/pins/link",
+                         headers={**hdrs, "X-Plex-Token": owner_token},
+                         data={"code": pin["code"]}, timeout=15)
+        r.raise_for_status()
+        r = requests.get(f"https://plex.tv/api/v2/pins/{pin['id']}", headers=hdrs, timeout=15)
+        r.raise_for_status()
+        tok = (r.json().get("authToken") or "").strip()
+        if tok and tok != owner_token:
+            return tok
+        print("  ⚠ Tautulli: PIN linked but plex.tv returned no distinct token")
+    except Exception as e:
+        print(f"  ⚠ Tautulli: could not mint its own Plex token: {e}")
+    return None
+
+
 def configure_tautulli(plex, token: str) -> None:
     """Pre-seed Tautulli's PMS connection so the first-run wizard is skipped.
 
@@ -766,11 +818,14 @@ def configure_tautulli(plex, token: str) -> None:
     stays pointed at the right content. A docker restart picks it up.
 
     `plex` is a connected plexapi.PlexServer; we pull machineIdentifier and
-    friendlyName straight off it. `token` is passed explicitly because
-    plexapi stores it as a private attribute and we'd rather not rely on
-    that stability.
+    friendlyName straight off it. `token` is the OWNER's token from .env — it
+    is used only to mint Tautulli a token of its own (see mint_tautulli_token
+    for why it must never be written into Tautulli's config), and this
+    function repairs an install that was seeded that way by an earlier
+    revision of this script (2026-09-08).
     """
     import configparser
+    import uuid
 
     config_path = STACK_DIR / "configs" / "tautulli" / "config.ini"
     if not config_path.exists():
@@ -780,15 +835,53 @@ def configure_tautulli(plex, token: str) -> None:
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
 
-    if cfg.has_option("General", "first_run_complete") and \
-       cfg.get("General", "first_run_complete") == "1":
-        print("  ✓ Tautulli: first-run already complete")
-        return
-
     if not cfg.has_section("General"):
         cfg.add_section("General")
     if not cfg.has_section("PMS"):
         cfg.add_section("PMS")
+
+    current = cfg.get("PMS", "pms_token", fallback="").strip().strip('"')
+    first_run_done = cfg.get("General", "first_run_complete", fallback="") == "1"
+
+    if first_run_done and current and current != token:
+        print("  ✓ Tautulli: first-run already complete, running on its own token")
+        return
+
+    # Either a fresh seed, or the repair path: an existing install whose
+    # pms_token is the server's PlexOnlineToken. Same fix both ways.
+    if first_run_done and current == token:
+        print("  ! Tautulli: is using the SERVER's PlexOnlineToken — this is what made")
+        print("    plex.tv report the server as Tautulli's version (iOS 'Server is Outdated')")
+
+    # Tautulli sends X-Plex-Client-Identifier = pms_client_id (falling back to
+    # its self-generated pms_uuid). Pin one here and mint the token against
+    # it, so token and identifier agree the way they do after the UI's own
+    # sign-in flow.
+    client_id = cfg.get("PMS", "pms_client_id", fallback="").strip().strip('"') or str(uuid.uuid4())
+    own_token = mint_tautulli_token(token, client_id, "tautulli (homeserver)")
+
+    # STOP Tautulli before touching the file, START it after — never
+    # write-then-restart. Tautulli flushes its in-memory config to config.ini
+    # on shutdown ("Signal 15 caught, saving and exiting"), so a restart after
+    # the write let the OLD token overwrite the new one and the minted token
+    # was lost (2026-09-17, first repair attempt). Its shutdown write is what
+    # is on disk now, so re-read before editing. On a fresh install the
+    # container is up with an unconfigured Tautulli and the same order holds.
+    running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "tautulli"],
+                             capture_output=True, text=True).stdout.strip() == "true"
+    if running:
+        try:
+            subprocess.run(["docker", "stop", "tautulli"], check=True,
+                           capture_output=True, text=True)
+            print("  ✓ Tautulli: stopped (it rewrites config.ini on shutdown)")
+        except subprocess.CalledProcessError as e:
+            print(f"  ⚠ Tautulli: stop failed: {e.stderr.strip()[:200]} — not writing config")
+            return
+        cfg = configparser.ConfigParser()
+        cfg.read(config_path)
+        for sect in ("General", "PMS"):
+            if not cfg.has_section(sect):
+                cfg.add_section(sect)
 
     cfg.set("General", "first_run_complete", "1")
     # Tautulli talks to Plex over the frontend docker network — container DNS
@@ -805,22 +898,43 @@ def configure_tautulli(plex, token: str) -> None:
     cfg.set("PMS", "pms_url",        "http://plex:32400")
     cfg.set("PMS", "pms_identifier", plex.machineIdentifier)
     cfg.set("PMS", "pms_name",       plex.friendlyName)
-    cfg.set("PMS", "pms_token",      token)
+    cfg.set("PMS", "pms_client_id",  client_id)
+    if own_token:
+        cfg.set("PMS", "pms_token", own_token)
+    else:
+        # Never the server's token — a blank one is a visible failure (Tautulli
+        # logs "no token provided" until the button is pressed); the server's
+        # token is an invisible one that breaks every Plex app instead.
+        cfg.set("PMS", "pms_token", "")
+        print("  ⚠ Tautulli: left pms_token blank. Open Tautulli → Settings → Plex Media")
+        print("    Server → Fetch Token and sign in — that mints Tautulli its own token.")
 
     # Truncate-in-place so the bind-mounted inode survives.
     with open(config_path, "w") as f:
         cfg.write(f)
     config_path.chmod(0o600)
-    print(f"  ✓ Tautulli: seeded PMS connection → {plex.friendlyName}")
+    print(f"  ✓ Tautulli: seeded PMS connection → {plex.friendlyName}"
+          + (" (own plex.tv token minted)" if own_token else ""))
 
     try:
         subprocess.run(
-            ["docker", "restart", "tautulli"],
+            ["docker", "start" if running else "restart", "tautulli"],
             check=True, capture_output=True, text=True,
         )
-        print("  ✓ Tautulli: restarted to pick up new config")
+        print("  ✓ Tautulli: started on the new config")
     except subprocess.CalledProcessError as e:
-        print(f"  ⚠ Tautulli: restart failed: {e.stderr.strip()[:200]}")
+        print(f"  ⚠ Tautulli: start failed: {e.stderr.strip()[:200]}")
+
+    if first_run_done and current == token and own_token:
+        # The server's record on plex.tv still carries Tautulli's version until
+        # the server publishes again (daily, or on start). Restart it now so
+        # the apps stop refusing it today rather than tomorrow morning.
+        try:
+            subprocess.run(["docker", "restart", "plex"], check=True,
+                           capture_output=True, text=True)
+            print("  ✓ Plex: restarted so it re-publishes its real version to plex.tv")
+        except subprocess.CalledProcessError as e:
+            print(f"  ⚠ Plex: restart failed: {e.stderr.strip()[:200]} — restart it by hand")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -837,6 +951,16 @@ def _parse_args() -> argparse.Namespace:
         "--timeout", type=int, default=180,
         help="Per-service wait timeout in seconds (default: 180)"
     )
+    # A full run re-does every step — including Prowlarr's indexer sync, which
+    # re-adds anything deliberately parked (TODOS.md). The Tautulli step is the
+    # one that has needed running on its own: it is the repair for an install
+    # that was seeded with the server's Plex token (troubleshooting.md, "The
+    # Plex app says Server is Outdated").
+    p.add_argument(
+        "--only", choices=["tautulli"],
+        help="Run a single step and exit. 'tautulli' (re)seeds Tautulli's Plex "
+             "connection and mints it a token of its own."
+    )
     return p.parse_args()
 
 
@@ -851,6 +975,21 @@ def main() -> None:
 
     env = load_env()
     lan_ip = require(env, "PLEX_LAN_IP")
+
+    if args.only == "tautulli":
+        # Connect only — configure_plex() would also re-apply preferences and
+        # re-create libraries, which is not what a Tautulli repair asked for.
+        print("\n=== Tautulli (only) ===\n")
+        plex_token = require(env, "PLEX_TOKEN")
+        from plexapi.server import PlexServer
+        try:
+            plex = PlexServer(f"http://{lan_ip}:32400", plex_token)
+        except Exception as e:
+            print(f"  ⚠ Plex: could not connect: {e}")
+            sys.exit(1)
+        configure_tautulli(plex, plex_token)
+        return
+
     sabnzbd_key = require(env, "SABNZBD_API_KEY")
 
     # Every *arr serves at root now (UrlBase stripped). bootstrap.py still

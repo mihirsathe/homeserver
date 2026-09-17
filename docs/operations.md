@@ -250,6 +250,7 @@ No dedicated metrics stack — the goal is low operational cost, not an observab
 | UPS on battery / low battery | apcupsd events | Unraid's notification agent forwards apcupsd events (ONBATT, OFFBATT, LOWBATT, COMMLOST) once `SERVICE=enable` is set in `ups.cfg` |
 | Container liveness | Docker healthchecks | `docker compose ps` shows `unhealthy` within ~90s of a crash. Fix Common Problems plugin surfaces unhealthy containers on the dashboard |
 | Update-stack failures | update-stack.sh log | Configure User Scripts email-on-failure on the `media_stack_update` job |
+| Plex apps refusing the server ("Server is Outdated") | `verify-stack.sh` → *Plex version* | Nothing else sees this: the container stays healthy. The section reads what plex.tv tells the apps this server runs and fails if it differs from `/identity`, fails if Tautulli holds the server's token (the 2026-09 cause), and warns/fails if the server itself is behind the public channel; see [troubleshooting.md](troubleshooting.md#the-plex-app-says-server-is-outdated) |
 | Gluetun tunnel down (SAB/Prowlarr offline) | `docker logs gluetun` | Container healthcheck flips to `unhealthy`; Fix Common Problems surfaces it. SAB + Prowlarr will stay unreachable until Mullvad reconnects (that's the kill-switch doing its job) |
 | Tailscale offline | `tailscale status` from an admin device | If admin URLs stop resolving, check tailnet membership in the Tailscale admin console |
 | Stream activity / client issues | Tautulli | Tautulli → Settings → Notification Agents — email, Discord, Telegram, etc. |

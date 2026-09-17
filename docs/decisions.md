@@ -22,6 +22,30 @@ Config-as-code. The entire stack is one file that can be version-controlled, dif
 
 Consistent `PUID`/`PGID`/`UMASK` pattern across all containers, lean builds. Plex uses `plexinc/pms-docker` because it is the official image and handles the nvidia runtime properly. (An earlier revision of this line also credited it with `PLEX_PREFERENCE_*` environment variables — it has never supported those; server preferences are set by `bootstrap.py` over the `/:/prefs` API.)
 
+### Tautulli gets its own Plex token, never the server's
+
+Two tokens look interchangeable — both belong to the same account, both work against every Plex API — and `bootstrap.py` treated them that way on 2026-09-08, copying the server's `PlexOnlineToken` into Tautulli's `pms_token` to skip the first-run wizard. They are not interchangeable, because plex.tv keys **device records** by token. Tautulli identifies itself on every plex.tv call (`X-Plex-Product: Tautulli`, `X-Plex-Version: v2.18.1`), and on the server's token those headers were applied to the *server's* record. The account's resource list — which is what every Plex app reads to learn a server's version; they never ask the server — then said this server ran "v2.18.1" and was named after Tautulli's container. iOS refused a fully current server as *Server is Outdated*, and did so *after restarts* because the whole stack restarts together: Plex publishes the truth on start, Tautulli's startup refresh overwrites it seconds later, and the server only re-publishes when something changes on its side.
+
+The first theory — the `:public` image tag leaving the server stale — was wrong, and the way it was wrong matters: it checked the server's version, which is real but is not the number the apps use. `verify-stack.sh` now checks the number the apps use, and compares Tautulli's token with the server's.
+
+So `bootstrap.py` mints Tautulli a token of its own through plex.tv's PIN flow (the same thing Tautulli's *Fetch Token* button does, minus the browser) bound to a client identifier it writes into `pms_client_id`, repairs an install that was seeded the old way, and on failure leaves the token *blank* — a visible failure Tautulli logs — rather than fall back to the server's token, an invisible one that breaks every Plex app instead. Tautulli's maintainer names token reuse as the cause and the only fix ([Tautulli#2723](https://github.com/Tautulli/Tautulli/issues/2723)).
+
+### Plex tracks `:latest`, not `:public`
+
+Upstream's `:public` tag reads like the obvious choice for a family server — and the stack ran it until 2026-09. It is not a normal tag. `public` (and `beta`, `plexpass`) ships **no Plex binary**: the build writes `version=public` into the image and skips the download, and an init script fetches the server from plex.tv on every container start with one `curl -s`, no retry, no timeout, and `exit 0` when nothing comes back. Three consequences, all silent:
+
+- The version that runs is whatever the last *successful* boot-time fetch installed into the container's writable layer. A fetch that fails at array start — DNS not up yet, plex.tv slow — leaves the server on a stale build, and the only trace is one log line.
+- The monthly `update-stack.sh` pull did nothing for Plex. There was nothing in the image to update.
+- The rollback in troubleshooting.md (retag the previous image) would have rolled back to an Ubuntu base with no server in it.
+
+This was found while chasing the iOS *Server is Outdated* report and was **not** its cause (see the Tautulli decision above; the server was current throughout). It is kept as hardening because the weakness is real and the change is cheap.
+
+`:latest` bakes the current public release into the image, so the monthly pull sets a floor for Plex the same way it does for every other container, and a retagged image is a real rollback. The init script still runs at start and may upgrade past the baked build when plex.tv answers, which is fine — the floor is what matters. What is *not* fine is the channel: on any tag other than `public` the script defaults to channel 8, the Plex Pass beta channel, and sends the server's token. This account has Plex Pass, so `:latest` alone would have moved a family server onto beta builds. `PLEX_UPDATE_CHANNEL=16` pins the check to public and is not optional.
+
+Version-pinned tags were considered and rejected as the default: they switch the boot check off entirely and the monthly pull never moves them, so they trade a silent staleness for a deliberate one. They remain the right *rollback* state, and `verify-stack.sh` warns while one is in place.
+
+The cost is being up to a few weeks behind between upstream's `latest` rebuild and the next monthly pull.
+
 ### Plex port-forward + Tailscale admin plane (no Cloudflare)
 
 One port open on the router — **TCP 32400 → Plex** — and nothing else. Plex ships its own wildcard TLS (`*.plex.direct`, provisioned per-server by Plex Inc.), so there's no cert to manage and no reverse proxy in the path. Native Plex clients negotiate direct-connect via `app.plex.tv`, so a public URL like `plex.yourdomain.com` buys nothing.

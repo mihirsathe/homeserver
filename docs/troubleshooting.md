@@ -276,6 +276,45 @@ Cause is always one of two things:
 
 ---
 
+## The Plex app says "Server is Outdated"
+
+The rewritten Plex apps (iOS 2025, then Android, Apple TV, Fire TV) refuse a server below a minimum version and show *Server is Outdated*. The trap: **the apps do not ask the server what version it runs.** They read the account's resource list on plex.tv, and plex.tv fills that record from whatever last talked to it *with the server's token*. Here the server was fully current the whole time and the record said otherwise.
+
+**What happened on this box (2026-09).** `bootstrap.py` had seeded Tautulli's `pms_token` with the server's own `PlexOnlineToken` (PR #40, 2026-09-08). Every call Tautulli makes to plex.tv carries `X-Plex-Product: Tautulli` and `X-Plex-Version: v2.18.1`; with the server's token, plex.tv applied those headers to the *server's* device record. The account's resource list then read `productVersion="v2.18.1"` for a server actually running 1.43.4.10903 (and the account's device list named that same record `bb87411c41ed (Tautulli)`, after Tautulli's container), and iOS compared "v2.18.1" against its floor and refused. The server re-publishes itself to plex.tv on start and once a day, which corrected the record — and Tautulli's startup refresh plus its 12-hourly user/library refresh put it straight back. Hence "after restarts": the whole stack restarts together, Plex publishes the truth, Tautulli overwrites it seconds later. Tautulli's maintainer names token reuse as the cause and the only fix ([Tautulli#2723](https://github.com/Tautulli/Tautulli/issues/2723)); the Plex forums have carried the same false positive since April 2025 without attribution.
+
+The first theory — that the `:public` image tag had left the server stale — was wrong, and worth remembering *why*: it checked the server's version, which is not the number the apps use.
+
+**Check:**
+
+```bash
+# All of it in one place: the running version, what the public channel offers,
+# what plex.tv is TELLING THE APPS this server runs, and whose token Tautulli holds.
+bash /mnt/user/appdata/homeserver/homeserver/scripts/verify-stack.sh --quick 2>&1 | sed -n '/Plex version/,/AI plane/p'
+
+# By hand. What the apps see (uses the server's token from Preferences.xml, prints nothing secret):
+TOK=$(grep -o 'PlexOnlineToken="[^"]*"' "/mnt/user/appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml" | cut -d'"' -f2)
+curl -s -H "X-Plex-Token: $TOK" 'https://plex.tv/api/v2/resources' | grep -o '<resource[^>]*provides="server"[^>]*>' | grep -oE '(name|product|productVersion)="[^"]*"'
+
+# What is actually running. NOT `grep -o version=` on /identity — the XML prolog's version="1.0" wins.
+curl -s http://localhost:32400/identity | grep -o 'MediaContainer[^>]*version="[^"]*"'
+```
+
+If plex.tv's `productVersion` is not the server's version — or `product` is not `Plex Media Server` — something is talking to plex.tv with the server's token. Tautulli is the known one; check by comparing its `pms_token` in `homeserver/configs/tautulli/config.ini` with the token above (`verify-stack.sh` does this without printing either).
+
+**Fix:**
+
+1. **Give Tautulli its own token.**
+   ```bash
+   python3 /mnt/user/appdata/homeserver/homeserver/scripts/bootstrap.py --only tautulli
+   ```
+   That mints one through plex.tv's PIN flow, stops Tautulli *before* writing it (Tautulli rewrites `config.ini` from memory on shutdown, so write-then-restart silently keeps the old token — that cost one attempt on 2026-09-17), starts Tautulli, and restarts Plex. The manual equivalent is Tautulli → Settings → Plex Media Server → **Fetch Token** and sign in, then `docker restart plex`. Never paste the server's token back in. A full `bootstrap.py` run does the same step, but also re-runs everything else (see TODOS.md about re-added indexers).
+2. **Confirm what the apps see** — re-read the plex.tv record from the Check block above, or re-run `verify-stack.sh`; `productVersion` should match `/identity` within a minute of Plex coming back up.
+3. **Re-open the app.** It caches the resource list briefly; kill and relaunch if it still complains.
+
+**If plex.tv and `/identity` agree and the server is genuinely behind**, that is the other, rarer path — the image's boot-time update check. `plexinc/pms-docker` runs `50-plex-update` on every start: one `curl -s` to plex.tv, no retry, silent `exit 0` on failure. On `:latest` (what this stack runs, with `PLEX_UPDATE_CHANNEL=16`) a failure just leaves the baked build, at most a monthly pull behind; `docker restart plex` retries it, and `docker compose pull plex && docker compose up -d plex` moves the floor. Never "fix" this by going back to `:public` — that tag contains no server at all, so the fetch becomes the only source of one (compose comments and [decisions.md](decisions.md#plex-tracks-latest-not-public)).
+
+---
+
 ## Cache pool fills or nearly full
 
 See [disaster-recovery.md#cache-pool-fill](disaster-recovery.md#cache-pool-fill) for the triage script. Shortest fix for an emergency:
@@ -399,6 +438,8 @@ docker compose up -d <service>
 ```
 
 Then pin that service's tag to a specific version in `docker-compose.yml` until upstream fixes whatever broke.
+
+**Plex is the one service where the retag alone does not hold.** `plexinc/pms-docker:latest` has the server baked in, so the retagged image does start the older build — but the image's boot-time update check (`50-plex-update`) runs on every start and, if plex.tv answers, upgrades the writable layer straight back to the current public release. For Plex, go directly to the second step: pin `image: plexinc/pms-docker:<version>` (tags like `1.43.4.10903-e5521bd8c` exist on Docker Hub for every release). A version tag matches what is installed, so the init script short-circuits before it ever calls plex.tv, and the pin genuinely holds. `verify-stack.sh` warns while a pin is in place so it does not get forgotten. Never "roll back" Plex to `:public` — that tag contains no server at all (see [The Plex app says "Server is Outdated"](#the-plex-app-says-server-is-outdated)).
 
 ---
 
