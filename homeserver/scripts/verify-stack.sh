@@ -467,6 +467,23 @@ else
     bad "unexpected public binds: $(echo "$pub" | tr '\n' ' ')— expected only 32400"
 fi
 
+# SAB gates on source address as well as Host, and judges the X-Forwarded-For
+# that `tailscale serve` adds — the tailnet client's 100.x address. Probing
+# with that header shaped like serve's is checkable from this host, unlike the
+# Service URL itself; the public-address probe proves the gate still exists.
+sab_probe() {
+    curl -s --max-time 5 -H "X-Forwarded-For: $1" -H "Host: sab.${TAILNET:-localhost}" \
+        http://127.0.0.1:8080/ 2>/dev/null | grep -qi 'access-denied' && echo denied || echo allowed
+}
+if curl -s -o /dev/null --max-time 5 http://127.0.0.1:8080/ 2>/dev/null; then
+    [[ $(sab_probe 100.100.100.100) == allowed ]] \
+        && ok "sab admits tailnet clients (100.64.0.0/10 in local_ranges)" \
+        || bad "sab refuses tailnet clients — sabnzbd.org/access-denied via svc:sab; add 100.64.0.0/10 to local_ranges"
+    [[ $(sab_probe 8.8.8.8) == denied ]] \
+        && ok "sab refuses public source addresses" \
+        || bad "sab admits a public X-Forwarded-For — inet_exposure/local_ranges too open"
+fi
+
 # ---------------------------------------------------------------------------
 sec "Plex version"
 

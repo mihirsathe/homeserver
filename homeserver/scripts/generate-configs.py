@@ -436,6 +436,15 @@ url_base =
 # TAILNET_NAME comes from .env (e.g. tail1a2b3.ts.net). If it's blank the
 # FQDN entries are simply omitted and SAB is reachable on loopback only.
 host_whitelist = localhost,sabnzbd,gluetun,mediaserver.local{sab_serve_hosts}
+# The second gate, on source address. SAB 5.x checks every X-Forwarded-For hop
+# as well as the peer (verify_xff_header), and `tailscale serve` sets XFF to the
+# tailnet client's 100.x address — CGNAT space, which SAB does not count as
+# local. Without 100.64.0.0/10 here every tailnet browser gets
+# sabnzbd.org/access-denied (2026-10). Setting local_ranges REPLACES SAB's
+# private-range default rather than adding to it, so RFC1918 must stay listed:
+# the peer is always the Docker gateway (172.x), and the *arrs reach the API
+# from the same space. fd7a:115c:a1e0::/48 is Tailscale's IPv6 range.
+local_ranges = 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fd7a:115c:a1e0::/48
 api_key = {api_key}
 nzo_ids = {api_key}
 wizard_step = 10
