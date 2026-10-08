@@ -71,7 +71,7 @@ GUI must never sit behind anything containerised.
 | sonarr | `hotio/sonarr` | `svc:sonarr` | 8989 (loopback) | TV automation |
 | lidarr | `hotio/lidarr` | `svc:lidarr` | 8686 (loopback) | Music automation |
 | plex | `plexinc/pms-docker` | — (direct on `:32400`) | 32400 (PUBLIC) | Media server + GPU transcode (only public service; fronted by nothing) |
-| seerr | `ghcr.io/seerr-team/seerr` | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor) |
+| seerr | `ghcr.io/seerr-team/seerr` + local patch, built by compose (`homeserver/seerr/`) | `svc:seerr` | 5055 | Content request portal (Overseerr+Jellyseerr successor); the patch makes a Watchlist add request one season |
 | bazarr | `hotio/bazarr` | `svc:bazarr` | 6767 (loopback) | Subtitle automation |
 | tautulli | `hotio/tautulli` | `svc:tautulli` | 8181 (loopback) | Plex analytics, stream history, notifications |
 | actual_server | `actualbudget/actual-server` | `svc:actual` | 5006 (loopback) | Envelope/zero-based budgeting. Needs a Secure Context, which every service now has — see decisions.md |
@@ -354,7 +354,7 @@ Family uses the Plex app they already have:
 
 1. Search a title in Plex → tap "Add to Watchlist".
 2. Seerr polls Plex's Watchlist API every 60 seconds (`plex-watchlist-sync`, schedule `*/60 * * * * *`).
-3. Matching Watchlist entries auto-submit as Radarr / Sonarr requests (admin grants the `AUTO_REQUEST` permission in Seerr per user).
+3. Matching Watchlist entries auto-submit as Radarr / Sonarr requests (admin grants the `AUTO_REQUEST` permission in Seerr per user). A show becomes a request for **one season** — the one currently airing if the show is on, otherwise the earliest season the library lacks — not every season: Plex's watchlist carries no season, and stock Seerr would request all of them (see [decisions.md](decisions.md#a-watchlist-add-requests-one-season-not-the-whole-series)). Later seasons arrive through Sonarr's "Monitor New Items".
 4. The title downloads and appears in the library.
 
 No-one other than the admin ever needs to touch Seerr directly. Seerr's web UI exists as an admin tool (managing requests, tuning quality profiles, granting permissions) on the tailnet.
@@ -387,7 +387,7 @@ Managed in Prowlarr, auto-synced to all apps.
 
 ```
 Plex Watchlist addition (family)
-    → Seerr (polls Plex every 5 min, auto-submits request)
+    → Seerr (polls Plex every 60 s, auto-submits request — one season for a show)
     → Radarr / Sonarr / Lidarr
     → Prowlarr (searches all indexers, via Gluetun)
     → SABnzbd (downloads NZB over Mullvad VPN on port 563)

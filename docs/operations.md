@@ -18,7 +18,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 
 | Task | Frequency | How |
 |------|-----------|-----|
-| Container image updates | Monthly (2nd, 3am — the 1st belongs to the parity check) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned |
+| Container image updates | Monthly (2nd, 3am — the 1st belongs to the parity check) | `update-stack.sh` via User Scripts — patch releases only for Nextcloud/Postgres, which are major-pinned. Also rebuilds the locally patched `seerr` image on the freshly pulled base (`compose build --pull seerr`); if that build fails the old seerr keeps running, everything else still updates, and the job exits non-zero |
 | Nextcloud / Postgres major upgrade | Deliberate, never scheduled | See [Nextcloud major upgrades](#nextcloud-major-upgrades) below |
 | Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |

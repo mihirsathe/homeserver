@@ -394,6 +394,37 @@ PY
     fi
 fi
 
+# Seerr is a LOCAL BUILD: upstream :latest plus homeserver/seerr/
+# patch-watchlist-one-season.js, which stops a Plex Watchlist add from
+# requesting every season (Plex stores the show, never a season — so Seerr
+# asked Sonarr for all 51 seasons of Survivor). Two ways that silently
+# regresses: the container runs an unpatched image (someone put `image:` back,
+# or built from a Dockerfile that no longer applies), or update-stack.sh's
+# rebuild failed and seerr is still on an old base while the pulled :latest
+# has moved on. Assert both from the outside.
+if docker inspect seerr >/dev/null 2>&1; then
+    patch_hits=$(docker exec seerr grep -c 'HOMESERVER-PATCH watchlist-one-season' \
+        /app/dist/entity/MediaRequest.js 2>/dev/null || echo 0)
+    if [[ "$patch_hits" == "1" ]]; then
+        ok "seerr carries the watchlist-one-season patch (a Watchlist add requests one season)"
+    else
+        bad "seerr is running WITHOUT the watchlist-one-season patch — a Watchlist add will request every season; compose must build: ./seerr, then 'compose build --pull seerr && compose up -d seerr'"
+    fi
+    # The derived image inherits upstream's OCI labels, so the running
+    # container's version label IS its base version. Compare with the :latest
+    # on disk: a mismatch means the base was pulled but the rebuild did not
+    # happen (or failed) — update-stack.sh prints why in its log.
+    running_ver=$(docker inspect seerr --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)
+    pulled_ver=$(docker image inspect ghcr.io/seerr-team/seerr:latest --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)
+    if [[ -z "$running_ver" || -z "$pulled_ver" ]]; then
+        warn "could not read seerr version labels (running='${running_ver}', pulled='${pulled_ver}') — base freshness not checked"
+    elif [[ "$running_ver" == "$pulled_ver" ]]; then
+        ok "seerr runs on the pulled upstream base ($running_ver)"
+    else
+        warn "seerr runs on base $running_ver but ghcr.io/seerr-team/seerr:latest on disk is $pulled_ver — rebuild pending or failed: see /var/log/homeserver-update.log, then 'compose build --pull seerr && compose up -d seerr'"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 sec "Ingress"
 
