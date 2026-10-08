@@ -19,7 +19,7 @@ All pulled at deploy time via `docker compose pull` and refreshed monthly by `up
 | sonarr | `ghcr.io/hotio/sonarr` | `:release` | GitHub Container Registry | hotio |
 | lidarr | `ghcr.io/hotio/lidarr` | `:release` | GitHub Container Registry | hotio |
 | plex | `plexinc/pms-docker` | `:latest` (+ `PLEX_UPDATE_CHANNEL=16`) | Docker Hub | Plex Inc. (official) |
-| seerr | `ghcr.io/seerr-team/seerr` | `:latest` | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
+| seerr | `ghcr.io/seerr-team/seerr` | `:latest`, as the base of a local build (`homeserver/seerr/Dockerfile` + one patch) | GitHub Container Registry | seerr-team (Overseerr + Jellyseerr successor) |
 | bazarr | `ghcr.io/hotio/bazarr` | `:release` | GitHub Container Registry | hotio |
 | tautulli | `ghcr.io/hotio/tautulli` | `:release` | GitHub Container Registry | hotio |
 | profilarr | `santiagosayshey/profilarr` | `:latest` | Docker Hub | Santiago ([GitHub org Dictionarry-Hub](https://github.com/Dictionarry-Hub/profilarr) · [Docker Hub](https://hub.docker.com/r/santiagosayshey/profilarr)) |
