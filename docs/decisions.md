@@ -463,6 +463,53 @@ would be convenient.
 The sync clients needing Tailscale running is the accepted counterpart, and it is the one
 place this stack asks more of a phone than Google Drive did.
 
+### Mover Tuning owns the cache → array mover; Unraid's schedule is Disabled
+
+Unraid's mover is fine. It is a cron job that drains every cache=yes share to the array,
+skips files a process has open, and moves hardlink sets together. Its one gap is that it
+only knows a clock. The `data` share is cache=yes, so a completed download and Radarr's
+hardlink to it both sit on the 448 GB cache pool until the mover runs — and a batch add
+has SAB pulling 150+ GB/h. On 2026-10-14, 55 movies put 412 GB in the queue against
+345 GB free, with the next scheduled run at midnight. The failure mode is not lost data:
+SAB pauses at its free-space floor. It is every cache-only tenant (Plex's database,
+Postgres, Nextcloud, Ollama) sharing whatever headroom that floor leaves until the clock
+comes round.
+
+Options considered, in the order the Unraid community reaches for them:
+
+- **Native schedule set to Hourly.** The common answer and a one-click change. Would have
+  worked here — the mover clears a day's worth in 2–15 minutes — but it spins the array
+  up every hour with nothing to move, and it is still blind to a burst inside the hour.
+- **Mover Tuning plugin.** Adds the missing threshold: move when the pool is above X %,
+  oldest first, down to Y %, plus a 5-minute watchdog between runs and skip-during-parity.
+  Three maintainers on from the original; masterwishx's fork is current and supports
+  7.2.1+. Chosen.
+- **Automover plugin.** Same idea, start/stop thresholds. Development has ended.
+- **A cron script in this repo.** Forty lines calling `mover start` above a threshold.
+  Rejected before it was finished: another thing on flash for us alone to maintain, when
+  a maintained plugin does the same job with a settings page and a test mode.
+
+Settings, and why: move above **60 %** (≈ 270 GB — about 170 GB of transient data on top
+of the ~100 GB cache-only baseline), free down to **30 %** (the baseline is ~22 %, so
+30 % is reachable and keeps the newest ~35 GB of downloads on the SSD, which is what
+Plex is most likely to be asked for), age rule **Auto** (what makes "down to" mean
+anything — without it the plugin empties the share), **hourly** schedule with the
+**watchdog at 70 %** as the burst catch, **skip during parity check** on.
+
+The native schedule is Disabled, not merely bypassed. On 7.2.1+ the two are separate
+programs — `mover` is Unraid's, `age_mover` is the plugin's — and the plugin README says
+to disable the native schedule so they do not race. A save on Settings → Scheduler →
+Mover Settings would quietly re-enable it, so `verify-stack.sh` asserts the empty
+schedule as well as the plugin's cfg (test mode off, schedule set, watchdog on) and its
+lines in `/etc/cron.d/root`. `setup-unraid.sh` writes all of it idempotently.
+
+What the mover cannot do to downloads: nothing in flight is ever touched. SAB downloads,
+repairs and unpacks in `usenet-incomplete`, a cache=only share neither mover looks at,
+and both skip any file that is open. The only cost of a run during a download is SSD
+read bandwidth. SAB's own floor was raised from 500 MB to 25 GB (`download_free` in
+`generate-configs.py`) for the case where the mover cannot keep up: SAB pauses, the
+other tenants keep writing.
+
 ### Single parity (for now)
 
 Four 6 TB drives is a modest start. Single parity is appropriate. Dual parity becomes more valuable as drive count and total data grow. Upgrade: add a second drive of at least 6 TB as Parity 2 when convenient.

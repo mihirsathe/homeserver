@@ -23,7 +23,7 @@ The only thing that doesn't auto-recover is a Plex claim token — expected, sin
 | Verify the Nextcloud offsite copy | Quarterly | `rclone ls $BACKUP_NEXTCLOUD_REMOTE \| tail` — an unverified backup of irreplaceable files is not a backup |
 | Parity check | Monthly (1st, 3am) | Scheduled in Unraid |
 | Appdata backup | Weekly (Sunday, 4am) | Appdata Backup plugin; `media_stack_backup` verifies + offsites it at 5am |
-| Mover (cache → array) | Hourly, on the hour | Unraid built-in schedule — the reason `usenet-incomplete` must stay `cache=only` |
+| Mover (cache → array) | Hourly, gated on pool usage; watchdog every 5 min | **Mover Tuning** plugin, not Unraid's schedule (that one is Disabled on purpose). Runs when the cache is ≥ 60 % used, moves oldest first down to 30 %, skips parity checks; the watchdog starts a run early at 70 %. Still the reason `usenet-incomplete` must stay `cache=only` |
 | USB flash backup | After any Unraid config change | Main → Flash → Flash Backup |
 | Verify fan control persisted | After any iDRAC firmware update | Check fans aren't at 100% |
 | Prune unused Ollama models | Quarterly | `docker exec ollama ollama list`, then `ollama rm <model>` — model blobs sit on the 480 GB cache pool |

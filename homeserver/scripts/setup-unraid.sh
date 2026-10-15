@@ -73,6 +73,11 @@ declare -A PLUGINS=(
     # so with SAS array drives behind the PERC the spin-down delay does nothing
     # without this. Replaces sdspin with an sg_start-based one (2026-09-09).
     ["SAS Spindown"]="sas-spindown|https://raw.githubusercontent.com/doron1/unraid-sas-spindown/master/sas-spindown.plg"
+    # Threshold-driven mover. Unraid's own mover is schedule-only (hourly at
+    # best) and a batch of grabs fills the 448 GB cache in ~2 h. masterwishx's
+    # fork is the maintained line (Reynald's CA entry is deprecated). Settings
+    # are written below; the native schedule is disabled per its README.
+    ["Mover Tuning"]="ca.mover.tuning|https://raw.githubusercontent.com/masterwishx/ca.mover.tuning/master/plugins/ca.mover.tuning.plg"
 )
 
 for name in "${!PLUGINS[@]}"; do
@@ -85,6 +90,53 @@ for name in "${!PLUGINS[@]}"; do
             || warn "  $name install failed — install manually via Apps tab"
     fi
 done
+echo ""
+
+# Mover Tuning settings (idempotent). The plugin's page saves to this cfg and
+# regenerates its cron files via updateCron.php; we do the same from the shell.
+# Thresholds are % of the pool: move when >= 60 % used, oldest first, until
+# 30 % (the cache-only baseline — appdata + docker.img — is ~22 %, so 30 %
+# leaves the newest ~35 GB of downloads on the SSD for Plex). The watchdog
+# polls every 5 min between hourly runs and starts one at 70 %. Scheduled runs
+# are skipped during a parity check. The native mover schedule is disabled, as
+# the plugin README says to on 7.2.1+ — the two would otherwise race.
+MT_CFG=/boot/config/plugins/ca.mover.tuning/ca.mover.tuning.cfg
+if [[ -f /boot/config/plugins/ca.mover.tuning.plg ]]; then
+    touch "$MT_CFG"
+    mt_set() {
+        if grep -q "^$1=" "$MT_CFG"; then
+            sed -i "s|^$1=.*|$1=\"$2\"|" "$MT_CFG"
+        else
+            echo "$1=\"$2\"" >> "$MT_CFG"
+        fi
+    }
+    mt_set testmode no
+    mt_set movingThreshold 60
+    mt_set freeingThreshold 30
+    mt_set age yes          # with daysold=-1 this is "Auto (smart caching)":
+    mt_set daysold -1       # move oldest first until the freeing threshold
+    mt_set parity yes
+    mt_set watchdog yes
+    mt_set watchdogThreshold 70
+    mt_set moverTuneCron "0 * * * *"
+    mt_set moverDisabled no
+    mt_set notify yes
+    # updateCron.php sync only writes cron files that are missing; drop the
+    # schedule file so it is rebuilt from moverTuneCron, then reload cron.
+    rm -f /boot/config/plugins/ca.mover.tuning/mover.tuning.cron
+    php /usr/local/emhttp/plugins/ca.mover.tuning/updateCron.php sync \
+        && update_cron \
+        && ok "  Mover Tuning configured (60 % → 30 %, hourly + watchdog at 70 %)" \
+        || warn "  Mover Tuning cron sync failed — open Settings → Scheduler → Mover Tuning and Apply"
+    # Native schedule off (what Mover Settings → Disabled does).
+    if ! grep -q '^shareMoverSchedule=""' /boot/config/share.cfg; then
+        emcmd 'shareMoverSchedule=&shareMoverLogging=yes&changeMover=Apply' \
+            && ok "  native mover schedule disabled (Mover Tuning owns it)" \
+            || warn "  could not disable native mover schedule — Settings → Scheduler → Mover Settings → Disabled"
+    fi
+else
+    warn "  Mover Tuning not on flash — install failed above; mover stays on Unraid's native schedule"
+fi
 echo ""
 
 info "Step 2/8 — Plugin installation complete."
