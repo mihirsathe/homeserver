@@ -93,7 +93,7 @@ Common culprits:
 - **Docker image sprawl** — run `docker image prune -f` (the monthly update-stack.sh does this, but only if the health gate passed).
 - **Ollama model blobs** (`appdata/ollama/models/`) — each model is 2–5 GB and they accumulate silently, since nothing prunes them. `docker exec ollama ollama list` then `docker exec ollama ollama rm <model>` for anything unused. This is pure reclaim: models re-pull in minutes and nothing else depends on them.
 
-**Emergency**: Unraid Mover can be invoked manually (`mover start`) to flush cache → array. Only moves files from shares where cache is `yes`, not `only` (appdata is `only`, so this doesn't help for appdata itself — but can buy you breathing room on other shares).
+**Emergency**: the mover can be invoked manually to flush cache → array — `age_mover start` runs Mover Tuning's (thresholds apply, so at low usage it moves nothing); `mover start` runs Unraid's own, which drains every cache=yes share regardless. Only moves files from shares where cache is `yes`, not `only` (appdata is `only`, so this doesn't help for appdata itself — but can buy you breathing room on other shares).
 
 **Prevention**: [operations.md](operations.md#monitoring--alerting) documents the 75% warning threshold. Set it.
 

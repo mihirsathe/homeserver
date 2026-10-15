@@ -453,6 +453,12 @@ cherryhost = 0.0.0.0
 cherryport = 8080
 download_dir = /incomplete
 complete_dir = /data/usenet/complete
+# Pause the queue when /incomplete's pool has less than this free. /incomplete is
+# the cache pool, shared with appdata (Plex DB, Postgres, Nextcloud), so SAB's
+# 500M default would let a batch of grabs run the SSD down to nothing before
+# Mover Tuning or the nightly mover catches up (2026-10-14: 55 movies, 412 GB,
+# 345 GB free). 25G keeps the other tenants writable while SAB waits.
+download_free = 25G
 log_dir = /config/logs
 admin_dir = /config/admin
 # 0 = unlimited. Set to your connection speed in KB/s to cap usage.

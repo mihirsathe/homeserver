@@ -47,7 +47,7 @@ Its tags do not mean what the other images' tags mean. `:latest` and the version
 
 ## Unraid Plugins
 
-Installed via `installplg` in `setup-unraid.sh`. All but two come straight from the official Unraid GitHub org; the exceptions are called out below.
+Installed via `installplg` in `setup-unraid.sh`. Most come straight from the official Unraid GitHub org; the community-maintained ones are called out below.
 
 | Plugin | GitHub | Maintainer |
 |--------|--------|------------|
@@ -60,8 +60,11 @@ Installed via `installplg` in `setup-unraid.sh`. All but two come straight from 
 | User Scripts | [Squidly271/user.scripts](https://github.com/Squidly271/user.scripts) | Squidly271 (community) |
 | Appdata Backup | [Commifreak/unraid-appdata.backup](https://github.com/Commifreak/unraid-appdata.backup) | Commifreak (community) |
 | SAS Spindown | [doron1/unraid-sas-spindown](https://github.com/doron1/unraid-sas-spindown) | doron (community) |
+| Mover Tuning | [masterwishx/ca.mover.tuning](https://github.com/masterwishx/ca.mover.tuning) | masterwishx + chodeus (community) |
 
 **User Scripts** remains on Squidly271's account (the author of CA, who handed that repo to Unraid in 2024 but has kept User Scripts under his own account). Still actively maintained as of mid-2025.
+
+**Mover Tuning** (v2026.10.11, installed 2026-10-14) is the fourth owner of the same plugin: Squid wrote it in 2018, hugenbdd carried it, Reynald forked it for Unraid 7 and his CA entry is now marked deprecated, and masterwishx's fork is what Community Apps lists today — updated the day it was installed here, supporting 7.2.1+ through the 7.4 release candidates. The forum thread has no 7.3.x reports yet, so this box (7.3.0-beta.2) is a data point. Automover, the only other threshold mover, has ended development.
 
 **Appdata Backup** replaces the deprecated `ca.backup2` (deprecated at Unraid 6.12). Commifreak's fork is the forum-recommended successor.
 

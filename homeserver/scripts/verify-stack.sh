@@ -63,13 +63,40 @@ docker info >/dev/null 2>&1 && ok "docker responding" || bad "docker not respond
 missing_plg=()
 for plg in community.applications fix.common.problems appdata.backup user.scripts \
            unassigned.devices nvidia-driver dynamix.file.integrity tailscale \
-           gpustat dwpython sas-spindown; do
+           gpustat dwpython sas-spindown ca.mover.tuning; do
     [[ -f /boot/config/plugins/$plg.plg ]] || missing_plg+=("$plg")
 done
 if [[ ${#missing_plg[@]} -eq 0 ]]; then
-    ok "all 11 plugins from setup-unraid.sh present on flash"
+    ok "all 12 plugins from setup-unraid.sh present on flash"
 else
     bad "plugins missing from /boot/config/plugins: ${missing_plg[*]} — see setup-unraid.sh Step 1"
+fi
+
+# Mover Tuning owns the cache → array schedule (2026-10-14): hourly runs gated
+# on pool usage plus a 5-minute watchdog, with Unraid's native schedule
+# Disabled so the two never race. Each half can silently come undone — a save
+# on Mover Settings re-enables the native cron, the plugin's cron files only
+# exist while its cfg asks for them, and test mode left on means it logs what
+# it would move and moves nothing while the cache fills.
+mt_cfg=/boot/config/plugins/ca.mover.tuning/ca.mover.tuning.cfg
+if [[ -f $mt_cfg ]]; then
+    mt() { sed -n "s/^$1=\"\(.*\)\"/\1/p" "$mt_cfg" | tail -1; }
+    [[ "$(mt testmode)" == "no" ]] && ok "mover tuning: test mode off" \
+        || bad "mover tuning: test mode is ON — it will log, not move; Settings → Scheduler → Mover Tuning"
+    [[ "$(mt moverDisabled)" != "yes" && -n "$(mt moverTuneCron)" ]] \
+        && ok "mover tuning: scheduled ($(mt moverTuneCron)), move above $(mt movingThreshold)% → free down to $(mt freeingThreshold)%" \
+        || bad "mover tuning: schedule disabled or empty — nothing drains the cache between runs"
+    [[ "$(mt watchdog)" == "yes" ]] && ok "mover tuning: cache watchdog on (trigger $(mt watchdogThreshold)%)" \
+        || warn "mover tuning: cache watchdog off — only the hourly run can react to a download burst"
+    grep -q 'ca.mover.tuning/mover start' /etc/cron.d/root && ok "mover tuning: schedule present in cron" \
+        || bad "mover tuning: no 'mover start' line in /etc/cron.d/root — run: php /usr/local/emhttp/plugins/ca.mover.tuning/updateCron.php sync && update_cron"
+    if grep -q '^shareMoverSchedule=""' /boot/config/share.cfg; then
+        ok "native mover schedule disabled (Mover Tuning owns it)"
+    else
+        bad "native mover schedule is ENABLED alongside Mover Tuning — Settings → Scheduler → Mover Settings → Disabled"
+    fi
+else
+    bad "mover tuning cfg missing ($mt_cfg) — plugin not installed or never configured; cache drains only if Unraid's own schedule is set"
 fi
 
 # docker.img is a fixed-size loop-mounted vDisk, entirely separate from the
