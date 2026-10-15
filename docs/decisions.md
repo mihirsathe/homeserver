@@ -475,6 +475,17 @@ SAB pauses at its free-space floor. It is every cache-only tenant (Plex's databa
 Postgres, Nextcloud, Ollama) sharing whatever headroom that floor leaves until the clock
 comes round.
 
+That is not hypothetical. It had already happened a week earlier and gone unnoticed: on
+2026-10-08 the midnight mover found little to move, a TV batch then filled the pool
+during SAB's 02:00–04:00 full-speed window, and at 02:55 the cache hit ENOSPC.
+`/var/lib/docker` is a *directory on the cache pool* here (Unraid's docker-directory
+mode, not a vDisk), so dockerd itself lost the ability to write state. `nextcloud-db`
+died, dockerd could not record the death, `docker ps` reported it "Up (healthy)" for a
+week, `restart: unless-stopped` never fired, and a `compose up` on the 11th skipped it as
+already running. Nextcloud was down until 2026-10-15, when `verify-stack.sh` — which
+reads `docker inspect`, not `docker ps` — was finally run and disagreed. The cause was in
+`.State.Error` the whole time; the container loop now prints that field.
+
 Options considered, in the order the Unraid community reaches for them:
 
 - **Native schedule set to Hourly.** The common answer and a one-click change. Would have

@@ -422,6 +422,55 @@ Common patterns:
 
 ---
 
+## `docker ps` says "Up (healthy)" but the service is dead
+
+Symptoms: a dependent container is unhealthy with "No route to host" to the dead one's
+IP; `docker exec <name> …` fails; `docker inspect <name>` says `exited` while `docker ps`
+says `Up … (healthy)`; `restart: unless-stopped` has done nothing; `docker compose up -d`
+skips it as already running.
+
+This is dockerd that could not write its own state when the container died. Seen
+2026-10-08: the cache pool hit ENOSPC at 02:55 and `nextcloud-db` went down for a week.
+`/var/lib/docker` is a **directory on the cache pool** on this box (not a vDisk), so a full
+cache takes dockerd's bookkeeping with it. The cause is recorded on the container:
+
+```bash
+docker inspect <name> --format '{{.State.Status}} | {{.State.Error}}'
+```
+
+`verify-stack.sh` prints that field for every expected container; run it before guessing.
+
+**Fix** (data in bind mounts is untouched; this only repairs dockerd's view):
+
+```bash
+docker start <name>
+```
+
+If that fails with `endpoint with name <name> already exists in network <net>`, the
+network store kept a stale endpoint from the failed write. Try dropping it:
+
+```bash
+docker network disconnect -f <net> <name> && docker start <name>
+```
+
+On 2026-10-15 that got the container *started* but not *attached*: the orphan stayed in
+`docker network inspect <net>` under the container's name, `disconnect -f` by its
+`ep-…` id said "not found", and `connect` said "already exists". That is a corrupted
+libnetwork store and nothing container-level clears it. Restart the daemon, which
+rebuilds network state on the way up (every container restarts; check Plex sessions
+and let SAB resume on its own):
+
+```bash
+/etc/rc.d/rc.docker restart
+```
+
+Postgres will log "database system was not properly shut down; automatic recovery in
+progress" and come up. Then fix whatever filled the cache — see
+[Cache pool fills or nearly full](#cache-pool-fills-or-nearly-full) — or it will happen
+again; Mover Tuning's watchdog and SAB's 25 GB floor exist because of this one.
+
+---
+
 ## After an update, a service is broken
 
 `update-stack.sh` runs a post-update health gate — if it fails, prune is skipped so previous image layers are still on disk. To roll back:
