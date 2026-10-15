@@ -90,7 +90,7 @@ EXPECT_SVCS=$(compose config --services 2>/dev/null | tr '\n' ' ')
 [[ -n "$EXPECT_SVCS" ]] || { echo "[$(ts)] ERROR: could not enumerate services"; exit 1; }
 
 if (( DRY_RUN )); then
-    echo "[$(ts)] Dry run: would run 'compose pull' and 'compose up -d'"
+    echo "[$(ts)] Dry run: would run 'compose pull', 'compose build --pull seerr' and 'compose up -d'"
     echo "[$(ts)] Images that would be pulled:"
     compose config --images | sed 's/^/    /'
     exit 0
@@ -99,6 +99,21 @@ fi
 # Pull latest images for all services
 echo "[$(ts)] Pulling images..."
 compose pull
+
+# seerr is a local build (upstream :latest + homeserver/seerr/patch-*.js), so
+# `compose pull` skips it; `build --pull` re-pulls the base and re-applies the
+# patch. If upstream moved the code the patch anchors on, the build fails
+# here — the previously built image stays tagged, so the `up -d` below keeps
+# the old seerr running while every other service still updates. The failure
+# is reported at the end so the User Scripts job turns red instead of quietly
+# leaving seerr behind for months.
+BUILD_FAILED=0
+echo "[$(ts)] Rebuilding seerr (patched image) on the freshly pulled base..."
+if ! compose build --pull seerr; then
+    BUILD_FAILED=1
+    echo "[$(ts)] ERROR: seerr image build failed — patch anchors probably moved upstream."
+    echo "[$(ts)]        seerr keeps running its previous patched build; see homeserver/seerr/."
+fi
 
 # Restart any containers whose image changed (leaves unchanged ones running)
 echo "[$(ts)] Redeploying..."
@@ -170,6 +185,12 @@ fi
 # layers around so you can inspect or retag them.
 echo "[$(ts)] Pruning dangling images..."
 /usr/bin/docker image prune -f
+
+if (( BUILD_FAILED )); then
+    echo "[$(ts)] ===== update finished WITH ERRORS: seerr image build failed, seerr NOT updated ====="
+    compose ps
+    exit 1
+fi
 
 echo "[$(ts)] ===== update complete ====="
 compose ps

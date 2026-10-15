@@ -35,6 +35,15 @@ Symptom-driven decision tree for the ~10 most common ways this stack breaks. For
 
 ---
 
+## A Watchlist add queued the whole series — or only one season
+
+**Expected since 2026-10-08: one season per Watchlist add.** Plex's Watchlist stores the show, never the season you tapped (verified against its REST and GraphQL APIs), and stock Seerr turns that into a request for *every* season — one tap on Survivor queued 51 seasons. The `seerr` image is therefore built locally with a patch that keeps one season: the one currently airing if the show is on, otherwise the earliest the library lacks. Rationale and the exact rule: [decisions.md](decisions.md#a-watchlist-add-requests-one-season-not-the-whole-series).
+
+- **It queued everything** → the patch is not in the running container. `bash scripts/verify-stack.sh` says so in **Seerr wiring** ("running WITHOUT the watchlist-one-season patch"). Usual causes: `image:` put back in place of `build:` on the seerr service, or a stack brought up from a checkout that predates `homeserver/seerr/`. Fix: `docker compose --env-file .env.docker build --pull seerr && docker compose --env-file .env.docker up -d seerr`. If the build fails with `REFUSING TO PATCH`, upstream moved the code the patch anchors on — re-derive `homeserver/seerr/patch-watchlist-one-season.js` against the new `dist/entity/MediaRequest.js` before rebuilding; until then the previous patched image keeps running.
+- **They wanted more seasons** → that is a Seerr request, not a Watchlist one: Seerr → the show → Request → pick seasons, requesting on behalf of the user. Or `docker logs seerr | grep 'trimmed to one season'` to see which seasons were left out of each auto-request.
+- **Nothing was requested at all** and `docker logs seerr` shows `No seasons available to request` for the title → the one season the rule picked is already in the library or already requested (common for a currently airing show whose current season is present). Nothing to fix; later seasons come via Sonarr's "Monitor New Items: all".
+- **Seerr says `Series Quota exceeded`** → a per-user TV quota rejects a request outright rather than trimming it. With the patch in place the quota no longer needs to stand in for it; Seerr → Settings → Users → edit → Request Limits.
+
 ## Seerr shows a request, but Radarr/Sonarr never sees it
 
 **Symptom**: the title sits "Approved" in Seerr indefinitely, or flips straight to "Failed" — either way nothing appears in the *arr's Activity → Queue. The same breakage also empties the quality-profile dropdowns in Seerr → Settings → Services, so profiles you set up via Profilarr "disappear" from Seerr.

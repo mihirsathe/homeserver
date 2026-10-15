@@ -541,9 +541,23 @@ services:
   # migration note is specifically for people upgrading from pre-Seerr images
   # where UID 1000 was previously hardcoded). Running Seerr as 99:100 keeps
   # it consistent with the rest of the stack and with Unraid's nobody:users.
+  #
+  # BUILT LOCALLY, NOT PULLED: `build:` below is upstream's :latest plus one
+  # patch (seerr/Dockerfile → seerr/patch-watchlist-one-season.js). Plex's
+  # Watchlist stores the show, never a season, and Seerr's sync then requests
+  # EVERY season — one tap on Survivor queued 51 seasons / 806 episodes
+  # (2026-10-08). The patch makes a watchlist add request one season: the
+  # season currently airing if the show is, else the earliest season the
+  # library lacks; Sonarr's "Monitor New Items: all" covers what follows.
+  # Upstream has had the ask open since 2025 (seerr-team/seerr#1351) with
+  # nothing merged. `compose pull` skips a build-only service, so
+  # update-stack.sh runs `compose build --pull seerr` to refresh the base;
+  # verify-stack.sh asserts the running container carries the patch and is
+  # built from the :latest on disk. See docs/decisions.md.
   # ---------------------------------------------------------------------------
   seerr:
-    image: ghcr.io/seerr-team/seerr:latest
+    build:
+      context: /mnt/user/appdata/homeserver/homeserver/seerr
     container_name: seerr
     init: true
     user: "${PUID}:${PGID}"
