@@ -485,6 +485,50 @@ if curl -s -o /dev/null --max-time 5 http://127.0.0.1:8080/ 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
+sec "Download schedule"
+
+# SAB is meant to run flat out only 02:00-04:00 and at 10% of bandwidth_max
+# the rest of the day (docs/software.md, "Download Schedule"). Nothing else
+# here would notice the schedule going missing: SAB stays healthy, the queue
+# keeps moving, and the only symptom is daytime downloads eating the line.
+# The two failure modes worth asserting are the lines being absent/disabled
+# and bandwidth_max being 0 — a percentage of "unlimited" is a no-op that SAB
+# only logs a warning for, so the schedule would look configured and do
+# nothing. The key is read from the live ini because that is the file SAB
+# actually runs on; .env.docker's copy has been empty before.
+SAB_INI="$STACK_DIR/configs/sabnzbd/sabnzbd.ini"
+SAB_KEY=$(grep -hE '^[[:space:]]*api_key[[:space:]]*=' "$SAB_INI" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' "'"'")
+[[ -z "$SAB_KEY" ]] && SAB_KEY=$(akey SABNZBD_API_KEY)
+if [[ -z "$SAB_KEY" ]]; then
+    warn "sab: no API key in $(basename "$SAB_INI") or $(basename "$ENV_FILE") — schedule not checked"
+else
+    sab_misc=$(curl -fsS --max-time 8 "http://127.0.0.1:8080/api?mode=get_config&section=misc&apikey=$SAB_KEY&output=json" 2>/dev/null)
+    if [[ -z "$sab_misc" ]]; then
+        warn "sab: could not read config (not deployed?) — schedule not checked"
+    else
+        sab_sched=$(printf '%s' "$sab_misc" | python3 -c 'import json,sys
+try:
+    m = json.load(sys.stdin)["config"]["misc"]
+    lines = [l.split() for l in m.get("schedlines", [])]
+    def has(h, arg):
+        return any(l[0] == "1" and l[1:3] == ["0", h] and l[4:6] == ["speedlimit", arg] for l in lines)
+    print("full" if has("2", "100") else "nofull", "slow" if has("4", "10") else "noslow", m.get("bandwidth_max") or "0")
+except Exception: print("err err err")' 2>/dev/null)
+        read -r sab_full sab_slow sab_bw <<<"$sab_sched"
+        if [[ "$sab_full" == "err" ]]; then
+            warn "sab: unparseable config reply — schedule not checked"
+        else
+            [[ "$sab_full" == full ]] && ok "sab schedule: speedlimit 100 at 02:00 (enabled)" \
+                || bad "sab schedule: no enabled 'speedlimit 100' at 02:00 — queue never gets its full-speed window"
+            [[ "$sab_slow" == slow ]] && ok "sab schedule: speedlimit 10 at 04:00 (enabled)" \
+                || bad "sab schedule: no enabled 'speedlimit 10' at 04:00 — daytime downloads run unthrottled"
+            [[ "$sab_bw" != "0" && "$sab_bw" != "0K" && "$sab_bw" != "0M" ]] && ok "sab bandwidth_max = $sab_bw (percent limits have a base)" \
+                || bad "sab bandwidth_max is 0 — scheduled percentage limits are a silent no-op"
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 sec "Plex version"
 
 # Two different questions, both invisible to every other check in this file.

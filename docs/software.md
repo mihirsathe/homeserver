@@ -395,3 +395,34 @@ Plex Watchlist addition (family)
     → Plex library updated
     → Available to stream
 ```
+
+### Download Schedule
+
+SAB runs at full speed only between **02:00 and 04:00** and at **10 % of
+`bandwidth_max`** (50M, i.e. 5 MB/s) for the rest of the day, so the overnight
+window drains the queue and daytime grabs never crowd out the household's
+other traffic. It's SAB's own scheduler (Config → Scheduling), stored as
+`schedlines` in `sabnzbd.ini`:
+
+| Time (local) | Action | Why |
+|------|--------|-----|
+| 02:00 | `resume` | undo a manual pause so the window is never lost to one |
+| 02:00 | `speedlimit 100` | full speed |
+| 04:00 | `speedlimit 10` | back to 10 % |
+| 15:35 | `remove_failed` | predates the schedule; kept |
+
+Two things that are not obvious from the UI:
+
+- **`speedlimit N` is a percentage of `bandwidth_max`, and `bandwidth_max`
+  must be non-zero.** With it at 0 ("unlimited") SAB logs *"You must set a
+  maximum bandwidth before you can set a bandwidth limit"* and the schedule
+  silently does nothing. `SAB_BANDWIDTH_MAX` in `.env` feeds the template.
+- **SAB re-evaluates the whole schedule at startup**, so a restart at any hour
+  lands in the right state immediately (it does not wait for the next event).
+  Changing `schedlines` through the API (`mode=set_config`) does *not* reload
+  the scheduler — follow it with `mode=restart`. Pass the value
+  comma-separated and unquoted; quoted items keep their quote characters and
+  parse as garbage.
+
+`verify-stack.sh` asserts the two `speedlimit` lines are present and enabled
+and that `bandwidth_max` is set.

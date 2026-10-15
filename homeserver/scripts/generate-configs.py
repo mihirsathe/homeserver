@@ -398,6 +398,12 @@ def write_sabnzbd(env: dict):
     user     = env["USENET_USER"]
     password = env["USENET_PASS"]
     conns    = env.get("USENET_CONNECTIONS", "20")
+    # Line speed, in SAB's own units (K/M suffix). Must be non-zero: the
+    # scheduled `speedlimit N` below is a PERCENTAGE of this, and SAB refuses
+    # a percentage when bandwidth_max is 0 ("You must set a maximum bandwidth
+    # before you can set a bandwidth limit") — the schedule would silently
+    # do nothing.
+    bw_max   = env.get("SAB_BANDWIDTH_MAX", "50M").strip() or "50M"
 
     fill_host  = env.get("USENET_FILL_HOST", "")
     fill_user  = env.get("USENET_FILL_USER", "")
@@ -455,10 +461,30 @@ download_dir = /incomplete
 complete_dir = /data/usenet/complete
 log_dir = /config/logs
 admin_dir = /config/admin
-# 0 = unlimited. Set to your connection speed in KB/s to cap usage.
-# 100Mbps=12500  250Mbps=31250  500Mbps=62500  1Gbps=125000
-bandwidth_max = 0
+# Line speed (SAB_BANDWIDTH_MAX in .env; K/M suffix, e.g. 12500K or 50M).
+# 100Mbps=12500K  250Mbps=31250K  500Mbps=62500K  1Gbps=125000K
+# NOT 0: the schedule below sets the limit as a percentage of this value,
+# and a percentage of "unlimited" is a no-op that SAB only logs a warning for.
+bandwidth_max = {bw_max}
 bandwidth_perc = 100
+# Download window (2026-10-14): full speed 02:00-04:00, 10% of bandwidth_max
+# the rest of the day, so the overnight window drains the queue and daytime
+# downloads never crowd out the household's other traffic.
+#
+# Format: "<enabled> <minute> <hour> <days 1234567=Mon..Sun> <action> [arg]".
+# `speedlimit` with a bare number 1-100 is a percentage of bandwidth_max.
+# Times are container-local (TZ from .env). SAB re-evaluates the whole
+# schedule at startup, so a restart at any hour lands in the right state —
+# it does not wait for the next event to fire.
+#
+# `resume` at 02:00 undoes a manual pause so the window is never lost to one.
+# `remove_failed` at 15:35 predates this and is kept as-is.
+#
+# Live box: set via the API (mode=set_config section=misc keyword=schedlines),
+# which does NOT reload the scheduler — follow it with mode=restart. The value
+# must be comma-separated and UNQUOTED: quoted items keep their quote
+# characters and parse as garbage (enabled = '"1').
+schedlines = 1 0 2 1234567 resume, 1 0 2 1234567 speedlimit 100, 1 0 4 1234567 speedlimit 10, 1 35 15 1234567 remove_failed
 direct_unpack = 1
 pause_on_post_processing = 0
 enable_par_cleanup = 1
