@@ -236,6 +236,52 @@ directly in that *arr instead.
 
 ---
 
+## SAB says Completed, Sonarr's queue says "Automatic import is not possible"
+
+**Symptom**: items pile up in Sonarr → Activity → Queue as *Completed* with a warning icon. SAB's queue is empty and its history shows them all Completed. Nothing is actually stuck in SAB — the download finished, Sonarr refused to import it. SAB is just the first UI you look at.
+
+**Why it happens**: grabs come from NZBGeek via Prowlarr, which returns results by TVDB id, so Sonarr matches the *grab* by id. At import time there is no id, only the folder name, and Sonarr requires that name to parse back to the same series. When it can't, you get "Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible." This gate is deliberate and, in the 2026-10 batch, correct about a quarter of the time: the name didn't match because the file was *not* the episode Sonarr grabbed it for.
+
+**Triage, per item** (`sonarr → Activity → Queue → ⓘ`, or the API):
+
+```bash
+# What's refused and why (one line per item)
+curl -s -H "X-Api-Key: $SONARR_KEY" 'http://127.0.0.1:8989/api/v3/queue?pageSize=100' \
+  | jq -r '.records[] | "\(.title) :: \(.statusMessages[].messages[])"'
+# What Sonarr parses the folder name as (and which series/episode it resolves to — often none)
+curl -s -G -H "X-Api-Key: $SONARR_KEY" --data-urlencode "title=<release name>" http://127.0.0.1:8989/api/v3/parse \
+  | jq '{seriesTitle:.parsedEpisodeInfo.seriesTitle, season:.parsedEpisodeInfo.seasonNumber, eps:.parsedEpisodeInfo.episodeNumbers, series:.series.title}'
+```
+
+Then compare three things: the folder name, the **file name inside it**, and the episode Sonarr grabbed it *for* (`episodeId` on the queue record). Patterns seen so far:
+
+| Pattern | Example | Verdict |
+|---|---|---|
+| Series title ambiguous without year | `Monster.S03E08...` for "Monster (2022)" — season 4 imported fine because those releases said `Monster.2022` | Content is right. Manual Import. Will recur for every release of that show that omits the year; no local alias fix exists in Sonarr v4. |
+| Poster mangled the title | `13.13.Reasons.Why.S01E09` | Content is right. Manual Import. |
+| Release year ≠ series year | `Dream.High.2012.S02E13` on a 2011 series (sequel season) | Content is right *if* the SxxEyy already follows TVDB numbering. Manual Import. |
+| Sequel indexed as its own show | `Dream.High.2.S01E15` grabbed for *season 1* of Dream High | **Wrong content** — it's season 2. Delete + blocklist. The indexer files the sequel under the parent's TVDB id as S01, so every S1 search re-grabs it; a release profile on that series with `/Dream[._ -]High[._ -]2[._ -](2012[._ -])?S01/i` as an *ignored* term stops it (tag `dreamhigh-s1-guard`). |
+| Companion/aftershow | `13.Reasons.Why.Beyond.the.Reasons.S02E01` grabbed for S02E01 | **Wrong content**. Delete + blocklist. |
+| Folder and file disagree | folder `...S03E08`, file inside `...S03E03 - Pacific Northwest` | **Mislabeled upload**. Delete + blocklist. |
+| "Episode NxMM was unexpected considering the folder name" | same as above, Sonarr caught it | same |
+| PROPER/REPACK of an episode you already have, "Not a Custom Format upgrade" | `Ted.Lasso.S04E08.PROPER` scoring below the existing ATVP Atmos file | Config bug, not a bad file: Media Management → Propers and Repacks was *Prefer and Upgrade*, which grabs any proper regardless of CF score, then the import gate applies the score. Set to **Do not prefer** (done 2026-10-11) so CF scoring decides at grab time too. |
+
+Manual Import of the good ones can be driven from the API with the folder's `downloadId` so the queue item clears itself: `GET /api/v3/manualimport?downloadId=<id>` returns a proposal with quality/languages already parsed; set `seriesId`/`episodeIds` and POST it as `{"name":"ManualImport","files":[...],"importMode":"auto"}` to `/api/v3/command`. Delete the bad ones with `DELETE /api/v3/queue/<id>?removeFromClient=true&blocklist=true` — `skipRedownload=false` triggers the re-search immediately.
+
+**Afterwards, check the re-grabs too.** The first automatic replacement for the Bourdain item above was `...S03E08.Argentina.HMAX...` — Argentina is TVDB S03E13 and was already in the library. Which leads to:
+
+### HBO Max–sourced episodes are numbered in HBO Max's order, not TVDB's
+
+**Symptom**: files import without complaint, but the episode title embedded in the release name (`...S03E01.Russia...`) is not the title TVDB gives that slot (`S03E01 Ireland`). Plex then plays the wrong episode under the right name. Found on 2026-10-11 across **83 of 118** Anthony Bourdain: No Reservations files and 4 Parts Unknown files, all `HMAX` releases, all imported automatically — nobody mis-clicked anything. Releases from AMZN, NF, DVD and scene groups followed TVDB order and were fine.
+
+**Detect** (library-wide): for every episode file, pull the text between `SxxEyy` and the first quality token out of `sceneName`/`originalFilePath`, normalise it, and compare to the TVDB title of the episode Sonarr mapped the file to. Abbreviations ("Pacific NW", "Koreatown" for TVDB's "Los Angeles") are the only false positives once quality tokens are stripped. A multi-episode file (`S02E12E13`) maps to several episodes — join their titles before comparing.
+
+**Fix**: do not re-import through Sonarr one file at a time — slots overlap, and Sonarr treats an import into an occupied slot as an upgrade and will recycle the occupant before the occupant has been moved to *its* right slot. Instead: compute the whole permutation (release title → TVDB episode), detect collisions (two files landing on one episode: keep the better quality, park the other *outside* the library), rename on disk with the `SxxEyy` token swapped and the file moved to the right `Season N`/`Specials` folder, then **Rescan Series**. The rescan drops the stale records and re-imports from the corrected file names. Renames preserve inodes, so hardlinks survive. The 2026-10-11 run moved 87 files and parked 5 duplicates in `/mnt/user/data/usenet/complete/tv/_dupes_bourdain/` with a `remap-log-*.json` of every old → new path beside them; delete that folder once you're satisfied.
+
+**Prevent**: both Bourdain series carry tag `no-hmax-order`, bound to a release profile that ignores `/\bHMAX\b/i`. Extend the tag to any other show whose streaming order diverges from TVDB. (Sonarr has no per-show "trust the title, not the number" mode.)
+
+---
+
 ## Imports cost double disk space (hardlinks broken)
 
 **Symptom**: Radarr successfully imports, but `/mnt/user/data/media/movies/X.mkv` AND `/mnt/user/data/usenet/complete/movies/X.mkv` exist as separate full-size files. `du -sh` shows roughly 2× the expected library size.
