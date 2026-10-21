@@ -122,8 +122,18 @@ for c in $EXPECTED; do
         continue
     fi
     health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$c" 2>/dev/null)
+    # .State.Error is dockerd's own note of why a start or stop went wrong,
+    # and it survives everything short of a successful start. It is how the
+    # 2026-10-08 outage was finally read: nextcloud-db's said "no space left
+    # on device" against docker's network store — /var/lib/docker is a
+    # directory on the cache pool here, not a vDisk, so a full cache killed
+    # the container and left dockerd unable to record that it had. `docker
+    # ps` kept saying "Up (healthy)" for a week; `restart: unless-stopped`
+    # never fired. Print it whatever the state, because it is the one place
+    # the cause is written down.
+    derr=$(docker inspect -f '{{.State.Error}}' "$c" 2>/dev/null)
     if [[ "$state" != "running" ]]; then
-        bad "$c is $state"
+        bad "$c is $state${derr:+ — docker says: ${derr:0:160}}"
     elif [[ "$health" == "unhealthy" ]]; then
         bad "$c running but UNHEALTHY"
     elif [[ "$health" == "starting" ]]; then
@@ -131,6 +141,7 @@ for c in $EXPECTED; do
     else
         ok "$c running${health:+ ($health)}"
     fi
+    [[ -n "$derr" && "$state" == "running" ]] && warn "$c carries a docker error from its last start/stop: ${derr:0:160}"
 done
 
 # Services that ship no healthcheck are invisible to the loop above: docker
